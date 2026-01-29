@@ -1,3 +1,18 @@
+/**
+ * ASKII - AI Code Assistant with Style
+ *
+ * An AI-powered VS Code extension that provides inline code explanations with kaomoji (｡◕‿◕｡)
+ * Supports both local Ollama and GitHub Copilot for AI-powered insights.
+ *
+ * Features:
+ * - Inline decorations with kaomoji and AI explanations
+ * - GitLens-style hover tooltips for full message display
+ * - Configurable AI providers (Ollama or GitHub Copilot)
+ * - Smart caching to minimize API calls
+ * - Debounced requests for optimal performance
+ * - Toggle between humorous and helpful mode
+ */
+
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from "vscode";
@@ -53,6 +68,7 @@ const explanationCache = new Map<
 
 // Debounce timer and abort controller for cancelling requests
 let debounceTimer: NodeJS.Timeout | undefined;
+let thinkingTimer: NodeJS.Timeout | undefined;
 let currentAbortController: AbortController | undefined;
 
 // Function to get a random kaomoji
@@ -194,8 +210,8 @@ async function updateDecorations(editor: vscode.TextEditor | undefined) {
   // Clear previous decorations
   editor.setDecorations(decorationType, []);
 
-  // Don't show decoration for empty lines
-  if (!lineText) {
+  // Don't show decoration for empty lines or lines with 3 or fewer characters
+  if (!lineText || lineText.length <= 3) {
     return;
   }
 
@@ -209,25 +225,30 @@ async function updateDecorations(editor: vscode.TextEditor | undefined) {
     return;
   }
 
-  // Show thinking decoration immediately
-  const thinkingKaomoji = getRandomThinkingKaomoji();
-  showDecoration(editor, position.line, thinkingKaomoji, "thinking...");
-
   // Cancel previous request if any
   if (currentAbortController) {
     currentAbortController.abort();
   }
 
-  // Clear previous debounce timer
+  // Clear previous debounce timers
   if (debounceTimer) {
     clearTimeout(debounceTimer);
+  }
+  if (thinkingTimer) {
+    clearTimeout(thinkingTimer);
   }
 
   // Create new abort controller for this request
   const abortController = new AbortController();
   currentAbortController = abortController;
 
-  // Set up debounce timer (1 second)
+  // Show thinking decoration after a short delay (300ms) - only if still on same line
+  thinkingTimer = setTimeout(() => {
+    const thinkingKaomoji = getRandomThinkingKaomoji();
+    showDecoration(editor, position.line, thinkingKaomoji, "thinking...");
+  }, 300);
+
+  // Set up debounce timer (1 second) for actual API call
   debounceTimer = setTimeout(async () => {
     try {
       // Generate new kaomoji and get explanation
@@ -270,18 +291,69 @@ function showDecoration(
     new vscode.Position(lineNumber, lineLength),
   );
 
-  const decoration = {
+  // Truncate text if too long for inline display
+  const maxLength = 100;
+  const isTruncated = text.length > maxLength;
+  const displayText = isTruncated ? text.substring(0, maxLength) + "..." : text;
+  const isThinking = text === "thinking...";
+
+  const decoration: any = {
     range: range,
     renderOptions: {
       after: {
-        contentText: ` ${kaomoji} ${text}`,
+        contentText: ` ${kaomoji} ${displayText}`,
         color: new vscode.ThemeColor("editorCodeLens.foreground"),
         fontStyle: "italic",
       },
     },
   };
 
+  // Only add hover message if text was truncated and not thinking
+  if (isTruncated && !isThinking) {
+    decoration.hoverMessage = new vscode.MarkdownString(
+      `${kaomoji} **ASKII Says:**\n\n${text}`,
+    );
+  }
+
   editor.setDecorations(decorationType, [decoration]);
+}
+
+// Hover provider to show full explanation on hover
+class AskiiHoverProvider implements vscode.HoverProvider {
+  provideHover(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    token: vscode.CancellationToken,
+  ): vscode.ProviderResult<vscode.Hover> {
+    const line = position.line;
+    const lineText = document.lineAt(line).text.trim();
+
+    if (!lineText) {
+      return null;
+    }
+
+    // Check cache for this line
+    const cacheKey = `${document.uri.toString()}:${line}:${lineText}`;
+    if (explanationCache.has(cacheKey)) {
+      const cached = explanationCache.get(cacheKey)!;
+      const maxLength = 100;
+
+      // Only show hover if text was truncated and not thinking
+      if (
+        cached.explanation.length > maxLength &&
+        cached.explanation !== "thinking..."
+      ) {
+        const markdown = new vscode.MarkdownString();
+        markdown.appendMarkdown(`${cached.kaomoji} **ASKII Says:**\n\n`);
+        markdown.appendText(cached.explanation);
+        markdown.isTrusted = true;
+
+        return new vscode.Hover(markdown);
+      }
+    }
+
+    return null;
+  }
 }
 
 // This method is called when your extension is activated
@@ -289,12 +361,37 @@ function showDecoration(
 export function activate(context: vscode.ExtensionContext) {
   console.log('Congratulations, your extension "askii" is now active!');
 
-  // Create decoration type
+  // Create decoration type with higher priority (rangeBehavior 1 = ClosedClosed for higher priority)
   decorationType = vscode.window.createTextEditorDecorationType({
+    rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
     after: {
       margin: "0 0 0 2em",
     },
   });
+
+  // Register hover provider for all languages
+  context.subscriptions.push(
+    vscode.languages.registerHoverProvider(
+      { scheme: "*", language: "*" },
+      new AskiiHoverProvider(),
+    ),
+  );
+
+  // Register clear cache command
+  const clearCacheCommand = vscode.commands.registerCommand(
+    "askii.clearCache",
+    () => {
+      explanationCache.clear();
+      vscode.window.showInformationMessage(
+        "ASKII cache cleared! (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧",
+      );
+      // Refresh current line decoration
+      if (vscode.window.activeTextEditor) {
+        updateDecorations(vscode.window.activeTextEditor);
+      }
+    },
+  );
+  context.subscriptions.push(clearCacheCommand);
 
   // Update decorations when cursor position changes
   context.subscriptions.push(
@@ -338,6 +435,9 @@ export function deactivate() {
   // Clear timers and abort controllers
   if (debounceTimer) {
     clearTimeout(debounceTimer);
+  }
+  if (thinkingTimer) {
+    clearTimeout(thinkingTimer);
   }
   if (currentAbortController) {
     currentAbortController.abort();

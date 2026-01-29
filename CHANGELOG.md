@@ -4,6 +4,25 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.4] - 2026-01-29
+
+### Added
+
+- GitLens-style hover tooltips showing full message on hover
+- Inline text truncation (80 chars) with "..." for longer messages
+- `askii.clearCache` command to manually clear the explanation cache
+- Hover provider for rich markdown tooltips on any line with ASKII annotations
+- Higher decoration priority to ensure ASKII appears before other extensions
+
+### Changed
+
+- Decorations now use `ClosedClosed` range behavior for better priority
+- Improved documentation and code comments
+
+### Fixed
+
+- Long explanations no longer clutter the editor - they're shown in hover tooltips instead
+
 ## [0.0.3] - 2026-01-29
 
 ### Added
