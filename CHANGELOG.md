@@ -1,0 +1,46 @@
+# Change Log
+
+All notable changes to the "askii" extension will be documented in this file.
+
+Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+
+## [0.0.3] - 2026-01-29
+
+### Added
+
+- GitHub Copilot integration as an alternative AI provider to Ollama
+- New `askii.useCopilot` setting to switch between Ollama and GitHub Copilot
+- New `askii.copilotModel` setting to choose which Copilot model to use
+- Support for multiple Copilot models: gpt-4o (default), gpt-4, gpt-3.5-turbo, o1-preview, o1-mini
+- VS Code Language Model API integration for seamless Copilot support
+
+### Changed
+
+- Extension now supports dual AI providers (local Ollama or cloud-based Copilot)
+- Updated documentation to explain both AI provider options
+
+## [0.0.2] - 2026-01-29
+
+### Added
+
+- New `askii.helpfulMode` setting for practical code advice instead of humorous comments
+- Toggle between entertainment and educational explanations
+- Improved AI prompts for both humorous and helpful modes
+
+### Changed
+
+- AI system prompts now adapt based on helpful mode setting
+- Better user experience with mode-specific explanations
+
+## [0.0.1] - 2026-01-29
+
+### Added
+
+- Initial release
+- Random kaomoji insertion after code lines
+- Ollama AI integration for code explanations
+- Configurable Ollama URL and model settings
+- Automatic inline comments as you navigate code
+- Caching system to avoid redundant API calls
+- Debounced requests for better performance
+- Thinking indicators while waiting for AI responses
