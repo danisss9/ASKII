@@ -2,7 +2,8 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.0.4",
+  "version": "0.0.5",
+  "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
     "type": "git",
