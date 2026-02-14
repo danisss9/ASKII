@@ -227,6 +227,7 @@ async function getLMStudioExplanation(
 ): Promise<string> {
   const config = vscode.workspace.getConfiguration('askii');
   const lmStudioModel = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
+  const llmUrl = config.get<string>('llmUrl') || 'http://localhost:1234';
 
   try {
     if (abortSignal?.aborted) {
@@ -241,7 +242,9 @@ async function getLMStudioExplanation(
       ? `Explain this code in one sentence: ${lineText}`
       : `Make a funny comment about this code in one sentence: ${lineText}`;
 
-    const client = new LMStudioClient();
+    const client = new LMStudioClient({
+      baseUrl: llmUrl,
+    });
     const model = await client.llm.model(lmStudioModel);
     const result = await model.respond([
       { role: 'system', content: systemPrompt },
@@ -751,9 +754,12 @@ async function getCopilotResponse(prompt: string): Promise<string> {
 async function getLMStudioResponse(prompt: string): Promise<string> {
   const config = vscode.workspace.getConfiguration('askii');
   const lmStudioModel = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
+  const llmUrl = config.get<string>('llmUrl') || 'http://localhost:1234';
 
   try {
-    const client = new LMStudioClient();
+    const client = new LMStudioClient({
+      baseUrl: llmUrl,
+    });
     const model = await client.llm.model(lmStudioModel);
     const result = await model.respond(prompt);
     return result.content || 'No response';
