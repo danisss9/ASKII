@@ -227,7 +227,7 @@ async function getLMStudioExplanation(
 ): Promise<string> {
   const config = vscode.workspace.getConfiguration('askii');
   const lmStudioModel = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
-  const llmUrl = config.get<string>('llmUrl') || 'http://localhost:1234';
+  const llmUrl = config.get<string>('llmUrl') || 'ws://localhost:1234';
 
   try {
     if (abortSignal?.aborted) {
@@ -555,7 +555,7 @@ async function askiiEditCommand() {
   }
 }
 
-// ASKII Do command - performs actions on workspace
+// ASKII Do command - performs actions on workspace with LLM loop
 async function askiiDoCommand() {
   const question = await vscode.window.showInputBox({
     prompt: 'What would you like ASKII to do?',
@@ -576,100 +576,140 @@ async function askiiDoCommand() {
 
   const config = vscode.workspace.getConfiguration('askii');
   const platform = config.get<string>('llmPlatform') || 'ollama';
+  const maxRounds = config.get<number>('doMaxRounds') || 5;
 
   try {
-    // Get workspace structure
     const workspaceStructure = await getWorkspaceStructure(workspaceRoot.uri.fsPath);
+    let completedActions = 0;
+    let roundCount = 0;
 
-    const prompt = `You are ASKII, an AI agent that can create, modify, or view files in a workspace.
+    const systemPrompt = `You are ASKII, an AI agent that can create, modify, view, and delete files in a workspace.
 
 Current workspace structure:
 \`\`\`
 ${workspaceStructure}
 \`\`\`
 
-User request: ${question}
+You have access to the following action types:
+- {"type": "view", "path": "path/to/file"} - View file contents, responses will be sent back to you
+- {"type": "create", "path": "path/to/file", "content": "file content"}
+- {"type": "modify", "path": "path/to/file", "oldContent": "text to replace", "newContent": "replacement text"}
+- {"type": "delete", "path": "path/to/file"}
 
-For each action you want to perform, use these commands:
-- VIEW: view|path/to/file
-- CREATE: create|path/to/file|content
-- MODIFY: modify|path/to/file|old_content|new_content
-- DELETE: delete|path/to/file
+Always respond with ONLY a valid JSON array containing the actions. You can request to view files to inspect them, and their contents will be sent back to you for further analysis.`;
 
-Respond with the actions separated by newlines.`;
+    let userMessage = question;
 
-    let responseText = '';
+    // Loop for multi-turn interactions
+    while (roundCount < maxRounds) {
+      const fullPrompt =
+        roundCount === 0
+          ? `${systemPrompt}\n\nUser request: ${userMessage}`
+          : `${systemPrompt}\n\n${userMessage}`;
 
-    if (platform === 'copilot') {
-      responseText = await getCopilotResponse(prompt);
-    } else if (platform === 'lmstudio') {
-      responseText = await getLMStudioResponse(prompt);
-    } else {
-      responseText = await getOllamaResponse(prompt);
-    }
+      let responseText = '';
 
-    // Parse and execute actions
-    const lines = responseText.split('\n');
-    const actions = lines.filter((line) => line.match(/^(VIEW|CREATE|MODIFY|DELETE)\|/));
+      if (platform === 'copilot') {
+        responseText = await getCopilotResponse(fullPrompt);
+      } else if (platform === 'lmstudio') {
+        responseText = await getLMStudioResponse(fullPrompt);
+      } else {
+        responseText = await getOllamaResponse(fullPrompt);
+      }
 
-    let completedActions = 0;
+      // Parse JSON actions
+      const actions = parseWorkspaceActions(responseText);
 
-    for (const action of actions) {
-      const [cmd, ...args] = action.split('|');
-      const filePath = path.join(workspaceRoot.uri.fsPath, args[0]);
+      if (actions.length === 0) {
+        break;
+      }
 
-      if (cmd === 'VIEW') {
-        // No confirmation for VIEW
-        const content = fs.readFileSync(filePath, 'utf-8');
-        const document = await vscode.workspace.openTextDocument(filePath);
-        vscode.window.showTextDocument(document);
-        completedActions++;
-      } else if (cmd === 'CREATE' && args[1]) {
-        // Confirm CREATE
-        const confirmed = await vscode.window.showWarningMessage(
-          `Create file: ${args[0]}?`,
-          { modal: true },
-          'Create',
-          'Skip',
-        );
-        if (confirmed === 'Create') {
-          const dir = path.dirname(filePath);
-          if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-          }
-          fs.writeFileSync(filePath, args[1]);
-          const document = await vscode.workspace.openTextDocument(filePath);
-          vscode.window.showTextDocument(document);
-          completedActions++;
-        }
-      } else if (cmd === 'MODIFY' && args.length >= 3) {
-        // Confirm MODIFY
-        const confirmed = await vscode.window.showWarningMessage(
-          `Modify file: ${args[0]}?`,
-          { modal: true },
-          'Modify',
-          'Skip',
-        );
-        if (confirmed === 'Modify') {
-          const oldContent = args[1];
-          const newContent = args[2];
+      // Separate view actions from others
+      const viewActions = actions.filter((a) => a.type === 'view');
+      const otherActions = actions.filter((a) => a.type !== 'view');
+
+      // Execute view actions and collect results
+      const viewResults: { [key: string]: string } = {};
+      for (const action of viewActions) {
+        const filePath = path.join(workspaceRoot.uri.fsPath, action.path);
+        try {
           const content = fs.readFileSync(filePath, 'utf-8');
-          const updated = content.replace(oldContent, newContent);
-          fs.writeFileSync(filePath, updated);
-          completedActions++;
+          // Escape content for JSON transmission
+          viewResults[action.path] = escapeJsonString(content);
+        } catch {
+          viewResults[action.path] = `Error: Cannot read file`;
         }
-      } else if (cmd === 'DELETE') {
-        // Confirm DELETE with stronger warning
-        const confirmed = await vscode.window.showErrorMessage(
-          `Delete file: ${args[0]}? This cannot be undone.`,
-          { modal: true },
-          'Delete',
-          'Cancel',
-        );
-        if (confirmed === 'Delete') {
-          fs.unlinkSync(filePath);
-          completedActions++;
+      }
+
+      // Execute non-view actions (with confirmations)
+      for (const action of otherActions) {
+        const filePath = path.join(workspaceRoot.uri.fsPath, action.path);
+
+        if (action.type === 'create') {
+          const confirmed = await vscode.window.showInformationMessage(
+            `Create file: ${action.path}?`,
+            { modal: false },
+            'Create',
+            'Skip',
+          );
+          if (confirmed === 'Create') {
+            const dir = path.dirname(filePath);
+            if (!fs.existsSync(dir)) {
+              fs.mkdirSync(dir, { recursive: true });
+            }
+            // Unescape content before writing
+            const unescapedContent = action.content ? unescapeJsonString(action.content) : '';
+            fs.writeFileSync(filePath, unescapedContent);
+            completedActions++;
+            vscode.window.showInformationMessage(`✓ Created: ${action.path}`);
+          }
+        } else if (action.type === 'modify') {
+          const confirmed = await vscode.window.showInformationMessage(
+            `Modify file: ${action.path}?`,
+            { modal: false },
+            'Modify',
+            'Skip',
+          );
+          if (confirmed === 'Modify') {
+            try {
+              const content = fs.readFileSync(filePath, 'utf-8');
+              // Unescape oldContent and newContent before processing
+              const oldContent = action.oldContent ? unescapeJsonString(action.oldContent) : '';
+              const newContent = action.newContent ? unescapeJsonString(action.newContent) : '';
+              const updated = content.replace(oldContent, newContent);
+              fs.writeFileSync(filePath, updated);
+              completedActions++;
+              vscode.window.showInformationMessage(`✓ Modified: ${action.path}`);
+            } catch {
+              vscode.window.showErrorMessage(`Cannot modify file: ${action.path}`);
+            }
+          }
+        } else if (action.type === 'delete') {
+          const confirmed = await vscode.window.showWarningMessage(
+            `Delete file: ${action.path}? This cannot be undone.`,
+            { modal: false },
+            'Delete',
+            'Cancel',
+          );
+          if (confirmed === 'Delete') {
+            try {
+              fs.unlinkSync(filePath);
+              completedActions++;
+              vscode.window.showInformationMessage(`✓ Deleted: ${action.path}`);
+            } catch {
+              vscode.window.showErrorMessage(`Cannot delete file: ${action.path}`);
+            }
+          }
         }
+      }
+
+      // If there were view operations, send results back to LLM for further analysis
+      if (Object.keys(viewResults).length > 0) {
+        userMessage = `File contents retrieved:\n${JSON.stringify(viewResults, null, 2)}\n\nBased on these files, what would you like to do next? Respond with only a JSON array of actions or an empty array [] if done.`;
+        roundCount++;
+      } else {
+        // No view actions, we're done
+        break;
       }
     }
 
@@ -703,6 +743,64 @@ async function getWorkspaceStructure(dirPath: string, prefix = ''): Promise<stri
   }
 
   return structure;
+}
+
+// Parse workspace actions from JSON response
+interface WorkspaceAction {
+  type: 'view' | 'create' | 'modify' | 'delete';
+  path: string;
+  content?: string;
+  oldContent?: string;
+  newContent?: string;
+}
+
+function parseWorkspaceActions(responseText: string): WorkspaceAction[] {
+  try {
+    // Extract JSON from response (handles cases where model adds extra text)
+    const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      throw new Error('No JSON array found in response');
+    }
+
+    const actions = JSON.parse(jsonMatch[0]) as WorkspaceAction[];
+
+    // Validate actions
+    if (!Array.isArray(actions)) {
+      throw new Error('Response is not an array');
+    }
+
+    return actions.filter((action) => {
+      // Validate required fields
+      if (!action.type || !action.path) {
+        return false;
+      }
+      // Only accept valid action types
+      return ['view', 'create', 'modify', 'delete'].includes(action.type);
+    });
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Failed to parse workspace actions:', errorMsg);
+    return [];
+  }
+}
+
+// Helper functions for string escaping/unescaping in JSON
+function escapeJsonString(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+}
+
+function unescapeJsonString(str: string): string {
+  return str
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
 }
 
 // Helper functions for LLM responses
@@ -754,7 +852,7 @@ async function getCopilotResponse(prompt: string): Promise<string> {
 async function getLMStudioResponse(prompt: string): Promise<string> {
   const config = vscode.workspace.getConfiguration('askii');
   const lmStudioModel = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
-  const llmUrl = config.get<string>('llmUrl') || 'http://localhost:1234';
+  const llmUrl = config.get<string>('llmUrl') || 'ws://localhost:1234';
 
   try {
     const client = new LMStudioClient({

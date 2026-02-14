@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -84,6 +84,12 @@
           ],
           "default": "funny",
           "description": "Inline helper mode for code decorations"
+        },
+        "askii.doMaxRounds": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "description": "Maximum number of interaction rounds for ASKII Do command"
         }
       }
     }

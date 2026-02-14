@@ -69,17 +69,20 @@ Search for "ASKII Inline Helper Mode" and select:
 4. Describe the changes you want
 5. The selected code will be replaced with the updated version
 
-#### ASKII Do
+#### ASKII Do (AI Workspace Agent)
 
 1. Open command palette
 2. Search for "ASKII Do"
 3. Describe what you want ASKII to do (e.g., "Create a unit test file for src/utils.ts")
-4. ASKII will analyze your workspace and suggest actions
+4. ASKII will analyze your workspace and interact with you:
+   - **View Files**: ASKII can request to view file contents to understand your codebase
+   - **Analyze & Suggest**: Based on file contents, ASKII suggests create, modify, or delete actions
+   - **Multi-turn Interaction**: ASKII can request additional file views and make context-aware decisions
 5. **Confirm each action** before it's applied:
    - **CREATE**: Shows confirmation to create new files
    - **MODIFY**: Shows confirmation to modify existing files
    - **DELETE**: Shows error-level warning for deletions
-   - **VIEW**: No confirmation needed (read-only)
+   - **VIEW**: No confirmation needed (read-only operation)
 
 ### Quick Access with Status Bar Button
 
@@ -94,10 +97,12 @@ Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickl
 All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 
 - `askii.llmPlatform`: Choose LLM provider (`ollama` | `copilot` | `lmstudio`)
-- `askii.llmUrl`: URL for Ollama/LM Studio (default: `http://localhost:11434`)
+- `askii.llmUrl`: URL for Ollama/LM Studio (default: `http://localhost:11434` for Ollama, `ws://localhost:1234` for LM Studio)
 - `askii.ollamaModel`: Ollama model name (default: `gemma3:270m`)
 - `askii.copilotModel`: GitHub Copilot model (default: `gpt-4o`)
 - `askii.lmStudioModel`: LM Studio model (default: `qwen/qwen3-coder-30b`)
+- `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny`, default: `funny`)
+- `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do command (default: 5)
 - `askii.inlineHelperMode`: Inline decoration mode (`off` | `helpful` | `funny`)
 
 ## Default Mode Examples
@@ -119,33 +124,6 @@ const sum = a + b; (◕‿◕) Adds two variables; prefer const for variables th
 - **Confirmation Dialogs**: ASKII Do command requires confirmation for all write operations (CREATE, MODIFY, DELETE) to prevent accidental changes
 - **Smart Caching**: Inline explanations are cached to minimize API calls
 - **Debouncing**: Requests are debounced for optimal performance
-
-## Release Notes
-
-### 0.1.0
-
-New features:
-
-- **LM Studio Support**: Integrated official `@lmstudio/sdk` for native LM Studio client
-- **Confirmation Dialogs**: ASKII Do now shows confirmation for CREATE, MODIFY, DELETE actions
-- **Unified LLM URL**: Single `llmUrl` setting works for both Ollama and LM Studio
-- **Three New Commands**: Ask ASKII, ASKII Edit, ASKII Do with status bar button
-
-### 0.0.5
-
-New features:
-
-- Refactored settings for multi-platform LLM support
-- Inline helper mode with three options: off, helpful, funny
-- Status bar button wit kaomoji for quick command access
-
-### 0.0.3
-
-- GitHub Copilot integration
-
-### 0.0.1
-
-- Initial release with Ollama support
 
 ## Contributing
 
