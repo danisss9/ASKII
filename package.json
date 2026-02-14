@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.0.5",
+  "version": "0.1.0",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -25,35 +25,65 @@
         "command": "askii.clearCache",
         "title": "ASKII: Clear Cache",
         "category": "ASKII"
+      },
+      {
+        "command": "askii.askQuestion",
+        "title": "Ask ASKII",
+        "category": "ASKII"
+      },
+      {
+        "command": "askii.editCode",
+        "title": "ASKII Edit",
+        "category": "ASKII"
+      },
+      {
+        "command": "askii.doTask",
+        "title": "ASKII Do",
+        "category": "ASKII"
       }
     ],
     "configuration": {
       "title": "ASKII",
       "properties": {
-        "askii.ollamaUrl": {
+        "askii.llmPlatform": {
+          "type": "string",
+          "enum": [
+            "ollama",
+            "copilot",
+            "lmstudio"
+          ],
+          "default": "ollama",
+          "description": "LLM platform to use (ollama, copilot, or lmstudio)"
+        },
+        "askii.llmUrl": {
           "type": "string",
           "default": "http://localhost:11434",
-          "description": "URL of the Ollama API server"
+          "description": "URL of the LLM API server (used by Ollama and LM Studio)"
         },
         "askii.ollamaModel": {
           "type": "string",
           "default": "gemma3:270m",
           "description": "Ollama model to use for explanations"
         },
-        "askii.helpfulMode": {
-          "type": "boolean",
-          "default": false,
-          "description": "When enabled, provides helpful code advice instead of humorous comments"
-        },
-        "askii.useCopilot": {
-          "type": "boolean",
-          "default": false,
-          "description": "Use GitHub Copilot's Chat & Language Model APIs instead of Ollama (requires GitHub Copilot)"
-        },
         "askii.copilotModel": {
           "type": "string",
           "default": "gpt-4o",
           "description": "GitHub Copilot model family to use for explanations"
+        },
+        "askii.lmStudioModel": {
+          "type": "string",
+          "default": "qwen/qwen3-coder-30b",
+          "description": "LM Studio model to use for explanations"
+        },
+        "askii.inlineHelperMode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "helpful",
+            "funny"
+          ],
+          "default": "funny",
+          "description": "Inline helper mode for code decorations"
         }
       }
     }
@@ -85,6 +115,8 @@
     "typescript-eslint": "^8.52.0"
   },
   "dependencies": {
+    "@lmstudio/immer-with-plugins": "^10.1.1",
+    "@lmstudio/sdk": "^1.5.0",
     "ollama": "^0.6.3"
   }
 }

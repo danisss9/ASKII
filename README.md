@@ -1,13 +1,17 @@
 # ASKII
 
-A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-powered explanations to your code lines. Choose between Ollama or GitHub Copilot as your AI provider, and toggle between humorous comments for entertainment or helpful code advice for learning!
+A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-powered explanations to your code lines. Choose between Ollama, GitHub Copilot, or LM Studio as your AI provider, and toggle between humorous comments and helpful code advice!
 
 ## Features
 
 - **Random Kaomoji**: Adds a random kaomoji emoticon after the current line
-- **AI Explanations**: Uses Ollama or GitHub Copilot to generate concise explanations of your code
-- **Helpful Mode**: Toggle between fun humorous comments and practical coding advice
-- **Dual AI Provider**: Choose between Ollama (local) or GitHub Copilot (cloud)
+- **AI Explanations**: Uses Ollama, GitHub Copilot, or LM Studio to generate concise explanations of your code
+- **Inline Helper Modes**: Choose between off, helpful, or funny modes
+- **Multi-Platform AI**: Support for Ollama (local), GitHub Copilot (cloud), and LM Studio (local with official SDK)
+- **Three Command Modes**:
+  - **Ask ASKII**: Ask questions about your selected code
+  - **ASKII Edit**: Have ASKII modify your selected code based on your request
+  - **ASKII Do**: Let ASKII perform workspace actions (create, modify, delete, view files) with confirmation prompts
 
 ## Requirements
 
@@ -19,96 +23,132 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 
 ### Option 2: GitHub Copilot
 
-- **GitHub Copilot Extension**: Install the GitHub Copilot extension from the VS Code marketplace
+- **GitHub Copilot Extension**: Install from the VS Code marketplace
 - Active GitHub Copilot subscription
-- Enable `askii.useCopilot` in settings
+- Select `copilot` in the `askii.llmPlatform` setting
+
+### Option 3: LM Studio (New!)
+
+- **LM Studio**: Download from [https://lmstudio.ai](https://lmstudio.ai)
+- Start LM Studio and load your preferred model
+- Select `lmstudio` in the `askii.llmPlatform` setting
 
 ## Usage
 
 The extension automatically shows inline comments as you move your cursor through your code.
 
-### Choose Your AI Provider
+### Choose Your LLM Platform
 
-**Ollama (Default):**
-Uses local AI models - no internet required, fully private.
+Open VS Code Settings (`Ctrl+,` or `Cmd+,`) and search for "ASKII LLM Platform" to choose:
+- `ollama` (default)
+- `copilot`
+- `lmstudio`
 
-**GitHub Copilot:**
-Uses cloud-based Copilot models - requires subscription but offers powerful AI capabilities.
+### Choose Your Inline Helper Mode
 
-**To use GitHub Copilot:**
+Search for "ASKII Inline Helper Mode" and select:
+- `off` - No inline decorations
+- `helpful` - Practical coding advice
+- `funny` - Humorous comments (default)
 
-1. Open VS Code Settings (`Ctrl+,` or `Cmd+,`)
-2. Search for "ASKII Use Copilot"
-3. Check the box to enable Copilot mode
+### Commands
 
-### Default Mode (Humorous)
+#### Ask ASKII
 
-By default, ASKII provides witty, fun comments about your code:
+1. Select code in your editor
+2. Open command palette (`Ctrl+Shift+P` or `Cmd+Shift+P`)
+3. Search for "Ask ASKII"
+4. Type your question
+5. View the response in a side panel
+
+#### ASKII Edit
+
+1. Select code in your editor
+2. Open command palette
+3. Search for "ASKII Edit"
+4. Describe the changes you want
+5. The selected code will be replaced with the updated version
+
+#### ASKII Do
+
+1. Open command palette
+2. Search for "ASKII Do"
+3. Describe what you want ASKII to do (e.g., "Create a unit test file for src/utils.ts")
+4. ASKII will analyze your workspace and suggest actions
+5. **Confirm each action** before it's applied:
+   - **CREATE**: Shows confirmation to create new files
+   - **MODIFY**: Shows confirmation to modify existing files
+   - **DELETE**: Shows error-level warning for deletions
+   - **VIEW**: No confirmation needed (read-only)
+
+### Quick Access with Status Bar Button
+
+Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickly access:
+- Ask ASKII
+- ASKII Edit
+- ASKII Do
+- Clear Cache
+
+## Configuration
+
+All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
+
+- `askii.llmPlatform`: Choose LLM provider (`ollama` | `copilot` | `lmstudio`)
+- `askii.llmUrl`: URL for Ollama/LM Studio (default: `http://localhost:11434`)
+- `askii.ollamaModel`: Ollama model name (default: `gemma3:270m`)
+- `askii.copilotModel`: GitHub Copilot model (default: `gpt-4o`)
+- `askii.lmStudioModel`: LM Studio model (default: `qwen/qwen3-coder-30b`)
+- `askii.inlineHelperMode`: Inline decoration mode (`off` | `helpful` | `funny`)
+
+## Default Mode Examples
+
+### Funny Mode (Default)
 
 ```javascript
-const sum = a + b; (◕‿◕) Ah yes, the ancient art of addition - bringing numbers together since forever!
+const sum = a + b; (◕‿◕) The age-old tradition of making numbers hang out together!
 ```
 
 ### Helpful Mode
 
-Enable `askii.helpfulMode` in settings to get practical coding advice:
-
 ```javascript
-const sum = a + b; (◕‿◕) Adds two variables and stores the result; consider using const for immutable values.
+const sum = a + b; (◕‿◕) Adds two variables; prefer const for variables that won't be reassigned.
 ```
 
-**To enable Helpful Mode:**
+## Technical Details
 
-1. Open VS Code Settings (`Ctrl+,` or `Cmd+,`)
-2. Search for "ASKII Helpful Mode"
-3. Check the box to enable helpful advice mode
-
-## Extension Settings
-
-This extension contributes the following settings:
-
-- `askii.ollamaUrl`: URL of the Ollama API server (default: `http://localhost:11434`)
-- `askii.ollamaModel`: Ollama model to use for explanations (default: `gemma3:270m`)
-- `askii.helpfulMode`: When enabled, provides helpful code advice instead of humorous comments (default: `false`)
-- `askii.useCopilot`: Use GitHub Copilot's Chat & Language Model APIs instead of Ollama (default: `false`)
-- `askii.copilotModel`: GitHub Copilot model to use (default: `gpt-4o`).
-
-## Configuration
-
-To customize the extension settings:
-
-1. Open VS Code Settings (`Ctrl+,` or `Cmd+,`)
-2. Search for "ASKII"
-3. Adjust the Ollama URL and model as needed
+- **Confirmation Dialogs**: ASKII Do command requires confirmation for all write operations (CREATE, MODIFY, DELETE) to prevent accidental changes
+- **Smart Caching**: Inline explanations are cached to minimize API calls
+- **Debouncing**: Requests are debounced for optimal performance
 
 ## Release Notes
 
+### 0.1.0
+
+New features:
+
+- **LM Studio Support**: Integrated official `@lmstudio/sdk` for native LM Studio client
+- **Confirmation Dialogs**: ASKII Do now shows confirmation for CREATE, MODIFY, DELETE actions
+- **Unified LLM URL**: Single `llmUrl` setting works for both Ollama and LM Studio
+- **Three New Commands**: Ask ASKII, ASKII Edit, ASKII Do with status bar button
+
+### 0.0.5
+
+New features:
+
+- Refactored settings for multi-platform LLM support
+- Inline helper mode with three options: off, helpful, funny
+- Status bar button wit kaomoji for quick command access
+
 ### 0.0.3
 
-New features:
-
-- Added GitHub Copilot integration as an alternative to Ollama
-- New `useCopilot` setting to switch between Ollama and GitHub Copilot
-- Supports VS Code's Language Model API for seamless Copilot integration
-
-### 0.0.2
-
-New features:
-
-- Added Helpful Mode setting for practical code advice instead of humorous comments
-- Toggle between entertainment and educational explanations
-- Improved AI prompts for both modes
+- GitHub Copilot integration
 
 ### 0.0.1
 
-Initial release:
+- Initial release with Ollama support
 
-- Random kaomoji insertion
-- Ollama AI integration for code explanations
-- Configurable Ollama URL and model
+## Contributing
 
-## Following Extension Development
-
-This extension was created as a fun way to add personality to code comments while learning about what each line does!
+Love ASKII? Feel free to contribute to the project on GitHub!
 
 **Enjoy! (づ｡◕‿‿◕｡)づ**
