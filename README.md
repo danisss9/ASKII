@@ -40,6 +40,7 @@ The extension automatically shows inline comments as you move your cursor throug
 ### Choose Your LLM Platform
 
 Open VS Code Settings (`Ctrl+,` or `Cmd+,`) and search for "ASKII LLM Platform" to choose:
+
 - `ollama` (default)
 - `copilot`
 - `lmstudio`
@@ -47,6 +48,7 @@ Open VS Code Settings (`Ctrl+,` or `Cmd+,`) and search for "ASKII LLM Platform" 
 ### Choose Your Inline Helper Mode
 
 Search for "ASKII Inline Helper Mode" and select:
+
 - `off` - No inline decorations
 - `helpful` - Practical coding advice
 - `funny` - Humorous comments (default)
@@ -59,7 +61,7 @@ Search for "ASKII Inline Helper Mode" and select:
 2. Open command palette (`Ctrl+Shift+P` or `Cmd+Shift+P`)
 3. Search for "Ask ASKII"
 4. Type your question
-5. View the response in a side panel
+5. View the formatted markdown response in a side panel with VS Code theme-aware styling
 
 #### ASKII Edit
 
@@ -87,6 +89,7 @@ Search for "ASKII Inline Helper Mode" and select:
 ### Quick Access with Status Bar Button
 
 Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickly access:
+
 - Ask ASKII
 - ASKII Edit
 - ASKII Do
@@ -97,13 +100,13 @@ Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickl
 All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 
 - `askii.llmPlatform`: Choose LLM provider (`ollama` | `copilot` | `lmstudio`)
-- `askii.llmUrl`: URL for Ollama/LM Studio (default: `http://localhost:11434` for Ollama, `ws://localhost:1234` for LM Studio)
+- `askii.ollamaUrl`: URL for Ollama API server (default: `http://localhost:11434`)
+- `askii.lmStudioUrl`: URL for LM Studio API server (default: `ws://localhost:1234`)
 - `askii.ollamaModel`: Ollama model name (default: `gemma3:270m`)
 - `askii.copilotModel`: GitHub Copilot model (default: `gpt-4o`)
 - `askii.lmStudioModel`: LM Studio model (default: `qwen/qwen3-coder-30b`)
 - `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny`, default: `funny`)
 - `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do command (default: 5)
-- `askii.inlineHelperMode`: Inline decoration mode (`off` | `helpful` | `funny`)
 
 ## Default Mode Examples
 
@@ -121,6 +124,7 @@ const sum = a + b; (◕‿◕) Adds two variables; prefer const for variables th
 
 ## Technical Details
 
+- **Markdown Rendering**: Ask ASKII responses are rendered using markdown-it with syntax highlighting and VS Code theme integration
 - **Confirmation Dialogs**: ASKII Do command requires confirmation for all write operations (CREATE, MODIFY, DELETE) to prevent accidental changes
 - **Smart Caching**: Inline explanations are cached to minimize API calls
 - **Debouncing**: Requests are debounced for optimal performance

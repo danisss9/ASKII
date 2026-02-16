@@ -4,6 +4,17 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.1.3] - 2026-02-16
+
+### Added
+
+- **Markdown-it Integration**: Ask ASKII now renders markdown responses as formatted HTML with proper syntax highlighting
+
+### Changed
+
+- **Configuration Split**: Renamed `askii.llmUrl` to `askii.ollamaUrl` for clarity, added dedicated `askii.lmStudioUrl`
+- **Enhanced Webview Styling**: Improved code block styling, blockquotes, and link colors in Ask ASKII responses
+
 ## [0.1.2] - 2026-02-14
 
 ### Added

@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -55,10 +55,15 @@
           "default": "ollama",
           "description": "LLM platform to use (ollama, copilot, or lmstudio)"
         },
-        "askii.llmUrl": {
+        "askii.ollamaUrl": {
           "type": "string",
           "default": "http://localhost:11434",
-          "description": "URL of the LLM API server (used by Ollama and LM Studio)"
+          "description": "URL of the Ollama API server"
+        },
+        "askii.lmStudioUrl": {
+          "type": "string",
+          "default": "ws://localhost:1234",
+          "description": "URL of the LM Studio API server"
         },
         "askii.ollamaModel": {
           "type": "string",
@@ -109,6 +114,7 @@
     "test": "vscode-test"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "@types/vscode": "^1.108.1",
@@ -123,6 +129,7 @@
   "dependencies": {
     "@lmstudio/immer-with-plugins": "^10.1.1",
     "@lmstudio/sdk": "^1.5.0",
+    "markdown-it": "^14.1.1",
     "ollama": "^0.6.3"
   }
 }
