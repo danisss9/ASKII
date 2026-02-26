@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "module": "Node16",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "sourceMap": true,
+    "strict": true,
+    "baseUrl": "./",
+    "paths": {
+      "@common/*": ["../common/*"]
+    }
+  },
+  "include": [
+    "./**/*.ts",
+    "../common/**/*.ts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules"
+  ]
+}
