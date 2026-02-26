@@ -26,3 +26,14 @@ export function unescapeJsonString(str: string): string {
     .replace(/\\"/g, '"')
     .replace(/\\\\/g, '\\');
 }
+
+export function extractCode(response: string): string {
+  let code = response.trim();
+  if (code.startsWith('```')) {
+    code = code
+      .replace(/^```[a-z]*\n?/, '')
+      .replace(/\n?```$/, '')
+      .trim();
+  }
+  return code;
+}

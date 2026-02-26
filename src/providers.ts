@@ -1,0 +1,107 @@
+import * as vscode from 'vscode';
+import { getOllamaResponse, getLMStudioResponse } from '@common/providers';
+
+export async function getCopilotResponse(prompt: string): Promise<string> {
+  const config = vscode.workspace.getConfiguration('askii');
+  const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
+
+  const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
+  if (models.length === 0) throw new Error('GitHub Copilot not available');
+
+  const model = models[0];
+  const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+  const chatResponse = await model.sendRequest(
+    messages,
+    {},
+    new vscode.CancellationTokenSource().token,
+  );
+
+  let responseText = '';
+  for await (const fragment of chatResponse.text) {
+    responseText += fragment;
+  }
+  return responseText;
+}
+
+export async function getExtensionResponse(prompt: string): Promise<string> {
+  const config = vscode.workspace.getConfiguration('askii');
+  const platform = config.get<string>('llmPlatform') || 'ollama';
+
+  if (platform === 'copilot') {
+    return getCopilotResponse(prompt);
+  } else if (platform === 'lmstudio') {
+    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
+    const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
+    return getLMStudioResponse(prompt, url, model);
+  } else {
+    const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
+    const model = config.get<string>('ollamaModel') || 'gemma3:270m';
+    return getOllamaResponse(prompt, url, model);
+  }
+}
+
+export async function getLLMExplanation(
+  lineText: string,
+  abortSignal?: AbortSignal,
+): Promise<string> {
+  const config = vscode.workspace.getConfiguration('askii');
+  const platform = config.get<string>('llmPlatform') || 'ollama';
+  const mode = config.get<string>('inlineHelperMode') || 'funny';
+
+  if (mode === 'off') return '';
+
+  const isHelpful = mode === 'helpful';
+  const systemPrompt = isHelpful
+    ? 'You are ASKII, a helpful coding assistant. Provide clear, concise explanations.'
+    : 'You are ASKII, a witty coding assistant. Provide humorous comments.';
+  const userPrompt = isHelpful
+    ? `Explain this code in one sentence: ${lineText}`
+    : `Make a funny comment about this code in one sentence: ${lineText}`;
+
+  try {
+    if (abortSignal?.aborted) throw new Error('Request cancelled');
+
+    if (platform === 'copilot') {
+      const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
+      const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
+      if (models.length === 0) return 'Error: GitHub Copilot not available';
+
+      const model = models[0];
+      const messages = [
+        vscode.LanguageModelChatMessage.User(systemPrompt),
+        vscode.LanguageModelChatMessage.User(userPrompt),
+      ];
+      const chatResponse = await model.sendRequest(
+        messages,
+        {},
+        new vscode.CancellationTokenSource().token,
+      );
+
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+
+      let responseText = '';
+      for await (const fragment of chatResponse.text) {
+        responseText += fragment;
+      }
+      return responseText || 'No explanation available.';
+    } else if (platform === 'lmstudio') {
+      const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
+      const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      const result = await getLMStudioResponse(userPrompt, url, model, systemPrompt);
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      return result || 'No explanation available.';
+    } else {
+      const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
+      const model = config.get<string>('ollamaModel') || 'gemma3:270m';
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      const result = await getOllamaResponse(userPrompt, url, model, systemPrompt);
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      return result || 'No explanation available.';
+    }
+  } catch (error) {
+    if (abortSignal?.aborted) throw error;
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return `Error: ${errorMessage}`;
+  }
+}

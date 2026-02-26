@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getCopilotResponse, getLMStudioResponse, getOllamaResponse } from '@common/providers';
+import { getExtensionResponse, getLLMExplanation } from './providers';
 import { getWorkspaceStructure, parseWorkspaceActions } from '@common/workspace';
-import { escapeHtml, escapeJsonString, unescapeJsonString } from '@common/utils';
+import { escapeHtml, escapeJsonString, unescapeJsonString, extractCode } from '@common/utils';
+import { getRandomKaomoji } from '@common/kaomoji';
 
 export async function askAskiiCommand() {
   const editor = vscode.window.activeTextEditor;
@@ -49,20 +50,9 @@ export async function askAskiiCommand() {
     </html>
   `;
 
-  const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('llmPlatform') || 'ollama';
-
   try {
-    let responseText = '';
     const prompt = `Code:\n\`\`\`\n${selectedText}\n\`\`\`\n\nQuestion: ${question}`;
-
-    if (platform === 'copilot') {
-      responseText = await getCopilotResponse(prompt);
-    } else if (platform === 'lmstudio') {
-      responseText = await getLMStudioResponse(prompt);
-    } else {
-      responseText = await getOllamaResponse(prompt);
-    }
+    const responseText = await getExtensionResponse(prompt);
 
     panel.webview.html = `
       <html>
@@ -116,33 +106,21 @@ export async function askiiEditCommand() {
 
   vscode.window.showInformationMessage('ASKII is editing... (•_•)>⌐■-■');
 
-  const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('llmPlatform') || 'ollama';
+  const editConfig = vscode.workspace.getConfiguration('askii');
+  const formatAfterEdit = editConfig.get<boolean>('formatAfterEdit') ?? false;
 
   try {
     const prompt = `Update this code:\n\`\`\`\n${selectedText}\n\`\`\`\n\nRequest: ${question}\n\nReturn only the updated code without explanation.`;
-
-    let responseText = '';
-
-    if (platform === 'copilot') {
-      responseText = await getCopilotResponse(prompt);
-    } else if (platform === 'lmstudio') {
-      responseText = await getLMStudioResponse(prompt);
-    } else {
-      responseText = await getOllamaResponse(prompt);
-    }
-
-    let code = responseText.trim();
-    if (code.startsWith('```')) {
-      code = code
-        .replace(/^```[a-z]*\n?/, '')
-        .replace(/\n?```$/, '')
-        .trim();
-    }
+    const responseText = await getExtensionResponse(prompt);
+    const code = extractCode(responseText);
 
     await editor.edit((editBuilder: vscode.TextEditorEdit) => {
       editBuilder.replace(editor.selection, code);
     });
+
+    if (formatAfterEdit) {
+      await vscode.commands.executeCommand('editor.action.formatDocument');
+    }
 
     vscode.window.showInformationMessage('Code updated! (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧');
   } catch (error) {
@@ -170,8 +148,9 @@ export async function askiiDoCommand() {
   vscode.window.showInformationMessage('ASKII is working... (๑•﹏•)');
 
   const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('llmPlatform') || 'ollama';
   const maxRounds = config.get<number>('doMaxRounds') || 5;
+  const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
+  const formatAfterEdit = config.get<boolean>('formatAfterEdit') ?? false;
 
   try {
     const workspaceStructure = await getWorkspaceStructure(workspaceRoot.uri.fsPath);
@@ -201,16 +180,7 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
           ? `${systemPrompt}\n\nUser request: ${userMessage}`
           : `${systemPrompt}\n\n${userMessage}`;
 
-      let responseText = '';
-
-      if (platform === 'copilot') {
-        responseText = await getCopilotResponse(fullPrompt);
-      } else if (platform === 'lmstudio') {
-        responseText = await getLMStudioResponse(fullPrompt);
-      } else {
-        responseText = await getOllamaResponse(fullPrompt);
-      }
-
+      const responseText = await getExtensionResponse(fullPrompt);
       const actions = parseWorkspaceActions(responseText);
 
       if (actions.length === 0) {
@@ -235,13 +205,15 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
         const filePath = path.join(workspaceRoot.uri.fsPath, action.path);
 
         if (action.type === 'create') {
-          const confirmed = await vscode.window.showInformationMessage(
-            `Create file: ${action.path}?`,
-            { modal: false },
-            'Create',
-            'Skip',
-          );
-          if (confirmed === 'Create') {
+          const confirmed =
+            autoConfirm ||
+            (await vscode.window.showInformationMessage(
+              `Create file: ${action.path}?`,
+              { modal: false },
+              'Create',
+              'Skip',
+            )) === 'Create';
+          if (confirmed) {
             const dir = path.dirname(filePath);
             if (!fs.existsSync(dir)) {
               fs.mkdirSync(dir, { recursive: true });
@@ -250,15 +222,32 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
             fs.writeFileSync(filePath, unescapedContent);
             completedActions++;
             vscode.window.showInformationMessage(`✓ Created: ${action.path}`);
+            if (formatAfterEdit) {
+              const uri = vscode.Uri.file(filePath);
+              const doc = await vscode.workspace.openTextDocument(uri);
+              const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+                'vscode.executeFormatDocumentProvider',
+                doc.uri,
+                { tabSize: 2, insertSpaces: true },
+              );
+              if (edits && edits.length > 0) {
+                const workspaceEdit = new vscode.WorkspaceEdit();
+                workspaceEdit.set(doc.uri, edits);
+                await vscode.workspace.applyEdit(workspaceEdit);
+                await doc.save();
+              }
+            }
           }
         } else if (action.type === 'modify') {
-          const confirmed = await vscode.window.showInformationMessage(
-            `Modify file: ${action.path}?`,
-            { modal: false },
-            'Modify',
-            'Skip',
-          );
-          if (confirmed === 'Modify') {
+          const confirmed =
+            autoConfirm ||
+            (await vscode.window.showInformationMessage(
+              `Modify file: ${action.path}?`,
+              { modal: false },
+              'Modify',
+              'Skip',
+            )) === 'Modify';
+          if (confirmed) {
             try {
               const content = fs.readFileSync(filePath, 'utf-8');
               const oldContent = action.oldContent ? unescapeJsonString(action.oldContent) : '';
@@ -267,18 +256,35 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
               fs.writeFileSync(filePath, updated);
               completedActions++;
               vscode.window.showInformationMessage(`✓ Modified: ${action.path}`);
+              if (formatAfterEdit) {
+                const uri = vscode.Uri.file(filePath);
+                const doc = await vscode.workspace.openTextDocument(uri);
+                const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+                  'vscode.executeFormatDocumentProvider',
+                  doc.uri,
+                  { tabSize: 2, insertSpaces: true },
+                );
+                if (edits && edits.length > 0) {
+                  const workspaceEdit = new vscode.WorkspaceEdit();
+                  workspaceEdit.set(doc.uri, edits);
+                  await vscode.workspace.applyEdit(workspaceEdit);
+                  await doc.save();
+                }
+              }
             } catch {
               vscode.window.showErrorMessage(`Cannot modify file: ${action.path}`);
             }
           }
         } else if (action.type === 'delete') {
-          const confirmed = await vscode.window.showWarningMessage(
-            `Delete file: ${action.path}? This cannot be undone.`,
-            { modal: false },
-            'Delete',
-            'Cancel',
-          );
-          if (confirmed === 'Delete') {
+          const confirmed =
+            autoConfirm ||
+            (await vscode.window.showWarningMessage(
+              `Delete file: ${action.path}? This cannot be undone.`,
+              { modal: false },
+              'Delete',
+              'Cancel',
+            )) === 'Delete';
+          if (confirmed) {
             try {
               fs.unlinkSync(filePath);
               completedActions++;

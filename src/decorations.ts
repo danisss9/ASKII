@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
-import { getLLMExplanation } from '@common/providers';
+import { getLLMExplanation } from './providers';
 
 export const explanationCache = new Map<string, { kaomoji: string; explanation: string }>();
 

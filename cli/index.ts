@@ -1,11 +1,10 @@
 import { getWorkspaceStructure, parseWorkspaceActions } from '@common/workspace';
-import { unescapeJsonString } from '@common/utils';
+import { unescapeJsonString, extractCode } from '@common/utils';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
+import { getOllamaResponse, getLMStudioResponse } from '@common/providers';
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Ollama } from 'ollama';
-import { LMStudioClient } from '@lmstudio/sdk';
 
 interface Config {
   platform: 'ollama' | 'lmstudio';
@@ -56,25 +55,9 @@ function getConfig(flags: string[]): Config {
 
 async function getResponse(config: Config, prompt: string, system?: string): Promise<string> {
   if (config.platform === 'lmstudio') {
-    const client = new LMStudioClient({ baseUrl: config.url });
-    const model = await client.llm.model(config.model);
-    const messages: { role: 'system' | 'user'; content: string }[] = system
-      ? [
-          { role: 'system', content: system },
-          { role: 'user', content: prompt },
-        ]
-      : [{ role: 'user', content: prompt }];
-    const result = await model.respond(messages);
-    return result.content || 'No response';
+    return getLMStudioResponse(prompt, config.url, config.model, system);
   } else {
-    const ollama = new Ollama({ host: config.url });
-    const response = await ollama.generate({
-      model: config.model,
-      system,
-      prompt,
-      stream: false,
-    });
-    return response.response || 'No response';
+    return getOllamaResponse(prompt, config.url, config.model, system);
   }
 }
 
@@ -189,14 +172,8 @@ async function main() {
     console.error(`ASKII is editing... (•_•)>⌐■-■`);
 
     try {
-      let response = await getResponse(config, prompt);
-      if (response.startsWith('```')) {
-        response = response
-          .replace(/^```[a-z]*\n?/, '')
-          .replace(/\n?```$/, '')
-          .trim();
-      }
-      console.log(response);
+      const response = await getResponse(config, prompt);
+      console.log(extractCode(response));
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);

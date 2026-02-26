@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -95,6 +95,16 @@
           "default": 5,
           "minimum": 1,
           "description": "Maximum number of interaction rounds for ASKII Do command"
+        },
+        "askii.doAutoConfirm": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically confirm create/modify/delete actions in ASKII Do without prompting"
+        },
+        "askii.formatAfterEdit": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically format files after ASKII Edit or ASKII Do creates/modifies them"
         }
       }
     }
