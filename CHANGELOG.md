@@ -4,6 +4,12 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.1] - 2026-02-27
+
+### Fixed
+
+- **LM Studio image support**: Updated image passing to use `client.files.prepareImageBase64()` and `FileHandle` — the API required by `@lmstudio/sdk` v1.5.0. The previous multimodal content block format (`imageUrl` in content array) was rejected by the SDK's runtime Zod validation, causing `Invalid parameter(s) for model.respond — chat: Invalid input` errors on any command using images (e.g. `control`)
+
 ## [0.2.0] - 2026-02-27
 
 ### Added
