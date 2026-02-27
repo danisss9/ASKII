@@ -127,7 +127,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vscode-test",
-    "publish": "vsce publish"
+    "release": "vsce publish"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
