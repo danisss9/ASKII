@@ -6,7 +6,7 @@ import {
   AskiiHoverProvider,
   explanationCache,
 } from './decorations';
-import { askAskiiCommand, askiiEditCommand, askiiDoCommand } from './commands';
+import { askAskiiCommand, askiiEditCommand, askiiDoCommand, askiiControlCommand } from './commands';
 
 export function activate(context: vscode.ExtensionContext) {
   const decorationType = vscode.window.createTextEditorDecorationType({
@@ -37,6 +37,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(vscode.commands.registerCommand('askii.askQuestion', askAskiiCommand));
   context.subscriptions.push(vscode.commands.registerCommand('askii.editCode', askiiEditCommand));
   context.subscriptions.push(vscode.commands.registerCommand('askii.doTask', askiiDoCommand));
+  context.subscriptions.push(vscode.commands.registerCommand('askii.controlTask', askiiControlCommand));
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.text = '(⌐■_■)';
@@ -51,6 +52,7 @@ export function activate(context: vscode.ExtensionContext) {
         { label: '$(comment) Ask ASKII', command: 'askii.askQuestion' },
         { label: '$(edit) ASKII Edit', command: 'askii.editCode' },
         { label: '$(files) ASKII Do', command: 'askii.doTask' },
+        { label: '$(screen-full) ASKII Control', command: 'askii.controlTask' },
         { label: '$(refresh) Clear Cache', command: 'askii.clearCache' },
       ]);
 

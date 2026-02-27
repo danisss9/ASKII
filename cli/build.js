@@ -20,6 +20,7 @@ async function main() {
     alias: {
       '@common': path.resolve(__dirname, '..', 'common'),
     },
+    external: ['@nut-tree-fork/nut-js', 'screenshot-desktop'],
     logLevel: 'info',
   });
 

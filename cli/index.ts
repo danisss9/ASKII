@@ -2,6 +2,13 @@ import { getWorkspaceStructure, parseWorkspaceActions } from '@common/workspace'
 import { unescapeJsonString, extractCode } from '@common/utils';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import { getOllamaResponse, getLMStudioResponse } from '@common/providers';
+import {
+  CONTROL_SYSTEM_PROMPT,
+  parseControlAction,
+  takeScreenshot,
+  describeAction,
+  executeControlAction,
+} from '@common/control';
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -33,16 +40,30 @@ function getConfig(flags: string[]): Config {
     process.env.ASKII_PLATFORM ||
     'ollama') as 'ollama' | 'lmstudio';
 
-  const defaultUrl =
-    platform === 'lmstudio' ? 'ws://localhost:1234' : 'http://localhost:11434';
+  const ollamaUrl =
+    getFlagValue(flags, '--ollama-url') ||
+    process.env.ASKII_OLLAMA_URL ||
+    'http://localhost:11434';
+
+  const lmStudioUrl =
+    getFlagValue(flags, '--lmstudio-url') ||
+    process.env.ASKII_LMSTUDIO_URL ||
+    'ws://localhost:1234';
+
+  const ollamaModel =
+    getFlagValue(flags, '--ollama-model') ||
+    process.env.ASKII_OLLAMA_MODEL ||
+    'gemma3:270m';
+
+  const lmStudioModel =
+    getFlagValue(flags, '--lmstudio-model') ||
+    process.env.ASKII_LMSTUDIO_MODEL ||
+    'qwen/qwen3-coder-30b';
 
   return {
     platform,
-    url: getFlagValue(flags, '--url') || process.env.ASKII_URL || defaultUrl,
-    model:
-      getFlagValue(flags, '-m', '--model') ||
-      process.env.ASKII_MODEL ||
-      (platform === 'lmstudio' ? 'qwen/qwen3-coder-30b' : 'gemma3:270m'),
+    url: platform === 'lmstudio' ? lmStudioUrl : ollamaUrl,
+    model: platform === 'lmstudio' ? lmStudioModel : ollamaModel,
     mode: (getFlagValue(flags, '--mode') ||
       process.env.ASKII_MODE ||
       'funny') as 'helpful' | 'funny',
@@ -53,11 +74,16 @@ function getConfig(flags: string[]): Config {
   };
 }
 
-async function getResponse(config: Config, prompt: string, system?: string): Promise<string> {
+async function getResponse(
+  config: Config,
+  prompt: string,
+  system?: string,
+  imageBase64?: string,
+): Promise<string> {
   if (config.platform === 'lmstudio') {
-    return getLMStudioResponse(prompt, config.url, config.model, system);
+    return getLMStudioResponse(prompt, config.url, config.model, system, imageBase64);
   } else {
-    return getOllamaResponse(prompt, config.url, config.model, system);
+    return getOllamaResponse(prompt, config.url, config.model, system, imageBase64 ? [imageBase64] : undefined);
   }
 }
 
@@ -92,20 +118,26 @@ Commands:
   edit <instruction>    Edit code and print the result to stdout
   explain <line>        Explain a single line of code
   do <task>             Agentic task runner — creates, modifies, and deletes files
+  control <instruction> Screen control — takes screenshots and drives mouse/keyboard
 
 Options:
-  -p, --platform <platform>  LLM platform: ollama, lmstudio (default: ollama)
-      --url <url>            LLM server URL
-  -m, --model <model>        Model to use
+  -p, --platform <p>         LLM platform: ollama, lmstudio (default: ollama)
+      --ollama-url <url>     Ollama server URL (default: http://localhost:11434)
+      --lmstudio-url <url>   LM Studio server URL (default: ws://localhost:1234)
+      --ollama-model <m>     Ollama model (default: gemma3:270m)
+      --lmstudio-model <m>   LM Studio model (default: qwen/qwen3-coder-30b)
       --mode <mode>          Response mode: helpful, funny (default: funny)
-      --max-rounds <n>       Max agent rounds for "do" (default: 5)
+      --max-rounds <n>       Max agent rounds for "do" / "control" (default: 5)
       --dir <path>           Working directory for "do" (default: cwd)
   -c, --code <code>          Code input (alternative to stdin)
-  -y, --yes                  Auto-confirm all file operations in "do"
+  -y, --yes                  Auto-confirm all actions
   -h, --help                 Show help
 
 Environment variables:
-  ASKII_PLATFORM, ASKII_URL, ASKII_MODEL, ASKII_MODE, ASKII_MAX_ROUNDS
+  ASKII_PLATFORM
+  ASKII_OLLAMA_URL      ASKII_LMSTUDIO_URL
+  ASKII_OLLAMA_MODEL    ASKII_LMSTUDIO_MODEL
+  ASKII_MODE            ASKII_MAX_ROUNDS
 
 Examples:
   cat myfile.ts | askii ask "what does this do?"
@@ -113,6 +145,9 @@ Examples:
   askii explain "const x = arr.reduce((a, b) => a + b, 0)"
   askii do "create a Jest test file for src/utils.ts"
   askii do --yes "scaffold a README for this project"
+  askii -p lmstudio --lmstudio-model "my-model" do "refactor index.ts"
+  askii control --ollama-model llava "open Notepad and type hello world"
+  askii control --yes --ollama-model llava "click the search bar and search for cats"
 `);
 }
 
@@ -319,6 +354,76 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
 
       rl.close();
       console.error(`\nCompleted ${completedActions} actions! ${getRandomKaomoji()}`);
+    } catch (error) {
+      rl.close();
+      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      process.exit(1);
+    }
+  } else if (command === 'control') {
+    const instruction = positional.slice(1).join(' ');
+
+    if (!instruction) {
+      console.error('Error: provide an instruction as an argument');
+      process.exit(1);
+    }
+
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+
+    try {
+      console.error(`ASKII Control starting... ${getRandomThinkingKaomoji()}`);
+      console.error(`Instruction: ${instruction}`);
+      console.error('(Make sure your model supports vision/images)\n');
+
+      let round = 0;
+
+      while (round < config.maxRounds) {
+        console.error(`Round ${round + 1}/${config.maxRounds} — taking screenshot...`);
+
+        const imageBase64 = await takeScreenshot();
+
+        const prompt =
+          round === 0
+            ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action.`
+            : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and determine the next action, or return DONE if the instruction is complete.`;
+
+        console.error('Asking AI...');
+        const response = await getResponse(config, prompt, CONTROL_SYSTEM_PROMPT, imageBase64);
+
+        const action = parseControlAction(response);
+
+        if (!action) {
+          console.error('Error: could not parse action from AI response.');
+          console.error(`Raw response: ${response}`);
+          break;
+        }
+
+        if (action.action === 'DONE') {
+          console.error(`\nDone! ${getRandomKaomoji()}`);
+          console.error(`Reasoning: ${action.reasoning}`);
+          break;
+        }
+
+        const desc = describeAction(action);
+        console.error(`\nAction:    ${desc}`);
+        console.error(`Reasoning: ${action.reasoning}`);
+
+        const ok = await confirm(rl, 'Execute this action?', config.yes);
+        if (!ok) {
+          console.error('Stopped.');
+          break;
+        }
+
+        await executeControlAction(action);
+        console.error('Executed.\n');
+
+        round++;
+      }
+
+      if (round >= config.maxRounds) {
+        console.error(`Max rounds (${config.maxRounds}) reached.`);
+      }
+
+      rl.close();
     } catch (error) {
       rl.close();
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);

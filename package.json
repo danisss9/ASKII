@@ -40,6 +40,11 @@
         "command": "askii.doTask",
         "title": "ASKII Do",
         "category": "ASKII"
+      },
+      {
+        "command": "askii.controlTask",
+        "title": "ASKII Control",
+        "category": "ASKII"
       }
     ],
     "configuration": {
@@ -128,6 +133,7 @@
     "@types/markdown-it": "^14.1.2",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
+    "@types/screenshot-desktop": "^1.15.0",
     "@types/vscode": "^1.108.1",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
@@ -140,7 +146,9 @@
   "dependencies": {
     "@lmstudio/immer-with-plugins": "^10.1.1",
     "@lmstudio/sdk": "^1.5.0",
+    "@nut-tree-fork/nut-js": "^4.2.1",
     "markdown-it": "^14.1.1",
-    "ollama": "^0.6.3"
+    "ollama": "^0.6.3",
+    "screenshot-desktop": "^1.12.7"
   }
 }

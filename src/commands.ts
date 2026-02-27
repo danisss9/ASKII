@@ -1,10 +1,17 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getExtensionResponse, getLLMExplanation } from './providers';
+import { getExtensionResponse, getExtensionResponseWithImage, getLLMExplanation } from './providers';
 import { getWorkspaceStructure, parseWorkspaceActions } from '@common/workspace';
 import { escapeHtml, escapeJsonString, unescapeJsonString, extractCode } from '@common/utils';
-import { getRandomKaomoji } from '@common/kaomoji';
+import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
+import {
+  CONTROL_SYSTEM_PROMPT,
+  parseControlAction,
+  takeScreenshot,
+  describeAction,
+  executeControlAction,
+} from '@common/control';
 
 export async function askAskiiCommand() {
   const editor = vscode.window.activeTextEditor;
@@ -308,5 +315,90 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     vscode.window.showErrorMessage(`ASKII Do failed: ${errorMsg}`);
+  }
+}
+
+export async function askiiControlCommand() {
+  const instruction = await vscode.window.showInputBox({
+    prompt: 'Give ASKII a screen control instruction',
+    placeHolder: 'e.g., Open Notepad and type hello world',
+  });
+
+  if (!instruction) return;
+
+  const config = vscode.workspace.getConfiguration('askii');
+  const maxRounds = config.get<number>('doMaxRounds') ?? 5;
+  const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
+
+  const outputChannel = vscode.window.createOutputChannel('ASKII Control');
+  outputChannel.show(true);
+  outputChannel.appendLine(`ASKII Control started ${getRandomThinkingKaomoji()}`);
+  outputChannel.appendLine(`Instruction: ${instruction}`);
+  outputChannel.appendLine('');
+
+  let round = 0;
+
+  try {
+    while (round < maxRounds) {
+      outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — taking screenshot...`);
+
+      const imageBase64 = await takeScreenshot();
+
+      const prompt =
+        round === 0
+          ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action.`
+          : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and determine the next action, or return DONE if the instruction is complete.`;
+
+      outputChannel.appendLine('Asking AI...');
+      const response = await getExtensionResponseWithImage(
+        `${CONTROL_SYSTEM_PROMPT}\n\n${prompt}`,
+        imageBase64,
+      );
+
+      const action = parseControlAction(response);
+
+      if (!action) {
+        outputChannel.appendLine('Error: could not parse action from AI response.');
+        outputChannel.appendLine(`Raw response: ${response}`);
+        break;
+      }
+
+      if (action.action === 'DONE') {
+        outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
+        outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
+        break;
+      }
+
+      const desc = describeAction(action);
+      outputChannel.appendLine(`Action: ${desc}`);
+      outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
+
+      if (!autoConfirm) {
+        const choice = await vscode.window.showInformationMessage(
+          `ASKII Control: ${desc}`,
+          { modal: false },
+          'Execute',
+          'Stop',
+        );
+        if (choice !== 'Execute') {
+          outputChannel.appendLine('Stopped by user.');
+          break;
+        }
+      }
+
+      outputChannel.appendLine('Executing...');
+      await executeControlAction(action);
+      outputChannel.appendLine('Done.\n');
+
+      round++;
+    }
+
+    if (round >= maxRounds) {
+      outputChannel.appendLine(`Max rounds (${maxRounds}) reached.`);
+    }
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    outputChannel.appendLine(`Error: ${errorMsg}`);
+    vscode.window.showErrorMessage(`ASKII Control failed: ${errorMsg}`);
   }
 }

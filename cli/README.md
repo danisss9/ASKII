@@ -98,18 +98,53 @@ askii do --dir .\my-project "refactor index.ts"
 
 ---
 
+### `control` — Screen control agent
+
+Takes a screenshot, sends it to the AI, and executes the returned mouse/keyboard action. Repeats until the AI returns `DONE` or `--max-rounds` is reached. Requires a **vision-capable model** (e.g. `llava`, `moondream2`).
+
+**bash**
+
+```bash
+askii control --ollama-model llava "open Notepad and type hello world"
+askii control --yes --ollama-model llava "click the search bar and search for cats"
+askii control --max-rounds 10 --ollama-model llava "fill in the login form"
+askii control -p lmstudio --lmstudio-model llava-1.5 "open the browser"
+```
+
+**PowerShell**
+
+```powershell
+askii control --ollama-model llava "open Notepad and type hello world"
+askii control --yes --ollama-model llava "click the search bar and search for cats"
+askii control --max-rounds 10 --ollama-model llava "fill in the login form"
+askii control -p lmstudio --lmstudio-model llava-1.5 "open the browser"
+```
+
+Each round the AI can return one of:
+- **mouse_move** — move the cursor to `(x, y)`
+- **mouse_left_click** — left-click at `(x, y)`
+- **mouse_right_click** — right-click at `(x, y)`
+- **keyboard_input** — type a string
+- **DONE** — task complete, stop the loop
+
+Without `--yes`, each proposed action is shown with its reasoning and requires `y` confirmation before executing.
+
+---
+
 ## Options
 
-| Flag           | Short | Description                          | Default                  |
-| -------------- | ----- | ------------------------------------ | ------------------------ |
-| `--platform`   | `-p`  | LLM platform: `ollama`, `lmstudio`   | `ollama`                 |
-| `--url`        |       | Server URL                           | `http://localhost:11434` |
-| `--model`      | `-m`  | Model name                           | `gemma3:270m`            |
-| `--mode`       |       | Response style: `helpful`, `funny`   | `funny`                  |
-| `--max-rounds` |       | Max agent rounds for `do`            | `5`                      |
-| `--dir`        |       | Working directory for `do`           | cwd                      |
-| `--code`       | `-c`  | Code input (alternative to stdin)    |                          |
-| `--yes`        | `-y`  | Auto-confirm file operations in `do` |                          |
+| Flag                  | Short | Description                                     | Default                    |
+| --------------------- | ----- | ----------------------------------------------- | -------------------------- |
+| `--platform`          | `-p`  | LLM platform: `ollama`, `lmstudio`              | `ollama`                   |
+| `--ollama-url`        |       | Ollama server URL                               | `http://localhost:11434`   |
+| `--lmstudio-url`      |       | LM Studio server URL                            | `ws://localhost:1234`      |
+| `--ollama-model`      |       | Ollama model                                    | `gemma3:270m`              |
+| `--lmstudio-model`    |       | LM Studio model                                 | `qwen/qwen3-coder-30b`     |
+| `--mode`              |       | Response style: `helpful`, `funny`              | `funny`                    |
+| `--max-rounds`        |       | Max agent rounds for `do` / `control`           | `5`                        |
+| `--dir`               |       | Working directory for `do`                      | cwd                        |
+| `--code`              | `-c`  | Code input (alternative to stdin)               |                            |
+| `--yes`               | `-y`  | Auto-confirm all actions                        |                            |
 
 ## Environment Variables
 
@@ -117,8 +152,16 @@ askii do --dir .\my-project "refactor index.ts"
 
 ```bash
 export ASKII_PLATFORM=ollama
-export ASKII_URL=http://localhost:11434
-export ASKII_MODEL=gemma3:270m
+
+# Ollama
+export ASKII_OLLAMA_URL=http://localhost:11434
+export ASKII_OLLAMA_MODEL=gemma3:270m
+
+# LM Studio
+export ASKII_LMSTUDIO_URL=ws://localhost:1234
+export ASKII_LMSTUDIO_MODEL=qwen/qwen3-coder-30b
+
+# Shared
 export ASKII_MODE=funny
 export ASKII_MAX_ROUNDS=5
 ```
@@ -127,8 +170,16 @@ export ASKII_MAX_ROUNDS=5
 
 ```powershell
 $env:ASKII_PLATFORM = "ollama"
-$env:ASKII_URL = "http://localhost:11434"
-$env:ASKII_MODEL = "gemma3:270m"
+
+# Ollama
+$env:ASKII_OLLAMA_URL = "http://localhost:11434"
+$env:ASKII_OLLAMA_MODEL = "gemma3:270m"
+
+# LM Studio
+$env:ASKII_LMSTUDIO_URL = "ws://localhost:1234"
+$env:ASKII_LMSTUDIO_MODEL = "qwen/qwen3-coder-30b"
+
+# Shared
 $env:ASKII_MODE = "funny"
 $env:ASKII_MAX_ROUNDS = "5"
 ```
@@ -157,12 +208,14 @@ askii ask "what is a closure?"
 
 ```bash
 # Start LM Studio with local server enabled
-askii -p lmstudio -m "qwen/qwen3-coder-30b" ask "explain this function"
+askii -p lmstudio ask "explain this function"
+askii -p lmstudio --lmstudio-model "my-model" ask "explain this function"
 ```
 
 **PowerShell**
 
 ```powershell
 # Start LM Studio with local server enabled
-askii -p lmstudio -m "qwen/qwen3-coder-30b" ask "explain this function"
+askii -p lmstudio ask "explain this function"
+askii -p lmstudio --lmstudio-model "my-model" ask "explain this function"
 ```

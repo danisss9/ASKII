@@ -1,6 +1,27 @@
 import * as vscode from 'vscode';
 import { getOllamaResponse, getLMStudioResponse } from '@common/providers';
 
+export async function getExtensionResponseWithImage(
+  prompt: string,
+  imageBase64: string,
+): Promise<string> {
+  const config = vscode.workspace.getConfiguration('askii');
+  const platform = config.get<string>('llmPlatform') || 'ollama';
+
+  if (platform === 'copilot') {
+    // Copilot via VS Code API does not support image input, fall back to text-only
+    return getCopilotResponse(prompt);
+  } else if (platform === 'lmstudio') {
+    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
+    const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
+    return getLMStudioResponse(prompt, url, model, undefined, imageBase64);
+  } else {
+    const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
+    const model = config.get<string>('ollamaModel') || 'gemma3:270m';
+    return getOllamaResponse(prompt, url, model, undefined, [imageBase64]);
+  }
+}
+
 export async function getCopilotResponse(prompt: string): Promise<string> {
   const config = vscode.workspace.getConfiguration('askii');
   const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';

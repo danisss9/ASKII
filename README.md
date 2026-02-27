@@ -8,10 +8,11 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 - **AI Explanations**: Uses Ollama, GitHub Copilot, or LM Studio to generate concise explanations of your code
 - **Inline Helper Modes**: Choose between off, helpful, or funny modes
 - **Multi-Platform AI**: Support for Ollama (local), GitHub Copilot (cloud), and LM Studio (local with official SDK)
-- **Three Command Modes**:
+- **Four Command Modes**:
   - **Ask ASKII**: Ask questions about your selected code
   - **ASKII Edit**: Have ASKII modify your selected code based on your request
   - **ASKII Do**: Let ASKII perform workspace actions (create, modify, delete, view files) with confirmation prompts
+  - **ASKII Control**: Give ASKII a screen instruction — it takes screenshots and drives your mouse and keyboard until the task is done
 
 ## Requirements
 
@@ -86,6 +87,19 @@ Search for "ASKII Inline Helper Mode" and select:
    - **DELETE**: Shows error-level warning for deletions
    - **VIEW**: No confirmation needed (read-only operation)
 
+#### ASKII Control (Screen Agent)
+
+1. Open command palette
+2. Search for **"ASKII Control"**
+3. Describe what you want done on screen (e.g., "Open Notepad and type hello world")
+4. ASKII takes a screenshot and proposes the next action (mouse move, click, or keyboard input) with its reasoning
+5. **Confirm each action** before it executes — or enable `askii.doAutoConfirm` to run unattended
+6. After each action a new screenshot is taken and the loop repeats until ASKII returns **DONE** or `askii.doMaxRounds` is reached
+
+> **Requires a vision-capable model** such as `llava` or `moondream2`.
+
+---
+
 ### Quick Access with Status Bar Button
 
 Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickly access:
@@ -93,6 +107,7 @@ Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickl
 - Ask ASKII
 - ASKII Edit
 - ASKII Do
+- ASKII Control
 - Clear Cache
 
 ## Configuration
@@ -106,7 +121,9 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.copilotModel`: GitHub Copilot model (default: `gpt-4o`)
 - `askii.lmStudioModel`: LM Studio model (default: `qwen/qwen3-coder-30b`)
 - `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny`, default: `funny`)
-- `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do command (default: 5)
+- `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control commands (default: 5)
+- `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control (default: `false`)
+- `askii.formatAfterEdit`: Auto-format files after ASKII Edit or Do (default: `false`)
 
 ## Default Mode Examples
 

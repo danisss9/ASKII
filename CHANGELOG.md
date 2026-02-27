@@ -4,6 +4,23 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.0] - 2026-02-27
+
+### Added
+
+- **ASKII Control Command**: New screen control agent — give a natural language instruction, ASKII takes a screenshot, sends it to the LLM, and executes the returned action (mouse move, left click, right click, or keyboard input). Repeats until the LLM returns `DONE` or `doMaxRounds` is reached. Requires a vision-capable model (e.g. `llava`, `moondream2`)
+- **Per-action Confirmation**: Each proposed action is shown with the AI's reasoning before executing; use `askii.doAutoConfirm` to skip prompts
+- **Image Support in Providers**: Ollama provider now accepts an `images` array; LM Studio provider accepts a base64 image via multimodal content blocks
+- **`getExtensionResponseWithImage`**: New extension provider function that routes image+prompt requests to the configured platform (Copilot falls back to text-only)
+- **`common/control.ts`**: Shared control utilities — `ControlAction` type, `CONTROL_SYSTEM_PROMPT`, `takeScreenshot()`, `parseControlAction()`, `describeAction()`, `executeControlAction()`
+- **CLI `control` command**: Same screenshot-loop flow available in the terminal (`askii control --ollama-model llava "..."`)
+- **CLI platform-specific config**: Added `--ollama-url`, `--lmstudio-url`, `--ollama-model`, `--lmstudio-model` flags and their corresponding env vars (`ASKII_OLLAMA_URL`, `ASKII_LMSTUDIO_URL`, `ASKII_OLLAMA_MODEL`, `ASKII_LMSTUDIO_MODEL`) — mirroring the extension's per-platform settings. Generic `--url` / `--model` remain as overrides.
+
+### Dependencies
+
+- Added `screenshot-desktop` for cross-platform screen capture
+- Added `@nut-tree-fork/nut-js` for mouse and keyboard automation
+
 ## [0.1.3] - 2026-02-16
 
 ### Added
