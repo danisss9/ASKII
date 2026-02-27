@@ -3,7 +3,7 @@ import { unescapeJsonString, extractCode } from '@common/utils';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import { getOllamaResponse, getLMStudioResponse } from '@common/providers';
 import {
-  CONTROL_SYSTEM_PROMPT,
+  buildControlSystemPrompt,
   parseControlAction,
   takeScreenshot,
   describeAction,
@@ -418,7 +418,7 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
             : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and determine the next action, or return DONE if the instruction is complete.`;
 
         console.error('Asking AI...');
-        const response = await getResponse(config, prompt, CONTROL_SYSTEM_PROMPT, imageBase64);
+        const response = await getResponse(config, prompt, buildControlSystemPrompt(screenW, screenH), imageBase64);
 
         const action = parseControlAction(response);
 

@@ -9,7 +9,8 @@ export type ControlAction =
   | { action: 'keyboard_input'; text: string; reasoning: string }
   | { action: 'DONE'; reasoning: string };
 
-export const CONTROL_SYSTEM_PROMPT = `You are a computer control assistant. You will receive a screenshot and must determine the next single action to take to complete the given instruction.
+export function buildControlSystemPrompt(width: number, height: number): string {
+  return `You are a computer control assistant. You will receive a screenshot (${width}x${height} pixels) and must determine the next single action to take to complete the given instruction.
 
 Respond with ONLY a valid JSON object (no markdown, no extra text) in one of these formats:
 {"action": "mouse_move", "x": number, "y": number, "reasoning": "explanation"}
@@ -18,7 +19,8 @@ Respond with ONLY a valid JSON object (no markdown, no extra text) in one of the
 {"action": "keyboard_input", "text": "text to type", "reasoning": "explanation"}
 {"action": "DONE", "reasoning": "explanation of what was accomplished"}
 
-x and y are screen coordinates in pixels from the top-left corner. Return DONE only when the instruction is fully completed.`;
+x and y are pixel coordinates within the screenshot image: x ranges from 0 to ${width - 1} (left to right), y ranges from 0 to ${height - 1} (top to bottom). Be as precise as possible. Return DONE only when the instruction is fully completed.`;
+}
 
 export function parseControlAction(response: string): ControlAction | null {
   try {
@@ -65,6 +67,38 @@ export function describeAction(action: ControlAction): string {
     case 'DONE':
       return 'DONE';
   }
+}
+
+/**
+ * Returns the logical screen size (points on macOS, logical pixels on Linux).
+ * Used to scale physical-pixel coordinates from the screenshot down to what
+ * the mouse API expects. Returns null if unavailable (no scaling applied).
+ */
+function getLogicalScreenSize(p: string): { width: number; height: number } | null {
+  try {
+    if (p === 'darwin') {
+      // AppleScript returns "0, 0, <logicalW>, <logicalH>" in screen points
+      const out = execSync(
+        `osascript -e 'tell application "Finder" to get bounds of window of desktop'`,
+        { stdio: ['ignore', 'pipe', 'ignore'] },
+      )
+        .toString()
+        .trim();
+      const parts = out.split(', ').map(Number);
+      if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
+        return { width: parts[2], height: parts[3] };
+      }
+    } else if (p === 'linux') {
+      const out = execSync('xdpyinfo | grep dimensions', {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).toString();
+      const m = out.match(/(\d+)x(\d+) pixels/);
+      if (m) return { width: parseInt(m[1]), height: parseInt(m[2]) };
+    }
+  } catch {
+    // fall through — no scaling
+  }
+  return null;
 }
 
 /** Run a PowerShell script safely using base64 encoding to avoid quoting issues. */
@@ -120,36 +154,71 @@ export async function executeControlAction(
   if (action.action === 'mouse_move') {
     if (p === 'win32') {
       // Normalize to 0-65535 using physical pixel dimensions from the screenshot PNG header.
-      // MOUSEEVENTF_ABSOLUTE coords are DPI-independent, unlike SetCursorPos logical coords.
-      const normX = Math.round((action.x * 65535) / Math.max((physWidth ?? 1) - 1, 1));
-      const normY = Math.round((action.y * 65535) / Math.max((physHeight ?? 1) - 1, 1));
+      // MOUSEEVENTF_ABSOLUTE coords are DPI-independent (scale factors cancel out), so this
+      // works correctly at any DPI/resolution as long as the LLM coordinates are in screenshot space.
+      const normX = Math.min(
+        65535,
+        Math.round((action.x * 65535) / Math.max((physWidth ?? 1) - 1, 1)),
+      );
+      const normY = Math.min(
+        65535,
+        Math.round((action.y * 65535) / Math.max((physHeight ?? 1) - 1, 1)),
+      );
       win32Mouse(normX, normY, 0, 0);
     } else if (p === 'darwin') {
+      // screenshot-desktop captures at physical (Retina) resolution; osascript uses logical points.
+      // Scale down by the DPI factor derived from physical-vs-logical screen dimensions.
+      const logical = getLogicalScreenSize(p);
+      const scaleX = logical && physWidth ? physWidth / logical.width : 1;
+      const scaleY = logical && physHeight ? physHeight / logical.height : 1;
+      const lx = Math.round(action.x / scaleX);
+      const ly = Math.round(action.y / scaleY);
       execSync(
-        `osascript -e 'tell application "System Events" to set cursor position to {${action.x}, ${action.y}}'`,
+        `osascript -e 'tell application "System Events" to set cursor position to {${lx}, ${ly}}'`,
         { stdio: 'ignore' },
       );
     } else {
-      execFileSync('xdotool', ['mousemove', String(action.x), String(action.y)]);
+      // Linux: xdpyinfo gives the logical X11 resolution; scale if screenshot is at a different size.
+      const logical = getLogicalScreenSize(p);
+      const scaleX = logical && physWidth ? physWidth / logical.width : 1;
+      const scaleY = logical && physHeight ? physHeight / logical.height : 1;
+      const lx = Math.round(action.x / scaleX);
+      const ly = Math.round(action.y / scaleY);
+      execFileSync('xdotool', ['mousemove', String(lx), String(ly)]);
     }
   } else if (action.action === 'mouse_left_click' || action.action === 'mouse_right_click') {
     const isLeft = action.action === 'mouse_left_click';
     if (p === 'win32') {
-      const normX = Math.round((action.x * 65535) / Math.max((physWidth ?? 1) - 1, 1));
-      const normY = Math.round((action.y * 65535) / Math.max((physHeight ?? 1) - 1, 1));
+      const normX = Math.min(
+        65535,
+        Math.round((action.x * 65535) / Math.max((physWidth ?? 1) - 1, 1)),
+      );
+      const normY = Math.min(
+        65535,
+        Math.round((action.y * 65535) / Math.max((physHeight ?? 1) - 1, 1)),
+      );
       // MOUSEEVENTF_LEFTDOWN|ABSOLUTE=0x8002, LEFTUP=0x8004, RIGHTDOWN=0x8008, RIGHTUP=0x8010
       const downFlag = isLeft ? 0x8002 : 0x8008;
       const upFlag = isLeft ? 0x8004 : 0x8010;
       win32Mouse(normX, normY, downFlag, upFlag);
     } else if (p === 'darwin') {
+      const logical = getLogicalScreenSize(p);
+      const scaleX = logical && physWidth ? physWidth / logical.width : 1;
+      const scaleY = logical && physHeight ? physHeight / logical.height : 1;
+      const lx = Math.round(action.x / scaleX);
+      const ly = Math.round(action.y / scaleY);
       const btn = isLeft ? 'leftClick' : 'rightClick';
-      execSync(
-        `osascript -e 'tell application "System Events" to ${btn} at {${action.x}, ${action.y}}'`,
-        { stdio: 'ignore' },
-      );
+      execSync(`osascript -e 'tell application "System Events" to ${btn} at {${lx}, ${ly}}'`, {
+        stdio: 'ignore',
+      });
     } else {
+      const logical = getLogicalScreenSize(p);
+      const scaleX = logical && physWidth ? physWidth / logical.width : 1;
+      const scaleY = logical && physHeight ? physHeight / logical.height : 1;
+      const lx = Math.round(action.x / scaleX);
+      const ly = Math.round(action.y / scaleY);
       const btn = isLeft ? '1' : '3';
-      execFileSync('xdotool', ['mousemove', String(action.x), String(action.y), 'click', btn]);
+      execFileSync('xdotool', ['mousemove', String(lx), String(ly), 'click', btn]);
     }
   } else if (action.action === 'keyboard_input') {
     if (p === 'win32') {

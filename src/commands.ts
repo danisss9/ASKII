@@ -7,7 +7,7 @@ import { getWorkspaceStructure, parseWorkspaceActions } from '@common/workspace'
 import { escapeHtml, escapeJsonString, unescapeJsonString, extractCode } from '@common/utils';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import {
-  CONTROL_SYSTEM_PROMPT,
+  buildControlSystemPrompt,
   parseControlAction,
   takeScreenshot,
   describeAction,
@@ -405,7 +405,7 @@ export async function askiiControlCommand() {
 
       outputChannel.appendLine('Asking AI...');
       const response = await getExtensionResponseWithImage(
-        `${CONTROL_SYSTEM_PROMPT}\n\n${prompt}`,
+        `${buildControlSystemPrompt(screenW, screenH)}\n\n${prompt}`,
         imageBase64,
       );
 
