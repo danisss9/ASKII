@@ -410,7 +410,7 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
       while (round < config.maxRounds) {
         console.error(`Round ${round + 1}/${config.maxRounds} — taking screenshot...`);
 
-        const imageBase64 = await takeScreenshot();
+        const { base64: imageBase64, width: screenW, height: screenH } = await takeScreenshot();
 
         const prompt =
           round === 0
@@ -444,7 +444,7 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
           break;
         }
 
-        await executeControlAction(action);
+        await executeControlAction(action, screenW, screenH);
         console.error('Executed.\n');
 
         round++;

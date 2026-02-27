@@ -396,7 +396,7 @@ export async function askiiControlCommand() {
     while (round < maxRounds) {
       outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — taking screenshot...`);
 
-      const imageBase64 = await takeScreenshot();
+      const { base64: imageBase64, width: screenW, height: screenH } = await takeScreenshot();
 
       const prompt =
         round === 0
@@ -441,7 +441,7 @@ export async function askiiControlCommand() {
       }
 
       outputChannel.appendLine('Executing...');
-      await executeControlAction(action);
+      await executeControlAction(action, screenW, screenH);
       outputChannel.appendLine('Done.\n');
 
       round++;

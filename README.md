@@ -147,6 +147,7 @@ const sum = a + b; (◕‿◕) Adds two variables; prefer const for variables th
 - **Confirmation Dialogs**: ASKII Do command requires confirmation for all write operations (CREATE, MODIFY, DELETE) to prevent accidental changes
 - **Smart Caching**: Inline explanations are cached to minimize API calls
 - **Debouncing**: Requests are debounced for optimal performance
+- **Mouse/Keyboard Control**: ASKII Control uses platform shell commands (PowerShell on Windows, AppleScript on macOS, `xdotool` on Linux) instead of native Node modules, so the extension bundles cleanly with no native `.node` files. Linux users need `xdotool` installed (`sudo apt install xdotool` or equivalent)
 
 ## Contributing
 

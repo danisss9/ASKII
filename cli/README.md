@@ -117,6 +117,8 @@ The loop continues after every round — not only after reads — until the AI r
 
 Takes a screenshot, sends it to the AI, and executes the returned mouse/keyboard action. Repeats until the AI returns `DONE` or `--max-rounds` is reached. Requires a **vision-capable model** (e.g. `llava`, `moondream2`).
 
+> **Linux**: requires `xdotool` for mouse/keyboard control (`sudo apt install xdotool` or equivalent).
+
 **bash**
 
 ```bash

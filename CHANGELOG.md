@@ -4,6 +4,17 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.3] - 2026-02-27
+
+### Changed
+
+- **Mouse/keyboard control is now bundleable**: Replaced `@nut-tree-fork/nut-js` (native Node module, incompatible with extension bundling) with platform-specific shell commands — PowerShell + `user32.dll` on Windows, `osascript` + `pbcopy` on macOS, and `xdotool` on Linux. No new runtime dependencies; uses only Node built-ins (`child_process`, `os`)
+- **Keyboard input uses clipboard paste**: On Windows and macOS, `keyboard_input` now writes text to the clipboard and pastes it, avoiding `SendKeys`-style special-character escaping issues and supporting arbitrary Unicode text
+
+### Removed
+
+- `@nut-tree-fork/nut-js` dependency from both the extension and CLI packages
+
 ## [0.2.2] - 2026-02-27
 
 ### Added
