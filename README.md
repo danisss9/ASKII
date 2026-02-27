@@ -11,7 +11,7 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 - **Four Command Modes**:
   - **Ask ASKII**: Ask questions about your selected code
   - **ASKII Edit**: Have ASKII modify your selected code based on your request
-  - **ASKII Do**: Let ASKII perform workspace actions (create, modify, delete, view files) with confirmation prompts
+  - **ASKII Do**: Agentic workspace agent — view, list, create, modify, rename, and delete files across multiple rounds until the task is complete
   - **ASKII Control**: Give ASKII a screen instruction — it takes screenshots and drives your mouse and keyboard until the task is done
 
 ## Requirements
@@ -77,15 +77,17 @@ Search for "ASKII Inline Helper Mode" and select:
 1. Open command palette
 2. Search for "ASKII Do"
 3. Describe what you want ASKII to do (e.g., "Create a unit test file for src/utils.ts")
-4. ASKII will analyze your workspace and interact with you:
-   - **View Files**: ASKII can request to view file contents to understand your codebase
-   - **Analyze & Suggest**: Based on file contents, ASKII suggests create, modify, or delete actions
-   - **Multi-turn Interaction**: ASKII can request additional file views and make context-aware decisions
+4. ASKII shows the top-level workspace structure, then runs in a loop until the task is done or `doMaxRounds` is reached:
+   - **List Folder**: ASKII can list any folder's contents (`[file]` / `[folder]` labels) to explore the workspace
+   - **View File**: ASKII can read file contents to understand your codebase before acting
+   - **Analyze & Act**: Based on what it reads, ASKII issues create, modify, rename, or delete actions
+   - **Continuous Loop**: After each round ASKII is asked "what next?" — it keeps going until it returns `[]`
 5. **Confirm each action** before it's applied:
-   - **CREATE**: Shows confirmation to create new files
-   - **MODIFY**: Shows confirmation to modify existing files
-   - **DELETE**: Shows error-level warning for deletions
-   - **VIEW**: No confirmation needed (read-only operation)
+   - **CREATE**: Confirmation to create new files
+   - **MODIFY**: Confirmation to modify existing files
+   - **RENAME**: Confirmation to rename or move files
+   - **DELETE**: Warning confirmation for deletions
+   - **VIEW / LIST**: No confirmation needed (read-only)
 
 #### ASKII Control (Screen Agent)
 

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import MarkdownIt from 'markdown-it';
 import { getExtensionResponse, getExtensionResponseWithImage, getLLMExplanation } from './providers';
 import { getWorkspaceStructure, parseWorkspaceActions } from '@common/workspace';
 import { escapeHtml, escapeJsonString, unescapeJsonString, extractCode } from '@common/utils';
@@ -35,57 +36,74 @@ export async function askAskiiCommand() {
     return;
   }
 
+  const md = new MarkdownIt({ html: false, linkify: true, typographer: true });
+
+  const webviewCss = `
+    body {
+      font-family: var(--vscode-font-family, Arial, sans-serif);
+      font-size: var(--vscode-font-size, 13px);
+      color: var(--vscode-foreground);
+      background: var(--vscode-editor-background);
+      padding: 20px 28px;
+      line-height: 1.7;
+      max-width: 860px;
+    }
+    h1,h2,h3,h4 { color: var(--vscode-foreground); margin-top: 1.2em; }
+    h2.header { margin-top: 0; opacity: 0.85; font-size: 1em; font-weight: 600; }
+    code {
+      font-family: var(--vscode-editor-font-family, monospace);
+      background: var(--vscode-textCodeBlock-background, #1e1e1e);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 0.92em;
+    }
+    pre {
+      background: var(--vscode-textCodeBlock-background, #1e1e1e);
+      border-radius: 5px;
+      padding: 12px 16px;
+      overflow-x: auto;
+    }
+    pre code { background: none; padding: 0; }
+    blockquote {
+      border-left: 3px solid var(--vscode-activityBarBadge-background, #007acc);
+      margin: 0; padding-left: 12px; opacity: 0.85;
+    }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid var(--vscode-editorWidget-border, #555); padding: 6px 10px; }
+    th { background: var(--vscode-textCodeBlock-background); }
+    a { color: var(--vscode-textLink-foreground, #4daafc); }
+    hr { border: none; border-top: 1px solid var(--vscode-editorWidget-border, #555); }
+    .thinking { opacity: 0.6; font-style: italic; }
+  `;
+
+  const makeHtml = (title: string, bodyContent: string) => `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><style>${webviewCss}</style></head>
+<body>
+  <h2 class="header">${title}</h2>
+  ${bodyContent}
+</body>
+</html>`;
+
   const panel = vscode.window.createWebviewPanel(
     'askiiOutput',
     'ASKII Response',
     vscode.ViewColumn.Beside,
-    {},
+    { enableScripts: false },
   );
 
-  panel.webview.html = `
-    <html>
-      <head>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          .response { white-space: pre-wrap; word-wrap: break-word; }
-        </style>
-      </head>
-      <body>
-        <h2>ASKII is thinking... (๑•﹏•)</h2>
-        <div id="response" class="response"></div>
-      </body>
-    </html>
-  `;
+  panel.webview.html = makeHtml(
+    'ASKII is thinking... (๑•﹏•)',
+    '<p class="thinking">Waiting for response...</p>',
+  );
 
   try {
     const prompt = `Code:\n\`\`\`\n${selectedText}\n\`\`\`\n\nQuestion: ${question}`;
     const responseText = await getExtensionResponse(prompt);
-
-    panel.webview.html = `
-      <html>
-        <head>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 20px; line-height: 1.6; }
-            .response { white-space: pre-wrap; word-wrap: break-word; }
-            h2 { color: #333; }
-          </style>
-        </head>
-        <body>
-          <h2>ASKII Says: (⌐■_■)</h2>
-          <div id="response" class="response">${escapeHtml(responseText)}</div>
-        </body>
-      </html>
-    `;
+    panel.webview.html = makeHtml('ASKII Says: (⌐■_■)', md.render(responseText));
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    panel.webview.html = `
-      <html>
-        <body>
-          <h2>Error</h2>
-          <p>${escapeHtml(errorMsg)}</p>
-        </body>
-      </html>
-    `;
+    panel.webview.html = makeHtml('Error', `<p>${escapeHtml(errorMsg)}</p>`);
   }
 }
 
@@ -160,11 +178,11 @@ export async function askiiDoCommand() {
   const formatAfterEdit = config.get<boolean>('formatAfterEdit') ?? false;
 
   try {
-    const workspaceStructure = await getWorkspaceStructure(workspaceRoot.uri.fsPath);
+    const workspaceStructure = getWorkspaceStructure(workspaceRoot.uri.fsPath);
     let completedActions = 0;
     let roundCount = 0;
 
-    const systemPrompt = `You are ASKII, an AI agent that can create, modify, view, and delete files in a workspace.
+    const systemPrompt = `You are ASKII, an AI agent that can create, modify, view, delete, rename, and list files in a workspace.
 
 Current workspace structure:
 \`\`\`
@@ -173,11 +191,13 @@ ${workspaceStructure}
 
 You have access to the following action types:
 - {"type": "view", "path": "path/to/file"} - View file contents, responses will be sent back to you
+- {"type": "list", "path": "path/to/folder"} - List files in a folder, results will be sent back to you
 - {"type": "create", "path": "path/to/file", "content": "file content"}
 - {"type": "modify", "path": "path/to/file", "oldContent": "text to replace", "newContent": "replacement text"}
+- {"type": "rename", "path": "old/path", "newPath": "new/path"} - Rename or move a file
 - {"type": "delete", "path": "path/to/file"}
 
-Always respond with ONLY a valid JSON array containing the actions. You can request to view files to inspect them, and their contents will be sent back to you for further analysis.`;
+Always respond with ONLY a valid JSON array containing the actions. You can request to view files or list folders to inspect them, and their contents will be sent back to you for further analysis.`;
 
     let userMessage = question;
 
@@ -194,17 +214,24 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
         break;
       }
 
-      const viewActions = actions.filter((a) => a.type === 'view');
-      const otherActions = actions.filter((a) => a.type !== 'view');
+      const viewActions = actions.filter((a) => a.type === 'view' || a.type === 'list');
+      const otherActions = actions.filter((a) => a.type !== 'view' && a.type !== 'list');
 
       const viewResults: { [key: string]: string } = {};
       for (const action of viewActions) {
         const filePath = path.join(workspaceRoot.uri.fsPath, action.path);
         try {
-          const content = fs.readFileSync(filePath, 'utf-8');
-          viewResults[action.path] = escapeJsonString(content);
+          if (action.type === 'list') {
+            const entries = fs.readdirSync(filePath).map((name) => {
+              const stat = fs.statSync(path.join(filePath, name));
+              return `${name} [${stat.isDirectory() ? 'folder' : 'file'}]`;
+            });
+            viewResults[action.path] = entries.join('\n');
+          } else {
+            viewResults[action.path] = escapeJsonString(fs.readFileSync(filePath, 'utf-8'));
+          }
         } catch {
-          viewResults[action.path] = `Error: Cannot read file`;
+          viewResults[action.path] = `Error: Cannot read path`;
         }
       }
 
@@ -300,15 +327,42 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
               vscode.window.showErrorMessage(`Cannot delete file: ${action.path}`);
             }
           }
+        } else if (action.type === 'rename') {
+          const newFilePath = action.newPath
+            ? path.join(workspaceRoot.uri.fsPath, action.newPath)
+            : null;
+          if (!newFilePath) {
+            vscode.window.showErrorMessage(`Rename missing newPath: ${action.path}`);
+          } else {
+            const confirmed =
+              autoConfirm ||
+              (await vscode.window.showInformationMessage(
+                `Rename: ${action.path} → ${action.newPath}?`,
+                { modal: false },
+                'Rename',
+                'Skip',
+              )) === 'Rename';
+            if (confirmed) {
+              try {
+                const newDir = path.dirname(newFilePath);
+                if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
+                fs.renameSync(filePath, newFilePath);
+                completedActions++;
+                vscode.window.showInformationMessage(`✓ Renamed: ${action.path} → ${action.newPath}`);
+              } catch {
+                vscode.window.showErrorMessage(`Cannot rename: ${action.path}`);
+              }
+            }
+          }
         }
       }
 
       if (Object.keys(viewResults).length > 0) {
-        userMessage = `File contents retrieved:\n${JSON.stringify(viewResults, null, 2)}\n\nBased on these files, what would you like to do next? Respond with only a JSON array of actions or an empty array [] if done.`;
-        roundCount++;
+        userMessage = `File contents retrieved:\n${JSON.stringify(viewResults, null, 2)}\n\nWhat would you like to do next? Respond with only a JSON array of actions or an empty array [] if done.`;
       } else {
-        break;
+        userMessage = `Actions completed. What would you like to do next? Respond with only a JSON array of actions or an empty array [] if done.`;
       }
+      roundCount++;
     }
 
     vscode.window.showInformationMessage(`Completed ${completedActions} actions! (⌐■_■)`);

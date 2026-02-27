@@ -4,6 +4,19 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.2] - 2026-02-27
+
+### Added
+
+- **`rename` action in ASKII Do**: LLM can now rename or move files (`{"type": "rename", "path": "old", "newPath": "new"}`). Confirmation prompt shown before executing; intermediate directories are created automatically
+- **`list` action in ASKII Do**: LLM can list the contents of any folder (`{"type": "list", "path": "folder"}`). Results are returned to the LLM (like `view`) with `[file]` / `[folder]` labels so it can decide whether to drill deeper
+- **Continuous agent loop in ASKII Do**: The `do` command now keeps asking the LLM "what next?" after every round — not only after view/list results. The loop only exits when the LLM returns `[]` or `doMaxRounds` is reached
+- **Workspace listing printed at start of CLI `do`**: The working directory path and top-level file tree are printed to stderr when `askii do` begins, so you can see exactly what context the LLM receives
+
+### Changed
+
+- **`getWorkspaceStructure` is now flat / top-level only**: Instead of recursing into subdirectories, the initial workspace snapshot lists only the root entries with `[file]` / `[folder]` labels. The LLM can use the `list` action to explore subdirectories on demand, keeping the initial prompt compact
+
 ## [0.2.1] - 2026-02-27
 
 ### Fixed

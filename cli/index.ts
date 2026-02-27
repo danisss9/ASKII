@@ -254,11 +254,12 @@ async function main() {
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
 
     try {
-      const workspaceStructure = await getWorkspaceStructure(workDir);
+      const workspaceStructure = getWorkspaceStructure(workDir);
+      console.error(`\nWorkspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
       let completedActions = 0;
       let roundCount = 0;
 
-      const systemPrompt = `You are ASKII, an AI agent that can create, modify, view, and delete files in a workspace.
+      const systemPrompt = `You are ASKII, an AI agent that can create, modify, view, delete, rename, and list files in a workspace.
 
 Current workspace structure:
 \`\`\`
@@ -266,12 +267,14 @@ ${workspaceStructure}
 \`\`\`
 
 You have access to the following action types:
-- {"type": "view", "path": "path/to/file"} - View file contents
+- {"type": "view", "path": "path/to/file"} - View file contents, results sent back to you
+- {"type": "list", "path": "path/to/folder"} - List files in a folder, results sent back to you
 - {"type": "create", "path": "path/to/file", "content": "file content"}
 - {"type": "modify", "path": "path/to/file", "oldContent": "text to replace", "newContent": "replacement text"}
+- {"type": "rename", "path": "old/path", "newPath": "new/path"} - Rename or move a file
 - {"type": "delete", "path": "path/to/file"}
 
-Always respond with ONLY a valid JSON array containing the actions. You can request to view files to inspect them, and their contents will be sent back to you.`;
+Always respond with ONLY a valid JSON array containing the actions. You can request to view files or list folders to inspect them, and their contents will be sent back to you.`;
 
       let userMessage = task;
 
@@ -286,16 +289,26 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
 
         if (actions.length === 0) break;
 
-        const viewActions = actions.filter((a) => a.type === 'view');
-        const otherActions = actions.filter((a) => a.type !== 'view');
+        const viewActions = actions.filter((a) => a.type === 'view' || a.type === 'list');
+        const otherActions = actions.filter((a) => a.type !== 'view' && a.type !== 'list');
 
         const viewResults: Record<string, string> = {};
         for (const action of viewActions) {
           const filePath = path.join(workDir, action.path);
           try {
-            viewResults[action.path] = fs.readFileSync(filePath, 'utf-8');
+            if (action.type === 'list') {
+              console.error(`  → Listing: ${action.path}`);
+              const entries = fs.readdirSync(filePath).map((name) => {
+                const stat = fs.statSync(path.join(filePath, name));
+                return `${name} [${stat.isDirectory() ? 'folder' : 'file'}]`;
+              });
+              viewResults[action.path] = entries.join('\n');
+            } else {
+              console.error(`  → Viewing: ${action.path}`);
+              viewResults[action.path] = fs.readFileSync(filePath, 'utf-8');
+            }
           } catch {
-            viewResults[action.path] = 'Error: Cannot read file';
+            viewResults[action.path] = 'Error: Cannot read path';
           }
         }
 
@@ -341,15 +354,33 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
                 console.error(`  ✗ Cannot delete: ${action.path}`);
               }
             }
+          } else if (action.type === 'rename') {
+            if (!action.newPath) {
+              console.error(`  ✗ Rename missing newPath: ${action.path}`);
+            } else {
+              const newFilePath = path.join(workDir, action.newPath);
+              const ok = await confirm(rl, `Rename: ${action.path} → ${action.newPath}?`, config.yes);
+              if (ok) {
+                try {
+                  const newDir = path.dirname(newFilePath);
+                  if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
+                  fs.renameSync(filePath, newFilePath);
+                  completedActions++;
+                  console.error(`  ✓ Renamed: ${action.path} → ${action.newPath}`);
+                } catch {
+                  console.error(`  ✗ Cannot rename: ${action.path}`);
+                }
+              }
+            }
           }
         }
 
         if (Object.keys(viewResults).length > 0) {
-          userMessage = `File contents retrieved:\n${JSON.stringify(viewResults, null, 2)}\n\nBased on these files, what would you like to do next? Respond with only a JSON array of actions or an empty array [] if done.`;
-          roundCount++;
+          userMessage = `File contents retrieved:\n${JSON.stringify(viewResults, null, 2)}\n\nWhat would you like to do next? Respond with only a JSON array of actions or an empty array [] if done.`;
         } else {
-          break;
+          userMessage = `Actions completed. What would you like to do next? Respond with only a JSON array of actions or an empty array [] if done.`;
         }
+        roundCount++;
       }
 
       rl.close();

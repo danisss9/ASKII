@@ -76,12 +76,13 @@ Get-Content myfile.ts | askii explain
 
 ### `do` — Agentic task runner
 
-Reads the workspace structure, then creates/modifies/deletes files with your confirmation:
+Prints the working directory's top-level file listing, then runs an agent loop that creates, modifies, renames, deletes, views, and lists files until the task is done or `--max-rounds` is reached.
 
 **bash**
 
 ```bash
 askii do "create a Jest test file for src/utils.ts"
+askii do "rename all .js files to .ts in the src folder"
 askii do "add a .gitignore for a Node.js project"
 askii do --yes "scaffold a README for this project"   # auto-confirm all
 askii do --dir ./my-project "refactor index.ts"
@@ -91,10 +92,24 @@ askii do --dir ./my-project "refactor index.ts"
 
 ```powershell
 askii do "create a Jest test file for src/utils.ts"
+askii do "rename all .js files to .ts in the src folder"
 askii do "add a .gitignore for a Node.js project"
 askii do --yes "scaffold a README for this project"   # auto-confirm all
 askii do --dir .\my-project "refactor index.ts"
 ```
+
+The agent can use the following actions each round:
+
+| Action   | Description                                              | Requires confirmation |
+| -------- | -------------------------------------------------------- | --------------------- |
+| `list`   | List files in a folder (`[file]` / `[folder]` labels)   | No                    |
+| `view`   | Read a file's contents                                   | No                    |
+| `create` | Create a new file                                        | Yes                   |
+| `modify` | Replace text in an existing file                         | Yes                   |
+| `rename` | Rename or move a file                                    | Yes                   |
+| `delete` | Delete a file                                            | Yes                   |
+
+The loop continues after every round — not only after reads — until the AI returns `[]` or the round limit is hit.
 
 ---
 

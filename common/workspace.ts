@@ -2,14 +2,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 export interface WorkspaceAction {
-  type: 'view' | 'create' | 'modify' | 'delete';
+  type: 'view' | 'create' | 'modify' | 'delete' | 'rename' | 'list';
   path: string;
+  newPath?: string;
   content?: string;
   oldContent?: string;
   newContent?: string;
 }
 
-export async function getWorkspaceStructure(dirPath: string, prefix = ''): Promise<string> {
+export function getWorkspaceStructure(dirPath: string): string {
   let structure = '';
   try {
     const files = fs.readdirSync(dirPath);
@@ -17,14 +18,10 @@ export async function getWorkspaceStructure(dirPath: string, prefix = ''): Promi
       (f: string) => !f.startsWith('.') && f !== 'node_modules' && f !== 'dist',
     );
 
-    for (const file of filtered.slice(0, 50)) {
-      const filePath = path.join(dirPath, file);
-      const stat = fs.statSync(filePath);
-      structure += `${prefix}${file}${stat.isDirectory() ? '/' : ''}\n`;
-
-      if (stat.isDirectory() && prefix.length < 6) {
-        structure += await getWorkspaceStructure(filePath, prefix + '  ');
-      }
+    for (const file of filtered.slice(0, 100)) {
+      const stat = fs.statSync(path.join(dirPath, file));
+      const isDir = stat.isDirectory();
+      structure += `${file} [${isDir ? 'folder' : 'file'}]\n`;
     }
   } catch (_) {
     // Ignore errors
@@ -49,7 +46,7 @@ export function parseWorkspaceActions(responseText: string): WorkspaceAction[] {
       if (!action.type || !action.path) {
         return false;
       }
-      return ['view', 'create', 'modify', 'delete'].includes(action.type);
+      return ['view', 'create', 'modify', 'delete', 'rename', 'list'].includes(action.type);
     });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';

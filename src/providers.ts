@@ -9,8 +9,7 @@ export async function getExtensionResponseWithImage(
   const platform = config.get<string>('llmPlatform') || 'ollama';
 
   if (platform === 'copilot') {
-    // Copilot via VS Code API does not support image input, fall back to text-only
-    return getCopilotResponse(prompt);
+    return getCopilotResponse(prompt, imageBase64);
   } else if (platform === 'lmstudio') {
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
@@ -22,7 +21,7 @@ export async function getExtensionResponseWithImage(
   }
 }
 
-export async function getCopilotResponse(prompt: string): Promise<string> {
+export async function getCopilotResponse(prompt: string, imageBase64?: string): Promise<string> {
   const config = vscode.workspace.getConfiguration('askii');
   const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
 
@@ -30,9 +29,20 @@ export async function getCopilotResponse(prompt: string): Promise<string> {
   if (models.length === 0) throw new Error('GitHub Copilot not available');
 
   const model = models[0];
-  const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+
+  let userMessage: vscode.LanguageModelChatMessage;
+  if (imageBase64) {
+    const imageBuffer = Buffer.from(imageBase64, 'base64');
+    userMessage = vscode.LanguageModelChatMessage.User([
+      new vscode.LanguageModelDataPart(imageBuffer, 'image/png'),
+      new vscode.LanguageModelTextPart(prompt),
+    ]);
+  } else {
+    userMessage = vscode.LanguageModelChatMessage.User(prompt);
+  }
+
   const chatResponse = await model.sendRequest(
-    messages,
+    [userMessage],
     {},
     new vscode.CancellationTokenSource().token,
   );

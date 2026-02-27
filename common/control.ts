@@ -1,5 +1,5 @@
-import { mouse, keyboard, Button, Point } from '@nut-tree-fork/nut-js';
-import screenshot from 'screenshot-desktop';
+import type { mouse as MouseNS, keyboard as KeyboardNS, Button as ButtonType, Point as PointType } from '@nut-tree-fork/nut-js';
+import type screenshotFn from 'screenshot-desktop';
 
 export type ControlAction =
   | { action: 'mouse_move'; x: number; y: number; reasoning: string }
@@ -40,6 +40,8 @@ export function parseControlAction(response: string): ControlAction | null {
 }
 
 export async function takeScreenshot(): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const screenshot = require('screenshot-desktop') as typeof screenshotFn;
   const img = await screenshot({ format: 'png' });
   return img.toString('base64');
 }
@@ -61,6 +63,14 @@ export function describeAction(action: ControlAction): string {
 
 export async function executeControlAction(action: ControlAction): Promise<void> {
   if (action.action === 'DONE') return;
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { mouse, keyboard, Button, Point } = require('@nut-tree-fork/nut-js') as {
+    mouse: typeof MouseNS;
+    keyboard: typeof KeyboardNS;
+    Button: typeof ButtonType;
+    Point: typeof PointType;
+  };
 
   if (action.action === 'mouse_move') {
     await mouse.setPosition(new Point(action.x, action.y));
