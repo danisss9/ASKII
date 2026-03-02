@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'askii_*'
+
+permissions:
+  contents: write # create GitHub releases and upload assets
+  id-token: write # npm provenance (trusted publishers / OIDC)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#askii_}" >> $GITHUB_OUTPUT
+
+      # ── VS Code extension ─────────────────────────────────────────────────
+
+      - name: Install extension dependencies
+        run: npm ci
+
+      - name: Package VS Code extension
+        run: npx @vscode/vsce package --no-dependencies -o askii-${{ steps.version.outputs.VERSION }}.vsix
+
+      # ── CLI ───────────────────────────────────────────────────────────────
+
+      - name: Install CLI dependencies
+        working-directory: ./cli
+        run: npm ci
+
+      - name: Build CLI (production)
+        working-directory: ./cli
+        run: npm run build:prod
+
+      # ── GitHub Release ────────────────────────────────────────────────────
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ASKII ${{ steps.version.outputs.VERSION }}
+          files: askii-${{ steps.version.outputs.VERSION }}.vsix
+          generate_release_notes: true
+
+      # ── npm (askii-cli) ───────────────────────────────────────────────────
+
+      - name: Publish CLI to npm
+        working-directory: ./cli
+        run: npm publish --provenance --access public
+
+      # ── VS Code Marketplace ───────────────────────────────────────────────
+      # Requires a MARKETPLACE_PAT secret: a Personal Access Token from
+      # https://dev.azure.com with the "Marketplace (Publish)" scope.
+
+      - name: Publish VS Code extension
+        run: npx @vscode/vsce publish --packagePath askii-${{ steps.version.outputs.VERSION }}.vsix --pat ${{ secrets.MARKETPLACE_PAT }}
