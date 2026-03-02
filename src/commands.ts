@@ -21,23 +21,17 @@ import {
 
 export async function askAskiiCommand() {
   const editor = vscode.window.activeTextEditor;
-  if (!editor) {
-    vscode.window.showErrorMessage('No active editor');
-    return;
-  }
+  const selectedText = editor ? editor.document.getText(editor.selection) : '';
+  const languageId = editor?.document.languageId ?? '';
+  const fileName = editor ? path.basename(editor.document.fileName) : '';
 
-  const selectedText = editor.document.getText(editor.selection);
-  if (!selectedText) {
-    vscode.window.showErrorMessage('No text selected');
-    return;
-  }
-
-  const languageId = editor.document.languageId;
-  const fileName = path.basename(editor.document.fileName);
+  const hasSelection = selectedText.length > 0;
 
   const question = await vscode.window.showInputBox({
-    prompt: 'Ask ASKII a question about the selected code',
-    placeHolder: 'What does this code do?',
+    prompt: hasSelection ? 'Ask ASKII a question about the selected code' : 'Ask ASKII anything',
+    placeHolder: hasSelection
+      ? 'What does this code do?'
+      : 'e.g., How do I reverse a string in Python?',
   });
 
   if (!question) {
@@ -46,7 +40,7 @@ export async function askAskiiCommand() {
 
   const md = new MarkdownIt({ html: false, linkify: true, typographer: true });
 
-  const webviewCss = `
+  const css = `
     body {
       font-family: var(--vscode-font-family, Arial, sans-serif);
       font-size: var(--vscode-font-size, 13px);
@@ -57,7 +51,6 @@ export async function askAskiiCommand() {
       max-width: 860px;
     }
     h1,h2,h3,h4 { color: var(--vscode-foreground); margin-top: 1.2em; }
-    h2.header { margin-top: 0; opacity: 0.85; font-size: 1em; font-weight: 600; }
     code {
       font-family: var(--vscode-editor-font-family, monospace);
       background: var(--vscode-textCodeBlock-background, #1e1e1e);
@@ -82,27 +75,97 @@ export async function askAskiiCommand() {
     a { color: var(--vscode-textLink-foreground, #4daafc); }
     hr { border: none; border-top: 1px solid var(--vscode-editorWidget-border, #555); }
     .thinking { opacity: 0.6; font-style: italic; }
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.6em;
+    }
+    .header-row h2 { margin: 0; opacity: 0.85; font-size: 1em; font-weight: 600; }
+    .btn-group { display: flex; gap: 2px; align-items: center; }
+    .icon-btn {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px;
+      color: var(--vscode-foreground);
+      opacity: 0.55;
+      border-radius: 4px;
+      transition: opacity 0.15s;
+    }
+    .icon-btn:hover { opacity: 1; }
+    #copyBtn.copied { opacity: 1; color: var(--vscode-terminal-ansiGreen, #4ec9b0); }
   `;
 
-  const makeHtml = (title: string, bodyContent: string) => `<!DOCTYPE html>
+  const panelHtml = `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><style>${webviewCss}</style></head>
+<head><meta charset="UTF-8"><style>${css}</style></head>
 <body>
-  <h2 class="header">${title}</h2>
-  ${bodyContent}
+  <div class="header-row">
+    <h2 id="title">ASKII is thinking... (๑•﹏•)</h2>
+    <div class="btn-group">
+      <button id="followUpBtn" class="icon-btn" title="Ask a follow-up" onclick="sendFollowUp()">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+      </button>
+      <button id="copyBtn" class="icon-btn" title="Copy response" onclick="copyResponse()">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+  <div id="content"><p class="thinking">Waiting for response...</p></div>
+  <script>
+    const vscode = acquireVsCodeApi();
+    let rawText = '';
+    function showBtns(visible) {
+      const d = visible ? 'inline-flex' : 'none';
+      document.getElementById('copyBtn').style.display = d;
+      document.getElementById('followUpBtn').style.display = d;
+    }
+    window.addEventListener('message', event => {
+      const msg = event.data;
+      if (msg.type === 'update') {
+        document.getElementById('content').innerHTML = msg.html;
+      } else if (msg.type === 'done') {
+        rawText = msg.text;
+        document.getElementById('content').innerHTML = msg.html;
+        document.getElementById('title').textContent = 'ASKII Says: (⌐■_■)';
+        showBtns(true);
+      } else if (msg.type === 'thinking') {
+        showBtns(false);
+        document.getElementById('title').textContent = 'ASKII is thinking... (๑•﹏•)';
+        document.getElementById('content').innerHTML = '<p class="thinking">Waiting for response...</p>';
+      } else if (msg.type === 'error') {
+        document.getElementById('title').textContent = 'Error';
+        document.getElementById('content').innerHTML = msg.html;
+        showBtns(false);
+      }
+    });
+    function sendFollowUp() {
+      showBtns(false);
+      vscode.postMessage({ type: 'followup' });
+    }
+    function copyResponse() {
+      navigator.clipboard.writeText(rawText).then(() => {
+        const btn = document.getElementById('copyBtn');
+        btn.classList.add('copied');
+        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+        }, 1500);
+      });
+    }
+  </script>
 </body>
 </html>`;
-
-  const streamingBody = `
-    <div id="content"><p class="thinking">Waiting for response...</p></div>
-    <script>
-      window.addEventListener('message', event => {
-        const msg = event.data;
-        if (msg.type === 'update') {
-          document.getElementById('content').innerHTML = msg.html;
-        }
-      });
-    </script>`;
 
   const panel = vscode.window.createWebviewPanel(
     'askiiOutput',
@@ -111,22 +174,60 @@ export async function askAskiiCommand() {
     { enableScripts: true },
   );
 
-  panel.webview.html = makeHtml('ASKII is thinking... (๑•﹏•)', streamingBody);
+  panel.webview.html = panelHtml;
 
-  try {
-    const prompt = `File: ${fileName}\nLanguage: ${languageId}\nCode:\n\`\`\`${languageId}\n${selectedText}\n\`\`\`\n\nQuestion: ${question}`;
+  const codeContext = hasSelection
+    ? `File: ${fileName}\nLanguage: ${languageId}\nCode:\n\`\`\`${languageId}\n${selectedText}\n\`\`\`\n\n`
+    : '';
+  let history = '';
+  let currentQuestion = question;
+  let panelDisposed = false;
+  panel.onDidDispose(() => {
+    panelDisposed = true;
+  });
+
+  while (!panelDisposed) {
+    const fullPrompt = codeContext + history + `Question: ${currentQuestion}`;
     let accumulated = '';
 
-    await getExtensionResponseStreaming(prompt, (chunk) => {
-      accumulated += chunk;
-      panel.webview.postMessage({ type: 'update', html: md.render(accumulated) });
+    try {
+      await getExtensionResponseStreaming(fullPrompt, (chunk) => {
+        accumulated += chunk;
+        panel.webview.postMessage({ type: 'update', html: md.render(accumulated) });
+      });
+
+      history += `Question: ${currentQuestion}\n\nAnswer: ${accumulated}\n\n`;
+      panel.webview.postMessage({ type: 'done', html: md.render(accumulated), text: accumulated });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      panel.webview.postMessage({ type: 'error', html: `<p>${escapeHtml(errorMsg)}</p>` });
+      break;
+    }
+
+    // Wait for a follow-up request or panel close
+    const nextQuestion = await new Promise<string | null>((resolve) => {
+      const msgDisp = panel.webview.onDidReceiveMessage(async (msg) => {
+        if (msg.type === 'followup') {
+          msgDisp.dispose();
+          dispDisp.dispose();
+          const q = await vscode.window.showInputBox({
+            prompt: 'Ask a follow-up question',
+            placeHolder: 'What else would you like to know?',
+          });
+          resolve(q || null);
+        }
+      });
+      const dispDisp = panel.onDidDispose(() => {
+        msgDisp.dispose();
+        resolve(null);
+      });
     });
 
-    // Swap to a scripts-free final page once streaming is complete
-    panel.webview.html = makeHtml('ASKII Says: (⌐■_■)', `<div>${md.render(accumulated)}</div>`);
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    panel.webview.html = makeHtml('Error', `<p>${escapeHtml(errorMsg)}</p>`);
+    if (nextQuestion === null) {
+      break;
+    }
+    currentQuestion = nextQuestion;
+    panel.webview.postMessage({ type: 'thinking' });
   }
 }
 
