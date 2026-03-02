@@ -41,9 +41,7 @@ function getConfig(flags: string[]): Config {
     'ollama') as 'ollama' | 'lmstudio';
 
   const ollamaUrl =
-    getFlagValue(flags, '--ollama-url') ||
-    process.env.ASKII_OLLAMA_URL ||
-    'http://localhost:11434';
+    getFlagValue(flags, '--ollama-url') || process.env.ASKII_OLLAMA_URL || 'http://localhost:11434';
 
   const lmStudioUrl =
     getFlagValue(flags, '--lmstudio-url') ||
@@ -51,9 +49,7 @@ function getConfig(flags: string[]): Config {
     'ws://localhost:1234';
 
   const ollamaModel =
-    getFlagValue(flags, '--ollama-model') ||
-    process.env.ASKII_OLLAMA_MODEL ||
-    'gemma3:270m';
+    getFlagValue(flags, '--ollama-model') || process.env.ASKII_OLLAMA_MODEL || 'gemma3:270m';
 
   const lmStudioModel =
     getFlagValue(flags, '--lmstudio-model') ||
@@ -64,12 +60,10 @@ function getConfig(flags: string[]): Config {
     platform,
     url: platform === 'lmstudio' ? lmStudioUrl : ollamaUrl,
     model: platform === 'lmstudio' ? lmStudioModel : ollamaModel,
-    mode: (getFlagValue(flags, '--mode') ||
-      process.env.ASKII_MODE ||
-      'funny') as 'helpful' | 'funny',
-    maxRounds: parseInt(
-      getFlagValue(flags, '--max-rounds') || process.env.ASKII_MAX_ROUNDS || '5',
-    ),
+    mode: (getFlagValue(flags, '--mode') || process.env.ASKII_MODE || 'funny') as
+      | 'helpful'
+      | 'funny',
+    maxRounds: parseInt(getFlagValue(flags, '--max-rounds') || process.env.ASKII_MAX_ROUNDS || '5'),
     yes: hasFlag(flags, '-y', '--yes'),
   };
 }
@@ -83,7 +77,13 @@ async function getResponse(
   if (config.platform === 'lmstudio') {
     return getLMStudioResponse(prompt, config.url, config.model, system, imageBase64);
   } else {
-    return getOllamaResponse(prompt, config.url, config.model, system, imageBase64 ? [imageBase64] : undefined);
+    return getOllamaResponse(
+      prompt,
+      config.url,
+      config.model,
+      system,
+      imageBase64 ? [imageBase64] : undefined,
+    );
   }
 }
 
@@ -97,7 +97,11 @@ async function readStdin(): Promise<string | null> {
   });
 }
 
-async function confirm(rl: readline.Interface, question: string, autoYes: boolean): Promise<boolean> {
+async function confirm(
+  rl: readline.Interface,
+  question: string,
+  autoYes: boolean,
+): Promise<boolean> {
   if (autoYes) {
     console.error(`${question} (auto-confirmed)`);
     return true;
@@ -130,6 +134,8 @@ Options:
       --max-rounds <n>       Max agent rounds for "do" / "control" (default: 5)
       --dir <path>           Working directory for "do" (default: cwd)
   -c, --code <code>          Code input (alternative to stdin)
+      --lang <language>      Language of the code (e.g. typescript, python)
+      --file <filename>      Filename of the code (e.g. src/utils.ts)
   -y, --yes                  Auto-confirm all actions
   -h, --help                 Show help
 
@@ -141,6 +147,7 @@ Environment variables:
 
 Examples:
   cat myfile.ts | askii ask "what does this do?"
+  cat myfile.ts | askii ask --lang typescript --file src/utils.ts "what does this do?"
   cat myfile.ts | askii edit "add error handling"
   askii explain "const x = arr.reduce((a, b) => a + b, 0)"
   askii do "create a Jest test file for src/utils.ts"
@@ -168,15 +175,24 @@ async function main() {
     const stdin = await readStdin();
     const code = getFlagValue(flags, '-c', '--code') || stdin;
     const question = positional.slice(1).join(' ');
+    const lang = getFlagValue(flags, '--lang');
+    const file = getFlagValue(flags, '--file');
 
     if (!question) {
       console.error('Error: provide a question as an argument');
       process.exit(1);
     }
 
-    const prompt = code
-      ? `Code:\n\`\`\`\n${code}\n\`\`\`\n\nQuestion: ${question}`
-      : `Question: ${question}`;
+    let prompt: string;
+    if (code) {
+      const metaLines = [file ? `File: ${file}` : null, lang ? `Language: ${lang}` : null]
+        .filter(Boolean)
+        .join('\n');
+      const codeBlock = `\`\`\`${lang ?? ''}\n${code}\n\`\`\``;
+      prompt = `${metaLines ? metaLines + '\n' : ''}Code:\n${codeBlock}\n\nQuestion: ${question}`;
+    } else {
+      prompt = `Question: ${question}`;
+    }
 
     console.error(`ASKII is thinking... ${getRandomThinkingKaomoji()}`);
 
@@ -359,7 +375,11 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
               console.error(`  ✗ Rename missing newPath: ${action.path}`);
             } else {
               const newFilePath = path.join(workDir, action.newPath);
-              const ok = await confirm(rl, `Rename: ${action.path} → ${action.newPath}?`, config.yes);
+              const ok = await confirm(
+                rl,
+                `Rename: ${action.path} → ${action.newPath}?`,
+                config.yes,
+              );
               if (ok) {
                 try {
                   const newDir = path.dirname(newFilePath);
@@ -418,7 +438,12 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
             : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and determine the next action, or return DONE if the instruction is complete.`;
 
         console.error('Asking AI...');
-        const response = await getResponse(config, prompt, buildControlSystemPrompt(screenW, screenH), imageBase64);
+        const response = await getResponse(
+          config,
+          prompt,
+          buildControlSystemPrompt(screenW, screenH),
+          imageBase64,
+        );
 
         const action = parseControlAction(response);
 

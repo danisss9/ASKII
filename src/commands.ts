@@ -2,7 +2,11 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import MarkdownIt from 'markdown-it';
-import { getExtensionResponse, getExtensionResponseWithImage, getLLMExplanation } from './providers';
+import {
+  getExtensionResponse,
+  getExtensionResponseWithImage,
+  getLLMExplanation,
+} from './providers';
 import { getWorkspaceStructure, parseWorkspaceActions } from '@common/workspace';
 import { escapeHtml, escapeJsonString, unescapeJsonString, extractCode } from '@common/utils';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
@@ -26,6 +30,9 @@ export async function askAskiiCommand() {
     vscode.window.showErrorMessage('No text selected');
     return;
   }
+
+  const languageId = editor.document.languageId;
+  const fileName = path.basename(editor.document.fileName);
 
   const question = await vscode.window.showInputBox({
     prompt: 'Ask ASKII a question about the selected code',
@@ -98,7 +105,7 @@ export async function askAskiiCommand() {
   );
 
   try {
-    const prompt = `Code:\n\`\`\`\n${selectedText}\n\`\`\`\n\nQuestion: ${question}`;
+    const prompt = `File: ${fileName}\nLanguage: ${languageId}\nCode:\n\`\`\`${languageId}\n${selectedText}\n\`\`\`\n\nQuestion: ${question}`;
     const responseText = await getExtensionResponse(prompt);
     panel.webview.html = makeHtml('ASKII Says: (⌐■_■)', md.render(responseText));
   } catch (error) {
@@ -348,7 +355,9 @@ Always respond with ONLY a valid JSON array containing the actions. You can requ
                 if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
                 fs.renameSync(filePath, newFilePath);
                 completedActions++;
-                vscode.window.showInformationMessage(`✓ Renamed: ${action.path} → ${action.newPath}`);
+                vscode.window.showInformationMessage(
+                  `✓ Renamed: ${action.path} → ${action.newPath}`,
+                );
               } catch {
                 vscode.window.showErrorMessage(`Cannot rename: ${action.path}`);
               }
