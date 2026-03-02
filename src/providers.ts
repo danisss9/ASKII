@@ -1,5 +1,9 @@
 import * as vscode from 'vscode';
-import { getOllamaResponse, getLMStudioResponse } from '@common/providers';
+import {
+  getOllamaResponse,
+  getOllamaResponseStreaming,
+  getLMStudioResponse,
+} from '@common/providers';
 
 export async function getExtensionResponseWithImage(
   prompt: string,
@@ -52,6 +56,39 @@ export async function getCopilotResponse(prompt: string, imageBase64?: string): 
     responseText += fragment;
   }
   return responseText;
+}
+
+export async function getExtensionResponseStreaming(
+  prompt: string,
+  onChunk: (chunk: string) => void,
+): Promise<void> {
+  const config = vscode.workspace.getConfiguration('askii');
+  const platform = config.get<string>('llmPlatform') || 'ollama';
+
+  if (platform === 'copilot') {
+    const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
+    const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
+    if (models.length === 0) throw new Error('GitHub Copilot not available');
+    const model = models[0];
+    const chatResponse = await model.sendRequest(
+      [vscode.LanguageModelChatMessage.User(prompt)],
+      {},
+      new vscode.CancellationTokenSource().token,
+    );
+    for await (const fragment of chatResponse.text) {
+      if (fragment) onChunk(fragment);
+    }
+  } else if (platform === 'lmstudio') {
+    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
+    const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
+    // LMStudio SDK does not expose a simple streaming interface; deliver as one chunk
+    const result = await getLMStudioResponse(prompt, url, model);
+    onChunk(result);
+  } else {
+    const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
+    const model = config.get<string>('ollamaModel') || 'gemma3:270m';
+    await getOllamaResponseStreaming(prompt, url, model, onChunk);
+  }
 }
 
 export async function getExtensionResponse(prompt: string): Promise<string> {

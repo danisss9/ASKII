@@ -13,6 +13,21 @@ export async function getOllamaResponse(
   return response.response || 'No response';
 }
 
+export async function getOllamaResponseStreaming(
+  prompt: string,
+  url: string,
+  model: string,
+  onChunk: (chunk: string) => void,
+  system?: string,
+  images?: string[],
+): Promise<void> {
+  const ollama = new Ollama({ host: url });
+  const stream = await ollama.generate({ model, system, prompt, stream: true, images });
+  for await (const chunk of stream) {
+    if (chunk.response) onChunk(chunk.response);
+  }
+}
+
 export async function getLMStudioResponse(
   prompt: string,
   url: string,

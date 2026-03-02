@@ -4,6 +4,7 @@ import * as path from 'path';
 import MarkdownIt from 'markdown-it';
 import {
   getExtensionResponse,
+  getExtensionResponseStreaming,
   getExtensionResponseWithImage,
   getLLMExplanation,
 } from './providers';
@@ -92,22 +93,37 @@ export async function askAskiiCommand() {
 </body>
 </html>`;
 
+  const streamingBody = `
+    <div id="content"><p class="thinking">Waiting for response...</p></div>
+    <script>
+      window.addEventListener('message', event => {
+        const msg = event.data;
+        if (msg.type === 'update') {
+          document.getElementById('content').innerHTML = msg.html;
+        }
+      });
+    </script>`;
+
   const panel = vscode.window.createWebviewPanel(
     'askiiOutput',
     'ASKII Response',
     vscode.ViewColumn.Beside,
-    { enableScripts: false },
+    { enableScripts: true },
   );
 
-  panel.webview.html = makeHtml(
-    'ASKII is thinking... (๑•﹏•)',
-    '<p class="thinking">Waiting for response...</p>',
-  );
+  panel.webview.html = makeHtml('ASKII is thinking... (๑•﹏•)', streamingBody);
 
   try {
     const prompt = `File: ${fileName}\nLanguage: ${languageId}\nCode:\n\`\`\`${languageId}\n${selectedText}\n\`\`\`\n\nQuestion: ${question}`;
-    const responseText = await getExtensionResponse(prompt);
-    panel.webview.html = makeHtml('ASKII Says: (⌐■_■)', md.render(responseText));
+    let accumulated = '';
+
+    await getExtensionResponseStreaming(prompt, (chunk) => {
+      accumulated += chunk;
+      panel.webview.postMessage({ type: 'update', html: md.render(accumulated) });
+    });
+
+    // Swap to a scripts-free final page once streaming is complete
+    panel.webview.html = makeHtml('ASKII Says: (⌐■_■)', `<div>${md.render(accumulated)}</div>`);
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     panel.webview.html = makeHtml('Error', `<p>${escapeHtml(errorMsg)}</p>`);
