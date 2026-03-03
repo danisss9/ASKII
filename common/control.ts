@@ -1,8 +1,7 @@
 import { execSync, execFileSync } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
-import { platform, tmpdir } from 'os';
+import { platform } from 'os';
 import screenshot from 'screenshot-desktop';
+import Jimp from 'jimp';
 
 // === TYPES ===
 
@@ -142,7 +141,7 @@ export function parseControlResponse(response: string): ControlResponse | null {
 const ZOOM_RADIUS = 200; // half-size of crop box in pixels
 const ZOOM_SCALE = 2;    // how much to magnify the crop
 
-/** Crop a region from a PNG buffer and scale it up. Returns null if unavailable. */
+/** Crop a region from a PNG buffer and scale it up using jimp. Returns null on failure. */
 export async function cropAndScale(
   imgBuffer: Buffer,
   srcX: number,
@@ -152,45 +151,14 @@ export async function cropAndScale(
   outW: number,
   outH: number,
 ): Promise<Buffer | null> {
-  const p = platform();
-  const tag = `${process.pid}_${Date.now()}`;
-  const tmpIn = path.join(tmpdir(), `askii_ci_${tag}.png`);
-  const tmpOut = path.join(tmpdir(), `askii_co_${tag}.png`);
   try {
-    fs.writeFileSync(tmpIn, imgBuffer);
-
-    if (p === 'win32') {
-      const script = [
-        `Add-Type -AssemblyName System.Drawing`,
-        `$s = [System.Drawing.Image]::FromFile('${tmpIn}')`,
-        `$d = New-Object System.Drawing.Bitmap(${outW}, ${outH})`,
-        `$g = [System.Drawing.Graphics]::FromImage($d)`,
-        `$g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic`,
-        `$sr = New-Object System.Drawing.Rectangle(${srcX}, ${srcY}, ${srcW}, ${srcH})`,
-        `$dr = New-Object System.Drawing.Rectangle(0, 0, ${outW}, ${outH})`,
-        `$g.DrawImage($s, $dr, $sr, [System.Drawing.GraphicsUnit]::Pixel)`,
-        `$g.Dispose(); $s.Dispose()`,
-        `$d.Save('${tmpOut}', [System.Drawing.Imaging.ImageFormat]::Png); $d.Dispose()`,
-      ].join('; ');
-      runPowerShell(script);
-    } else if (p === 'darwin') {
-      execSync(
-        `sips --cropOffset ${srcY} ${srcX} -c ${srcH} ${srcW} -z ${outH} ${outW} '${tmpIn}' --out '${tmpOut}'`,
-        { stdio: 'ignore' },
-      );
-    } else {
-      execSync(
-        `convert '${tmpIn}' -crop ${srcW}x${srcH}+${srcX}+${srcY} +repage -resize ${outW}x${outH}! '${tmpOut}'`,
-        { stdio: 'ignore' },
-      );
-    }
-
-    return fs.readFileSync(tmpOut);
+    const img = await Jimp.read(imgBuffer);
+    return await img
+      .crop(srcX, srcY, srcW, srcH)
+      .resize(outW, outH, Jimp.RESIZE_BICUBIC)
+      .getBufferAsync(Jimp.MIME_PNG);
   } catch {
     return null;
-  } finally {
-    try { fs.unlinkSync(tmpIn); } catch { /* ignore */ }
-    try { fs.unlinkSync(tmpOut); } catch { /* ignore */ }
   }
 }
 
@@ -286,15 +254,31 @@ export async function getMonitors(): Promise<Monitor[]> {
 
 // === SCREENSHOT ===
 
+const MAX_SCREENSHOT_WIDTH = 1920;
+const MAX_SCREENSHOT_HEIGHT = 1080;
+
 export async function takeScreenshot(
   monitorId?: string | number,
 ): Promise<{ base64: string; width: number; height: number }> {
   const opts: { format: 'png'; screen?: string | number } = { format: 'png' };
   if (monitorId !== undefined) opts.screen = monitorId;
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const img = await screenshot(opts);
-  const width = img.readUInt32BE(16);
-  const height = img.readUInt32BE(20);
+  let img: Buffer = await screenshot(opts);
+  let width = img.readUInt32BE(16);
+  let height = img.readUInt32BE(20);
+
+  // Downscale to reduce token cost when the display exceeds the max resolution
+  if (width > MAX_SCREENSHOT_WIDTH || height > MAX_SCREENSHOT_HEIGHT) {
+    try {
+      img = await (await Jimp.read(img))
+        .scaleToFit(MAX_SCREENSHOT_WIDTH, MAX_SCREENSHOT_HEIGHT, Jimp.RESIZE_BICUBIC)
+        .getBufferAsync(Jimp.MIME_PNG);
+      width = img.readUInt32BE(16);
+      height = img.readUInt32BE(20);
+    } catch {
+      // use original if resize fails
+    }
+  }
+
   return { base64: img.toString('base64'), width, height };
 }
 
