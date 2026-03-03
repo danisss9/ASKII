@@ -208,6 +208,8 @@ async function main() {
     const stdin = await readStdin();
     const code = getFlagValue(flags, '-c', '--code') || stdin;
     const instruction = positional.slice(1).join(' ');
+    const lang = getFlagValue(flags, '--lang');
+    const file = getFlagValue(flags, '--file');
 
     if (!code) {
       console.error('Error: provide code via stdin or -c/--code');
@@ -218,7 +220,10 @@ async function main() {
       process.exit(1);
     }
 
-    const prompt = `Update this code:\n\`\`\`\n${code}\n\`\`\`\n\nRequest: ${instruction}\n\nReturn only the updated code without explanation.`;
+    const metaLines = [file ? `File: ${file}` : null, lang ? `Language: ${lang}` : null]
+      .filter(Boolean)
+      .join('\n');
+    const prompt = `${metaLines ? metaLines + '\n' : ''}Update this code:\n\`\`\`${lang ?? ''}\n${code}\n\`\`\`\n\nRequest: ${instruction}\n\nReturn only the updated code without explanation.`;
 
     console.error(`ASKII is editing... (•_•)>⌐■-■`);
 

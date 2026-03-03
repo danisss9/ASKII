@@ -6,9 +6,19 @@ import {
   AskiiHoverProvider,
   explanationCache,
 } from './decorations';
-import { askAskiiCommand, askiiEditCommand, askiiDoCommand, askiiControlCommand } from './commands';
+import {
+  askAskiiCommand,
+  askiiEditCommand,
+  askiiDoCommand,
+  askiiControlCommand,
+  askiiDiffProvider,
+} from './commands';
 
 export function activate(context: vscode.ExtensionContext) {
+  // Register the in-memory content provider for diff previews
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider('askii-diff', askiiDiffProvider),
+  );
   const decorationType = vscode.window.createTextEditorDecorationType({
     rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
     after: {
@@ -37,7 +47,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(vscode.commands.registerCommand('askii.askQuestion', askAskiiCommand));
   context.subscriptions.push(vscode.commands.registerCommand('askii.editCode', askiiEditCommand));
   context.subscriptions.push(vscode.commands.registerCommand('askii.doTask', askiiDoCommand));
-  context.subscriptions.push(vscode.commands.registerCommand('askii.controlTask', askiiControlCommand));
+  context.subscriptions.push(
+    vscode.commands.registerCommand('askii.controlTask', askiiControlCommand),
+  );
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.text = '(⌐■_■)';

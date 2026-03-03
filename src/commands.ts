@@ -2,6 +2,27 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import MarkdownIt from 'markdown-it';
+
+// ── Diff content provider ────────────────────────────────────────────────────
+// Serves in-memory content for the askii-diff:// URI scheme so VS Code's
+// built-in diff editor can display original vs. AI-proposed code side by side.
+export class AskiiDiffContentProvider implements vscode.TextDocumentContentProvider {
+  private readonly contents = new Map<string, string>();
+
+  setContent(key: string, text: string): void {
+    this.contents.set(key, text);
+  }
+
+  deleteContent(key: string): void {
+    this.contents.delete(key);
+  }
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.contents.get(uri.path) ?? '';
+  }
+}
+
+export const askiiDiffProvider = new AskiiDiffContentProvider();
 import {
   getExtensionResponse,
   getExtensionResponseStreaming,
@@ -191,10 +212,14 @@ export async function askAskiiCommand() {
     let accumulated = '';
 
     try {
-      await getExtensionResponseStreaming(fullPrompt, (chunk) => {
-        accumulated += chunk;
-        panel.webview.postMessage({ type: 'update', html: md.render(accumulated) });
-      });
+      await getExtensionResponseStreaming(
+        fullPrompt,
+        (chunk) => {
+          accumulated += chunk;
+          panel.webview.postMessage({ type: 'update', html: md.render(accumulated) });
+        },
+        'You are ASKII, a precise coding assistant. Answer concisely.',
+      );
 
       history += `Question: ${currentQuestion}\n\nAnswer: ${accumulated}\n\n`;
       panel.webview.postMessage({ type: 'done', html: md.render(accumulated), text: accumulated });
@@ -238,11 +263,14 @@ export async function askiiEditCommand() {
     return;
   }
 
-  const selectedText = editor.document.getText(editor.selection);
-  if (!selectedText) {
-    vscode.window.showErrorMessage('No text selected');
-    return;
-  }
+  // Snapshot selection now — it may shift while we await LLM work
+  const selection = editor.selection;
+  const hasSelection = !selection.isEmpty;
+  const selectedText = hasSelection ? editor.document.getText(selection) : null;
+  const fullFileText = editor.document.getText();
+
+  const languageId = editor.document.languageId ?? '';
+  const fileName = path.basename(editor.document.fileName);
 
   const question = await vscode.window.showInputBox({
     prompt: 'What changes would you like to make?',
@@ -259,19 +287,90 @@ export async function askiiEditCommand() {
   const formatAfterEdit = editConfig.get<boolean>('formatAfterEdit') ?? false;
 
   try {
-    const prompt = `Update this code:\n\`\`\`\n${selectedText}\n\`\`\`\n\nRequest: ${question}\n\nReturn only the updated code without explanation.`;
-    const responseText = await getExtensionResponse(prompt);
+    const metaLines = [
+      fileName ? `File: ${fileName}` : null,
+      languageId ? `Language: ${languageId}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    let prompt: string;
+    if (hasSelection && selectedText !== null) {
+      // Pass full file as context, but ask only for the selected portion back
+      prompt =
+        `${metaLines ? metaLines + '\n' : ''}` +
+        `Full file context:\n\`\`\`${languageId}\n${fullFileText}\n\`\`\`\n\n` +
+        `Update only this selected section:\n\`\`\`${languageId}\n${selectedText}\n\`\`\`\n\n` +
+        `Request: ${question}\n\n` +
+        `Return ONLY the updated replacement for the selected section, without surrounding context or explanation.`;
+    } else {
+      // No selection — edit the entire file
+      prompt =
+        `${metaLines ? metaLines + '\n' : ''}` +
+        `Update this file:\n\`\`\`${languageId}\n${fullFileText}\n\`\`\`\n\n` +
+        `Request: ${question}\n\n` +
+        `Return only the updated code without explanation.`;
+    }
+
+    const responseText = await getExtensionResponse(
+      prompt,
+      'You are ASKII, a precise coding assistant. Return only the requested code, no explanation.',
+    );
     const code = extractCode(responseText);
 
+    // The original text being replaced (selection or full file)
+    const originalText = selectedText ?? fullFileText;
+
+    // ── Apply the edit immediately ────────────────────────────────────────────
     await editor.edit((editBuilder: vscode.TextEditorEdit) => {
-      editBuilder.replace(editor.selection, code);
+      if (hasSelection && selectedText !== null) {
+        editBuilder.replace(selection, code);
+      } else {
+        const fullRange = new vscode.Range(
+          editor.document.positionAt(0),
+          editor.document.positionAt(fullFileText.length),
+        );
+        editBuilder.replace(fullRange, code);
+      }
     });
 
     if (formatAfterEdit) {
       await vscode.commands.executeCommand('editor.action.formatDocument');
     }
 
-    vscode.window.showInformationMessage('Code updated! (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧');
+    // ── Show diff + undo offer ────────────────────────────────────────────────
+    const diffId = `edit-${Date.now()}`;
+    askiiDiffProvider.setContent(`original-${diffId}`, originalText);
+    askiiDiffProvider.setContent(`proposed-${diffId}`, code);
+
+    const originalUri = vscode.Uri.parse(`askii-diff:original-${diffId}`);
+    const proposedUri = vscode.Uri.parse(`askii-diff:proposed-${diffId}`);
+
+    await vscode.commands.executeCommand(
+      'vscode.diff',
+      originalUri,
+      proposedUri,
+      `ASKII Edit: ${fileName} (⌐■_■)`,
+      { viewColumn: vscode.ViewColumn.Beside, preview: true },
+    );
+
+    const undoChoice = await vscode.window.showInformationMessage(
+      'Code updated! (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧',
+      'Undo',
+    );
+
+    askiiDiffProvider.deleteContent(`original-${diffId}`);
+    askiiDiffProvider.deleteContent(`proposed-${diffId}`);
+
+    if (undoChoice === 'Undo') {
+      // Re-focus the original editor so undo targets the right document
+      await vscode.window.showTextDocument(editor.document, editor.viewColumn);
+      if (formatAfterEdit) {
+        await vscode.commands.executeCommand('undo');
+      }
+      await vscode.commands.executeCommand('undo');
+      vscode.window.showInformationMessage('Edit reverted. (ᵔᴥᵔ)');
+    }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     vscode.window.showErrorMessage(`ASKII Edit failed: ${errorMsg}`);

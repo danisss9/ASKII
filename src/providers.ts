@@ -61,6 +61,7 @@ export async function getCopilotResponse(prompt: string, imageBase64?: string): 
 export async function getExtensionResponseStreaming(
   prompt: string,
   onChunk: (chunk: string) => void,
+  system?: string,
 ): Promise<void> {
   const config = vscode.workspace.getConfiguration('askii');
   const platform = config.get<string>('llmPlatform') || 'ollama';
@@ -70,8 +71,11 @@ export async function getExtensionResponseStreaming(
     const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
     if (models.length === 0) throw new Error('GitHub Copilot not available');
     const model = models[0];
+    const messages: vscode.LanguageModelChatMessage[] = [];
+    if (system) messages.push(vscode.LanguageModelChatMessage.User(system));
+    messages.push(vscode.LanguageModelChatMessage.User(prompt));
     const chatResponse = await model.sendRequest(
-      [vscode.LanguageModelChatMessage.User(prompt)],
+      messages,
       {},
       new vscode.CancellationTokenSource().token,
     );
@@ -82,29 +86,48 @@ export async function getExtensionResponseStreaming(
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
     // LMStudio SDK does not expose a simple streaming interface; deliver as one chunk
-    const result = await getLMStudioResponse(prompt, url, model);
+    const result = await getLMStudioResponse(prompt, url, model, system);
     onChunk(result);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
-    await getOllamaResponseStreaming(prompt, url, model, onChunk);
+    await getOllamaResponseStreaming(prompt, url, model, onChunk, system);
   }
 }
 
-export async function getExtensionResponse(prompt: string): Promise<string> {
+export async function getExtensionResponse(prompt: string, system?: string): Promise<string> {
   const config = vscode.workspace.getConfiguration('askii');
   const platform = config.get<string>('llmPlatform') || 'ollama';
 
   if (platform === 'copilot') {
+    if (system) {
+      const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
+      const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
+      if (models.length === 0) throw new Error('GitHub Copilot not available');
+      const model = models[0];
+      const chatResponse = await model.sendRequest(
+        [
+          vscode.LanguageModelChatMessage.User(system),
+          vscode.LanguageModelChatMessage.User(prompt),
+        ],
+        {},
+        new vscode.CancellationTokenSource().token,
+      );
+      let responseText = '';
+      for await (const fragment of chatResponse.text) {
+        responseText += fragment;
+      }
+      return responseText;
+    }
     return getCopilotResponse(prompt);
   } else if (platform === 'lmstudio') {
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
-    return getLMStudioResponse(prompt, url, model);
+    return getLMStudioResponse(prompt, url, model, system);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
-    return getOllamaResponse(prompt, url, model);
+    return getOllamaResponse(prompt, url, model, system);
   }
 }
 
