@@ -56,7 +56,6 @@ import {
   executeControlAction,
   getMonitors,
   parseControlResponse,
-  refineCoordinates,
   type ControlAction,
   type ControlHistoryEntry,
 } from '@common/control';
@@ -448,8 +447,8 @@ export async function askiiDoCommand() {
         break;
       }
 
-      const readActions = actions.filter((a) =>
-        a.type === 'view' || a.type === 'list' || a.type === 'search',
+      const readActions = actions.filter(
+        (a) => a.type === 'view' || a.type === 'list' || a.type === 'search',
       );
       const writeActions = actions.filter(
         (a) => a.type !== 'view' && a.type !== 'list' && a.type !== 'search',
@@ -468,7 +467,10 @@ export async function askiiDoCommand() {
             for (const p of action.paths) {
               channel.appendLine(`Viewing: ${p}`);
               try {
-                viewResults[p] = executeViewAction({ ...action, path: p, paths: undefined }, rootPath);
+                viewResults[p] = executeViewAction(
+                  { ...action, path: p, paths: undefined },
+                  rootPath,
+                );
               } catch (e) {
                 viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
               }
@@ -498,7 +500,11 @@ export async function askiiDoCommand() {
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Path error';
           channel.appendLine(`BLOCKED: ${msg}`);
-          actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail: msg });
+          actionResults.push({
+            action: `${action.type}:${action.path}`,
+            status: 'error',
+            detail: msg,
+          });
           continue;
         }
 
@@ -529,7 +535,8 @@ export async function askiiDoCommand() {
             });
           } catch (e: unknown) {
             const err = e as { stdout?: string; stderr?: string; message?: string };
-            const detail = `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
+            const detail =
+              `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
             channel.appendLine(`Run failed: ${detail.substring(0, 200)}`);
             actionResults.push({
               action: `run:${action.command}`,
@@ -606,8 +613,12 @@ export async function askiiDoCommand() {
       if (choice === 'Undo') {
         const { restored, deleted } = restoreAllBackups(rootPath);
         deleteAllBackups(rootPath);
-        channel.appendLine(`Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`);
-        vscode.window.showInformationMessage(`ASKII Do: Restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`);
+        channel.appendLine(
+          `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
+        );
+        vscode.window.showInformationMessage(
+          `ASKII Do: Restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
+        );
       } else if (choice === 'Confirm') {
         deleteAllBackups(rootPath);
       }
@@ -677,7 +688,9 @@ async function _executeWriteAction(
         const lines = existing.split('\n');
         const start = (action.startLine ?? 1) - 1;
         const end = action.endLine ?? lines.length;
-        const replacement = (action.newContent ? unescapeJsonString(action.newContent) : '').split('\n');
+        const replacement = (action.newContent ? unescapeJsonString(action.newContent) : '').split(
+          '\n',
+        );
         lines.splice(start, end - start, ...replacement);
         fs.writeFileSync(filePath, lines.join('\n'));
       } else {
@@ -715,10 +728,14 @@ async function _executeWriteAction(
 
 function _doConfirmMessage(action: WorkspaceAction): string {
   switch (action.type) {
-    case 'delete': return `Delete: ${action.path}?`;
-    case 'rename': return `Rename: ${action.path} → ${action.newPath}?`;
-    case 'copy':   return `Copy: ${action.path} → ${action.newPath}?`;
-    case 'mkdir':  return `Create directory: ${action.path}?`;
+    case 'delete':
+      return `Delete: ${action.path}?`;
+    case 'rename':
+      return `Rename: ${action.path} → ${action.newPath}?`;
+    case 'copy':
+      return `Copy: ${action.path} → ${action.newPath}?`;
+    case 'mkdir':
+      return `Create directory: ${action.path}?`;
     default: {
       const t = action.type.charAt(0).toUpperCase() + action.type.slice(1);
       return `${t}: ${action.path}?`;
@@ -728,16 +745,24 @@ function _doConfirmMessage(action: WorkspaceAction): string {
 
 function _doActionLabel(action: WorkspaceAction): string {
   switch (action.type) {
-    case 'mkdir':  return `Created directory: ${action.path}`;
-    case 'copy':   return `Copied: ${action.path} → ${action.newPath}`;
-    case 'create': return `Created: ${action.path}`;
-    case 'write':  return `Wrote: ${action.path}`;
-    case 'modify': return action.startLine !== undefined
-      ? `Modified (lines ${action.startLine}–${action.endLine}): ${action.path}`
-      : `Modified: ${action.path}`;
-    case 'delete': return `Deleted: ${action.path}`;
-    case 'rename': return `Renamed: ${action.path} → ${action.newPath}`;
-    default:       return `${action.type}: ${action.path}`;
+    case 'mkdir':
+      return `Created directory: ${action.path}`;
+    case 'copy':
+      return `Copied: ${action.path} → ${action.newPath}`;
+    case 'create':
+      return `Created: ${action.path}`;
+    case 'write':
+      return `Wrote: ${action.path}`;
+    case 'modify':
+      return action.startLine !== undefined
+        ? `Modified (lines ${action.startLine}–${action.endLine}): ${action.path}`
+        : `Modified: ${action.path}`;
+    case 'delete':
+      return `Deleted: ${action.path}`;
+    case 'rename':
+      return `Renamed: ${action.path} → ${action.newPath}`;
+    default:
+      return `${action.type}: ${action.path}`;
   }
 }
 
@@ -777,7 +802,6 @@ export async function askiiControlCommand() {
 
   const abortController = new AbortController();
   const history: ControlHistoryEntry[] = [];
-  const ZOOM_ACTIONS = new Set(['mouse_left_click', 'mouse_right_click', 'mouse_double_click']);
   let round = 0;
   let prevScreenshot: string | undefined;
 
@@ -793,7 +817,11 @@ export async function askiiControlCommand() {
         while (round < maxRounds && !abortController.signal.aborted) {
           outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — taking screenshot...`);
 
-          const { base64: imageBase64, width: screenW, height: screenH } = await takeScreenshot(monitorId);
+          const {
+            base64: imageBase64,
+            width: screenW,
+            height: screenH,
+          } = await takeScreenshot(monitorId);
 
           const screenChanged = prevScreenshot === undefined || prevScreenshot !== imageBase64;
           if (prevScreenshot !== undefined && !screenChanged) {
@@ -812,7 +840,9 @@ export async function askiiControlCommand() {
             imageBase64,
           );
 
-          if (abortController.signal.aborted) { break; }
+          if (abortController.signal.aborted) {
+            break;
+          }
 
           const parsed = parseControlResponse(rawResponse);
 
@@ -829,26 +859,6 @@ export async function askiiControlCommand() {
           }
 
           let { actions } = parsed;
-
-          // Two-phase zoom: refine coordinates for a single position-based click
-          if (actions.length === 1 && ZOOM_ACTIONS.has(actions[0].action)) {
-            const a = actions[0] as ControlAction & { x: number; y: number };
-            try {
-              outputChannel.appendLine('Refining coordinates (zoom)...');
-              const imgBuf = Buffer.from(imageBase64, 'base64');
-              const refined = await refineCoordinates(
-                imgBuf, a.x, a.y, screenW, screenH, a,
-                (sys, img) => getExtensionResponseWithImage(sys, img),
-              );
-              if (refined) {
-                outputChannel.appendLine(`Zoom: (${a.x}, ${a.y}) → (${refined.x}, ${refined.y})`);
-                a.x = refined.x;
-                a.y = refined.y;
-              }
-            } catch {
-              // zoom failed — use original coordinates
-            }
-          }
 
           // Log all planned actions
           actions.forEach((a, i) => {
@@ -873,13 +883,25 @@ export async function askiiControlCommand() {
               outputChannel.appendLine('Stopped by user.');
               break;
             }
+            // Small delay between confirmation and execution
+            await new Promise<void>((resolve) => setTimeout(resolve, 1500));
           }
 
           // Execute sequence
           for (const a of actions) {
             if (abortController.signal.aborted) break;
-            await executeControlAction(a as ControlAction, screenW, screenH, abortController.signal);
-            history.push({ round: round + 1, description: describeAction(a as ControlAction), reasoning: a.reasoning, screenChanged: true });
+            await executeControlAction(
+              a as ControlAction,
+              screenW,
+              screenH,
+              abortController.signal,
+            );
+            history.push({
+              round: round + 1,
+              description: describeAction(a as ControlAction),
+              reasoning: a.reasoning,
+              screenChanged: true,
+            });
           }
           outputChannel.appendLine('Done.\n');
 
