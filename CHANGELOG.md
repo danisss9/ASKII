@@ -4,6 +4,27 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.5] - 2026-03-03
+
+### Added
+
+- **New ASKII Control action types**: `mouse_double_click`, `mouse_drag` (from/to coordinates), `mouse_scroll` (direction + amount), and `key_press` (special keys and modifier combos like `ctrl+c`, `alt+tab`, `enter`, `escape`, `f5`, etc.)
+- **Action sequences in Control**: The LLM can now return a JSON array of actions to execute in one round instead of a single action, reducing round-trips for simple multi-step tasks
+- **Action history context in Control**: Each control round includes a summary of all previous actions (round, description, reasoning, whether the screen changed) so the LLM can track progress and avoid repeating steps
+- **Two-phase zoom coordinate refinement in Control**: For single click actions (`mouse_left_click`, `mouse_right_click`, `mouse_double_click`), ASKII crops a 400×400 pixel region around the target, upscales it 2× with jimp, and sends it to the LLM for sub-pixel coordinate refinement before executing
+- **Multi-monitor support in Control**: At startup, ASKII lists available displays (via `screenshot-desktop`) and prompts to select a monitor — both in the extension (QuickPick) and CLI (numbered list)
+- **Stop mid-execution in Control**: The extension shows a cancellable progress notification; click **Stop** at any time to abort the loop. The CLI handles `Ctrl+C` (SIGINT) gracefully
+- **Screenshot auto-downscaling**: Screenshots larger than 1920×1080 are automatically resized with jimp before being sent to the LLM, reducing token usage and latency
+- **Per-action adaptive delays**: Each action type waits a calibrated amount of time after execution (mouse move: 300 ms, clicks: 800 ms, scroll: 500 ms, keyboard input: 1 000 ms, key press: 500 ms)
+
+### Changed
+
+- **`jimp` replaces platform-specific image processing**: Crop-and-scale for the zoom phase (and screenshot downscaling) now uses jimp v0.22.12 (pure JS, bundles with esbuild) instead of temporary files + PowerShell/sips/ImageMagick — works cross-platform with no extra dependencies
+
+### Removed
+
+- **`askii.controlDelay` setting**: Replaced by per-action adaptive delays built into the control loop
+
 ## [0.2.4] - 2026-03-03
 
 ### Added
