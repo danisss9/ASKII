@@ -1,5 +1,7 @@
 import { execSync, execFileSync } from 'child_process';
-import { platform } from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
+import { platform, tmpdir } from 'os';
 import screenshot from 'screenshot-desktop';
 
 // === TYPES ===
@@ -14,6 +16,10 @@ export type ControlAction =
   | { action: 'keyboard_input'; text: string; reasoning: string }
   | { action: 'key_press'; key: string; reasoning: string }
   | { action: 'DONE'; reasoning: string };
+
+export type ControlResponse =
+  | { type: 'done'; reasoning: string }
+  | { type: 'actions'; actions: Exclude<ControlAction, { action: 'DONE' }>[] };
 
 export interface ControlHistoryEntry {
   round: number;
@@ -62,7 +68,11 @@ x and y are pixel coordinates within the screenshot image: x ranges from 0 to ${
 
 For key_press, supported keys: Enter, Tab, Escape, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, F1-F12. For combos use + separator: Ctrl+C, Ctrl+V, Ctrl+Z, Ctrl+S, Ctrl+A, Ctrl+X, Ctrl+W, Alt+Tab, Shift+Tab, Ctrl+Shift+Z, etc.
 For mouse_scroll, amount is 1-10 scroll clicks.
-Return DONE only when the instruction is fully completed.${historySection}`;
+
+You may return a SINGLE action object OR a JSON array of actions to execute in sequence when you are confident about multiple consecutive steps:
+[{"action": "...", ...}, {"action": "...", ...}]
+Use sequences for common patterns like clicking a field then typing, or typing then pressing Enter. Do NOT include DONE in an array.
+Return {"action": "DONE", "reasoning": "..."} (not in an array) only when the instruction is fully completed.${historySection}`;
 }
 
 // === PARSE ===
@@ -87,6 +97,172 @@ export function parseControlAction(response: string): ControlAction | null {
     }
   }
   return null;
+}
+
+export function parseControlResponse(response: string): ControlResponse | null {
+  const clean = response
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '');
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(clean);
+  } catch {
+    // Try array first, then object
+    const arrMatch = clean.match(/\[[\s\S]*\]/);
+    if (arrMatch) { try { parsed = JSON.parse(arrMatch[0]); } catch { /* ignore */ } }
+    if (!parsed) {
+      const objMatch = clean.match(/\{[\s\S]*?\}/);
+      if (objMatch) { try { parsed = JSON.parse(objMatch[0]); } catch { /* ignore */ } }
+    }
+  }
+
+  if (!parsed) return null;
+
+  if (Array.isArray(parsed)) {
+    const actions = (parsed as unknown[]).filter(
+      (a): a is Exclude<ControlAction, { action: 'DONE' }> =>
+        !!a && typeof (a as any).action === 'string' && (a as any).action !== 'DONE',
+    );
+    return actions.length > 0 ? { type: 'actions', actions } : null;
+  }
+
+  if (parsed && typeof (parsed as any).action === 'string') {
+    const obj = parsed as ControlAction;
+    if (obj.action === 'DONE') return { type: 'done', reasoning: obj.reasoning };
+    return { type: 'actions', actions: [obj as Exclude<ControlAction, { action: 'DONE' }>] };
+  }
+
+  return null;
+}
+
+// === ZOOM / CROP ===
+
+const ZOOM_RADIUS = 200; // half-size of crop box in pixels
+const ZOOM_SCALE = 2;    // how much to magnify the crop
+
+/** Crop a region from a PNG buffer and scale it up. Returns null if unavailable. */
+export async function cropAndScale(
+  imgBuffer: Buffer,
+  srcX: number,
+  srcY: number,
+  srcW: number,
+  srcH: number,
+  outW: number,
+  outH: number,
+): Promise<Buffer | null> {
+  const p = platform();
+  const tag = `${process.pid}_${Date.now()}`;
+  const tmpIn = path.join(tmpdir(), `askii_ci_${tag}.png`);
+  const tmpOut = path.join(tmpdir(), `askii_co_${tag}.png`);
+  try {
+    fs.writeFileSync(tmpIn, imgBuffer);
+
+    if (p === 'win32') {
+      const script = [
+        `Add-Type -AssemblyName System.Drawing`,
+        `$s = [System.Drawing.Image]::FromFile('${tmpIn}')`,
+        `$d = New-Object System.Drawing.Bitmap(${outW}, ${outH})`,
+        `$g = [System.Drawing.Graphics]::FromImage($d)`,
+        `$g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic`,
+        `$sr = New-Object System.Drawing.Rectangle(${srcX}, ${srcY}, ${srcW}, ${srcH})`,
+        `$dr = New-Object System.Drawing.Rectangle(0, 0, ${outW}, ${outH})`,
+        `$g.DrawImage($s, $dr, $sr, [System.Drawing.GraphicsUnit]::Pixel)`,
+        `$g.Dispose(); $s.Dispose()`,
+        `$d.Save('${tmpOut}', [System.Drawing.Imaging.ImageFormat]::Png); $d.Dispose()`,
+      ].join('; ');
+      runPowerShell(script);
+    } else if (p === 'darwin') {
+      execSync(
+        `sips --cropOffset ${srcY} ${srcX} -c ${srcH} ${srcW} -z ${outH} ${outW} '${tmpIn}' --out '${tmpOut}'`,
+        { stdio: 'ignore' },
+      );
+    } else {
+      execSync(
+        `convert '${tmpIn}' -crop ${srcW}x${srcH}+${srcX}+${srcY} +repage -resize ${outW}x${outH}! '${tmpOut}'`,
+        { stdio: 'ignore' },
+      );
+    }
+
+    return fs.readFileSync(tmpOut);
+  } catch {
+    return null;
+  } finally {
+    try { fs.unlinkSync(tmpIn); } catch { /* ignore */ }
+    try { fs.unlinkSync(tmpOut); } catch { /* ignore */ }
+  }
+}
+
+/** Build the system prompt for the zoom/precision phase. */
+export function buildZoomPrompt(
+  action: ControlAction,
+  boxX1: number,
+  boxY1: number,
+  boxX2: number,
+  boxY2: number,
+  zoomedW: number,
+  zoomedH: number,
+): string {
+  return `You are refining click precision for a computer control action.
+
+The image is a ${zoomedW}x${zoomedH} px zoomed view (${ZOOM_SCALE}x magnification) of the screen region (${boxX1}, ${boxY1}) to (${boxX2}, ${boxY2}) from the original screenshot.
+
+Planned action: ${describeAction(action)}
+
+Look carefully at the zoomed image and find the MOST PRECISE location for this action.
+Respond with ONLY valid JSON (no markdown):
+{"x": number, "y": number, "reasoning": "brief explanation"}
+x: 0–${zoomedW - 1}, y: 0–${zoomedH - 1} in the ZOOMED image coordinates.`;
+}
+
+/** Parse zoom refinement response. */
+export function parseZoomResponse(response: string): { x: number; y: number } | null {
+  const clean = response.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const tryParse = (s: string) => {
+    try {
+      const p = JSON.parse(s);
+      if (typeof p?.x === 'number' && typeof p?.y === 'number') return { x: p.x as number, y: p.y as number };
+    } catch { /* ignore */ }
+    return null;
+  };
+  return tryParse(clean) ?? tryParse(clean.match(/\{[\s\S]*?\}/)?.[0] ?? '');
+}
+
+/** Compute zoom box and return refined coordinates, or null if crop failed. */
+export async function refineCoordinates(
+  imgBuffer: Buffer,
+  x: number,
+  y: number,
+  screenW: number,
+  screenH: number,
+  action: ControlAction,
+  askLLM: (systemPrompt: string, imageBase64: string) => Promise<string>,
+): Promise<{ x: number; y: number } | null> {
+  const bx1 = Math.max(0, x - ZOOM_RADIUS);
+  const by1 = Math.max(0, y - ZOOM_RADIUS);
+  const bx2 = Math.min(screenW - 1, x + ZOOM_RADIUS);
+  const by2 = Math.min(screenH - 1, y + ZOOM_RADIUS);
+  const srcW = bx2 - bx1;
+  const srcH = by2 - by1;
+  const outW = Math.round(srcW * ZOOM_SCALE);
+  const outH = Math.round(srcH * ZOOM_SCALE);
+
+  const zoomedBuf = await cropAndScale(imgBuffer, bx1, by1, srcW, srcH, outW, outH);
+  if (!zoomedBuf) return null;
+
+  const raw = await askLLM(
+    buildZoomPrompt(action, bx1, by1, bx2, by2, outW, outH),
+    zoomedBuf.toString('base64'),
+  );
+
+  const refined = parseZoomResponse(raw);
+  if (!refined) return null;
+
+  return {
+    x: Math.round(bx1 + refined.x / ZOOM_SCALE),
+    y: Math.round(by1 + refined.y / ZOOM_SCALE),
+  };
 }
 
 // === MONITORS ===

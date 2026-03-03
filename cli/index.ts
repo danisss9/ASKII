@@ -23,11 +23,13 @@ import {
 } from '@common/providers';
 import {
   buildControlSystemPrompt,
-  parseControlAction,
   takeScreenshot,
   describeAction,
   executeControlAction,
   getMonitors,
+  parseControlResponse,
+  refineCoordinates,
+  type ControlAction,
   type ControlHistoryEntry,
 } from '@common/control';
 import * as readline from 'readline';
@@ -616,6 +618,7 @@ async function main() {
       }
 
       const history: ControlHistoryEntry[] = [];
+      const ZOOM_ACTIONS = new Set(['mouse_left_click', 'mouse_right_click', 'mouse_double_click']);
       let round = 0;
       let prevScreenshot: string | undefined;
 
@@ -632,11 +635,11 @@ async function main() {
 
         const prompt =
           round === 0
-            ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action.`
-            : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and determine the next action, or return DONE if the instruction is complete.`;
+            ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action(s).`
+            : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and return the next action(s) or DONE.`;
 
         console.error('Asking AI...');
-        const response = await getResponse(
+        const rawResponse = await getResponse(
           config,
           prompt,
           buildControlSystemPrompt(screenW, screenH, history),
@@ -645,32 +648,66 @@ async function main() {
 
         if (abortController.signal.aborted) break;
 
-        const action = parseControlAction(response);
+        const parsed = parseControlResponse(rawResponse);
 
-        if (!action) {
-          console.error('Error: could not parse action from AI response.');
-          console.error(`Raw response: ${response}`);
+        if (!parsed) {
+          console.error('Error: could not parse AI response.');
+          console.error(`Raw response: ${rawResponse}`);
           break;
         }
 
-        if (action.action === 'DONE') {
+        if (parsed.type === 'done') {
           console.error(`\nDone! ${getRandomKaomoji()}`);
-          console.error(`Reasoning: ${action.reasoning}`);
+          console.error(`Reasoning: ${parsed.reasoning}`);
           break;
         }
 
-        const desc = describeAction(action);
-        console.error(`\nAction:    ${desc}`);
-        console.error(`Reasoning: ${action.reasoning}`);
+        let { actions } = parsed;
 
-        const ok = await confirm(rl, 'Execute this action?', config.yes);
+        // Two-phase zoom: refine coordinates for a single position-based click
+        if (actions.length === 1 && ZOOM_ACTIONS.has(actions[0].action)) {
+          const a = actions[0] as ControlAction & { x: number; y: number };
+          try {
+            console.error('Refining coordinates (zoom)...');
+            const imgBuf = Buffer.from(imageBase64, 'base64');
+            const refined = await refineCoordinates(
+              imgBuf, a.x, a.y, screenW, screenH, a,
+              (sys, img) => getResponse(config, sys, undefined, img),
+            );
+            if (refined) {
+              console.error(`Zoom: (${a.x}, ${a.y}) → (${refined.x}, ${refined.y})`);
+              a.x = refined.x;
+              a.y = refined.y;
+            }
+          } catch {
+            // zoom failed — use original coordinates
+          }
+        }
+
+        // Log planned actions
+        actions.forEach((a, i) => {
+          const label = actions.length > 1 ? `Action ${i + 1}/${actions.length}` : 'Action';
+          console.error(`\n${label}:    ${describeAction(a as ControlAction)}`);
+          console.error(`Reasoning: ${a.reasoning}`);
+        });
+
+        // Confirm
+        const confirmMsg =
+          actions.length === 1
+            ? 'Execute this action?'
+            : `Execute these ${actions.length} actions?`;
+        const ok = await confirm(rl, confirmMsg, config.yes);
         if (!ok || abortController.signal.aborted) {
           console.error('Stopped.');
           break;
         }
 
-        await executeControlAction(action, screenW, screenH, abortController.signal);
-        history.push({ round: round + 1, description: desc, reasoning: action.reasoning, screenChanged });
+        // Execute sequence
+        for (const a of actions) {
+          if (abortController.signal.aborted) break;
+          await executeControlAction(a as ControlAction, screenW, screenH, abortController.signal);
+          history.push({ round: round + 1, description: describeAction(a as ControlAction), reasoning: a.reasoning, screenChanged });
+        }
         console.error('Executed.\n');
 
         round++;

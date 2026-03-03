@@ -50,11 +50,13 @@ import { escapeHtml, unescapeJsonString, extractCode } from '@common/utils';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import {
   buildControlSystemPrompt,
-  parseControlAction,
   takeScreenshot,
   describeAction,
   executeControlAction,
   getMonitors,
+  parseControlResponse,
+  refineCoordinates,
+  type ControlAction,
   type ControlHistoryEntry,
 } from '@common/control';
 
@@ -748,7 +750,6 @@ export async function askiiControlCommand() {
   const config = vscode.workspace.getConfiguration('askii');
   const maxRounds = config.get<number>('doMaxRounds') ?? 5;
   const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
-  const actionDelay = config.get<number>('controlDelay');
 
   // Monitor selection
   let monitorId: string | number | undefined;
@@ -774,6 +775,7 @@ export async function askiiControlCommand() {
 
   const abortController = new AbortController();
   const history: ControlHistoryEntry[] = [];
+  const ZOOM_ACTIONS = new Set(['mouse_left_click', 'mouse_right_click', 'mouse_double_click']);
   let round = 0;
   let prevScreenshot: string | undefined;
 
@@ -799,38 +801,68 @@ export async function askiiControlCommand() {
 
           const prompt =
             round === 0
-              ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action.`
-              : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and determine the next action, or return DONE if the instruction is complete.`;
+              ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action(s).`
+              : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and return the next action(s) or DONE.`;
 
           outputChannel.appendLine('Asking AI...');
-          const response = await getExtensionResponseWithImage(
+          const rawResponse = await getExtensionResponseWithImage(
             `${buildControlSystemPrompt(screenW, screenH, history)}\n\n${prompt}`,
             imageBase64,
           );
 
           if (abortController.signal.aborted) { break; }
 
-          const action = parseControlAction(response);
+          const parsed = parseControlResponse(rawResponse);
 
-          if (!action) {
-            outputChannel.appendLine('Error: could not parse action from AI response.');
-            outputChannel.appendLine(`Raw response: ${response}`);
+          if (!parsed) {
+            outputChannel.appendLine('Error: could not parse AI response.');
+            outputChannel.appendLine(`Raw: ${rawResponse}`);
             break;
           }
 
-          if (action.action === 'DONE') {
+          if (parsed.type === 'done') {
             outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
-            outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
+            outputChannel.appendLine(`Reasoning: ${parsed.reasoning}`);
             break;
           }
 
-          const desc = describeAction(action);
-          outputChannel.appendLine(`Action: ${desc}`);
-          outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
+          let { actions } = parsed;
 
+          // Two-phase zoom: refine coordinates for a single position-based click
+          if (actions.length === 1 && ZOOM_ACTIONS.has(actions[0].action)) {
+            const a = actions[0] as ControlAction & { x: number; y: number };
+            try {
+              outputChannel.appendLine('Refining coordinates (zoom)...');
+              const imgBuf = Buffer.from(imageBase64, 'base64');
+              const refined = await refineCoordinates(
+                imgBuf, a.x, a.y, screenW, screenH, a,
+                (sys, img) => getExtensionResponseWithImage(sys, img),
+              );
+              if (refined) {
+                outputChannel.appendLine(`Zoom: (${a.x}, ${a.y}) → (${refined.x}, ${refined.y})`);
+                a.x = refined.x;
+                a.y = refined.y;
+              }
+            } catch {
+              // zoom failed — use original coordinates
+            }
+          }
+
+          // Log all planned actions
+          actions.forEach((a, i) => {
+            const label = actions.length > 1 ? `Action ${i + 1}/${actions.length}` : 'Action';
+            outputChannel.appendLine(`${label}: ${describeAction(a as ControlAction)}`);
+            outputChannel.appendLine(`Reasoning: ${a.reasoning}`);
+          });
+
+          // Confirm
           if (!autoConfirm) {
+            const label =
+              actions.length === 1
+                ? describeAction(actions[0] as ControlAction)
+                : `${actions.length} actions`;
             const choice = await vscode.window.showInformationMessage(
-              `ASKII Control: ${desc}`,
+              `ASKII Control: ${label}`,
               { modal: false },
               'Execute',
               'Stop',
@@ -841,10 +873,12 @@ export async function askiiControlCommand() {
             }
           }
 
-          outputChannel.appendLine('Executing...');
-          await executeControlAction(action, screenW, screenH, abortController.signal, actionDelay);
-
-          history.push({ round: round + 1, description: desc, reasoning: action.reasoning, screenChanged });
+          // Execute sequence
+          for (const a of actions) {
+            if (abortController.signal.aborted) break;
+            await executeControlAction(a as ControlAction, screenW, screenH, abortController.signal);
+            history.push({ round: round + 1, description: describeAction(a as ControlAction), reasoning: a.reasoning, screenChanged: true });
+          }
           outputChannel.appendLine('Done.\n');
 
           round++;
