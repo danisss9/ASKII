@@ -27,6 +27,8 @@ import {
   takeScreenshot,
   describeAction,
   executeControlAction,
+  getMonitors,
+  type ControlHistoryEntry,
 } from '@common/control';
 import * as readline from 'readline';
 import * as fs from 'fs';
@@ -579,18 +581,54 @@ async function main() {
     }
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    const abortController = new AbortController();
+
+    // Handle Ctrl+C gracefully
+    process.once('SIGINT', () => {
+      abortController.abort();
+      console.error('\n\nStopped by user (Ctrl+C).');
+      rl.close();
+      process.exit(0);
+    });
 
     try {
       console.error(`ASKII Control starting... ${getRandomThinkingKaomoji()}`);
       console.error(`Instruction: ${instruction}`);
-      console.error('(Make sure your model supports vision/images)\n');
+      console.error('(Make sure your model supports vision/images)');
+      console.error('Press Ctrl+C to stop at any time.\n');
 
+      // Monitor selection
+      let monitorId: string | number | undefined;
+      try {
+        const monitors = await getMonitors();
+        if (monitors.length > 1) {
+          console.error('Available monitors:');
+          monitors.forEach((m, i) => console.error(`  [${i + 1}] ${m.name}`));
+          const answer = await new Promise<string>((resolve) => {
+            rl.question('Select monitor (number, default=1): ', resolve);
+          });
+          const idx = Math.max(0, Math.min(monitors.length - 1, (parseInt(answer) || 1) - 1));
+          monitorId = monitors[idx].id;
+          console.error(`Using: ${monitors[idx].name}\n`);
+        }
+      } catch {
+        // proceed with default monitor
+      }
+
+      const history: ControlHistoryEntry[] = [];
       let round = 0;
+      let prevScreenshot: string | undefined;
 
-      while (round < config.maxRounds) {
+      while (round < config.maxRounds && !abortController.signal.aborted) {
         console.error(`Round ${round + 1}/${config.maxRounds} — taking screenshot...`);
 
-        const { base64: imageBase64, width: screenW, height: screenH } = await takeScreenshot();
+        const { base64: imageBase64, width: screenW, height: screenH } = await takeScreenshot(monitorId);
+
+        if (prevScreenshot !== undefined && prevScreenshot === imageBase64) {
+          console.error('Warning: screen unchanged since last action.');
+        }
+        const screenChanged = prevScreenshot === undefined || prevScreenshot !== imageBase64;
+        prevScreenshot = imageBase64;
 
         const prompt =
           round === 0
@@ -601,9 +639,11 @@ async function main() {
         const response = await getResponse(
           config,
           prompt,
-          buildControlSystemPrompt(screenW, screenH),
+          buildControlSystemPrompt(screenW, screenH, history),
           imageBase64,
         );
+
+        if (abortController.signal.aborted) break;
 
         const action = parseControlAction(response);
 
@@ -624,18 +664,19 @@ async function main() {
         console.error(`Reasoning: ${action.reasoning}`);
 
         const ok = await confirm(rl, 'Execute this action?', config.yes);
-        if (!ok) {
+        if (!ok || abortController.signal.aborted) {
           console.error('Stopped.');
           break;
         }
 
-        await executeControlAction(action, screenW, screenH);
+        await executeControlAction(action, screenW, screenH, abortController.signal);
+        history.push({ round: round + 1, description: desc, reasoning: action.reasoning, screenChanged });
         console.error('Executed.\n');
 
         round++;
       }
 
-      if (round >= config.maxRounds) {
+      if (round >= config.maxRounds && !abortController.signal.aborted) {
         console.error(`Max rounds (${config.maxRounds}) reached.`);
       }
 

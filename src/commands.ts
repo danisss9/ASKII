@@ -54,6 +54,8 @@ import {
   takeScreenshot,
   describeAction,
   executeControlAction,
+  getMonitors,
+  type ControlHistoryEntry,
 } from '@common/control';
 
 export async function askAskiiCommand() {
@@ -746,6 +748,23 @@ export async function askiiControlCommand() {
   const config = vscode.workspace.getConfiguration('askii');
   const maxRounds = config.get<number>('doMaxRounds') ?? 5;
   const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
+  const actionDelay = config.get<number>('controlDelay');
+
+  // Monitor selection
+  let monitorId: string | number | undefined;
+  try {
+    const monitors = await getMonitors();
+    if (monitors.length > 1) {
+      const pick = await vscode.window.showQuickPick(
+        monitors.map((m) => ({ label: m.name, id: m.id })),
+        { placeHolder: 'Select monitor to control' },
+      );
+      if (!pick) return;
+      monitorId = pick.id;
+    }
+  } catch {
+    // proceed with default monitor
+  }
 
   const outputChannel = vscode.window.createOutputChannel('ASKII Control');
   outputChannel.show(true);
@@ -753,69 +772,92 @@ export async function askiiControlCommand() {
   outputChannel.appendLine(`Instruction: ${instruction}`);
   outputChannel.appendLine('');
 
+  const abortController = new AbortController();
+  const history: ControlHistoryEntry[] = [];
   let round = 0;
+  let prevScreenshot: string | undefined;
 
-  try {
-    while (round < maxRounds) {
-      outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — taking screenshot...`);
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'ASKII Control', cancellable: true },
+    async (_progress, token) => {
+      token.onCancellationRequested(() => {
+        abortController.abort();
+        outputChannel.appendLine('Stopped by user.');
+      });
 
-      const { base64: imageBase64, width: screenW, height: screenH } = await takeScreenshot();
+      try {
+        while (round < maxRounds && !abortController.signal.aborted) {
+          outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — taking screenshot...`);
 
-      const prompt =
-        round === 0
-          ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action.`
-          : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and determine the next action, or return DONE if the instruction is complete.`;
+          const { base64: imageBase64, width: screenW, height: screenH } = await takeScreenshot(monitorId);
 
-      outputChannel.appendLine('Asking AI...');
-      const response = await getExtensionResponseWithImage(
-        `${buildControlSystemPrompt(screenW, screenH)}\n\n${prompt}`,
-        imageBase64,
-      );
+          const screenChanged = prevScreenshot === undefined || prevScreenshot !== imageBase64;
+          if (prevScreenshot !== undefined && !screenChanged) {
+            outputChannel.appendLine('Warning: screen unchanged since last action.');
+          }
+          prevScreenshot = imageBase64;
 
-      const action = parseControlAction(response);
+          const prompt =
+            round === 0
+              ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action.`
+              : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and determine the next action, or return DONE if the instruction is complete.`;
 
-      if (!action) {
-        outputChannel.appendLine('Error: could not parse action from AI response.');
-        outputChannel.appendLine(`Raw response: ${response}`);
-        break;
-      }
+          outputChannel.appendLine('Asking AI...');
+          const response = await getExtensionResponseWithImage(
+            `${buildControlSystemPrompt(screenW, screenH, history)}\n\n${prompt}`,
+            imageBase64,
+          );
 
-      if (action.action === 'DONE') {
-        outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
-        outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
-        break;
-      }
+          if (abortController.signal.aborted) { break; }
 
-      const desc = describeAction(action);
-      outputChannel.appendLine(`Action: ${desc}`);
-      outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
+          const action = parseControlAction(response);
 
-      if (!autoConfirm) {
-        const choice = await vscode.window.showInformationMessage(
-          `ASKII Control: ${desc}`,
-          { modal: false },
-          'Execute',
-          'Stop',
-        );
-        if (choice !== 'Execute') {
-          outputChannel.appendLine('Stopped by user.');
-          break;
+          if (!action) {
+            outputChannel.appendLine('Error: could not parse action from AI response.');
+            outputChannel.appendLine(`Raw response: ${response}`);
+            break;
+          }
+
+          if (action.action === 'DONE') {
+            outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
+            outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
+            break;
+          }
+
+          const desc = describeAction(action);
+          outputChannel.appendLine(`Action: ${desc}`);
+          outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
+
+          if (!autoConfirm) {
+            const choice = await vscode.window.showInformationMessage(
+              `ASKII Control: ${desc}`,
+              { modal: false },
+              'Execute',
+              'Stop',
+            );
+            if (choice !== 'Execute' || abortController.signal.aborted) {
+              outputChannel.appendLine('Stopped by user.');
+              break;
+            }
+          }
+
+          outputChannel.appendLine('Executing...');
+          await executeControlAction(action, screenW, screenH, abortController.signal, actionDelay);
+
+          history.push({ round: round + 1, description: desc, reasoning: action.reasoning, screenChanged });
+          outputChannel.appendLine('Done.\n');
+
+          round++;
         }
+
+        if (round >= maxRounds && !abortController.signal.aborted) {
+          outputChannel.appendLine(`Max rounds (${maxRounds}) reached.`);
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        outputChannel.appendLine(`Error: ${errorMsg}`);
+        vscode.window.showErrorMessage(`ASKII Control failed: ${errorMsg}`);
       }
-
-      outputChannel.appendLine('Executing...');
-      await executeControlAction(action, screenW, screenH);
-      outputChannel.appendLine('Done.\n');
-
-      round++;
-    }
-
-    if (round >= maxRounds) {
-      outputChannel.appendLine(`Max rounds (${maxRounds}) reached.`);
-    }
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    outputChannel.appendLine(`Error: ${errorMsg}`);
-    vscode.window.showErrorMessage(`ASKII Control failed: ${errorMsg}`);
-  }
+    },
+  );
 }
