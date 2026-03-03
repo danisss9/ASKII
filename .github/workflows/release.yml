@@ -20,7 +20,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Extract version from tag
@@ -58,7 +58,7 @@ jobs:
 
       - name: Publish CLI to npm
         working-directory: ./cli
-        run: npm publish --provenance --access public
+        run: npm publish --access public
 
       # ── VS Code Marketplace ───────────────────────────────────────────────
       # Requires a MARKETPLACE_PAT secret: a Personal Access Token from
