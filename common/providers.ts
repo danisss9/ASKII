@@ -1,6 +1,11 @@
 import { Ollama } from 'ollama';
 import { type ChatMessageInput, LMStudioClient } from '@lmstudio/sdk';
 
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
 export async function getOllamaResponse(
   prompt: string,
   url: string,
@@ -28,6 +33,20 @@ export async function getOllamaResponseStreaming(
   }
 }
 
+export async function getOllamaChat(
+  messages: ChatMessage[],
+  url: string,
+  model: string,
+): Promise<string> {
+  const ollama = new Ollama({ host: url });
+  const response = await ollama.chat({
+    model,
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    stream: false,
+  });
+  return response.message.content || 'No response';
+}
+
 export async function getLMStudioResponse(
   prompt: string,
   url: string,
@@ -47,6 +66,26 @@ export async function getLMStudioResponse(
       ? [{ role: 'system', content: system }, userMessage]
       : [userMessage];
     const result = await llmModel.respond(messages);
+    return result.content || 'No response';
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    throw new Error(`LM Studio error: ${errorMessage}`);
+  }
+}
+
+export async function getLMStudioChat(
+  messages: ChatMessage[],
+  url: string,
+  model: string,
+): Promise<string> {
+  try {
+    const client = new LMStudioClient({ baseUrl: url });
+    const llmModel = await client.llm.model(model);
+    const lmsMessages: ChatMessageInput[] = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+    const result = await llmModel.respond(lmsMessages);
     return result.content || 'No response';
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

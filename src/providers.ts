@@ -2,7 +2,10 @@ import * as vscode from 'vscode';
 import {
   getOllamaResponse,
   getOllamaResponseStreaming,
+  getOllamaChat,
   getLMStudioResponse,
+  getLMStudioChat,
+  type ChatMessage,
 } from '@common/providers';
 
 export async function getExtensionResponseWithImage(
@@ -128,6 +131,42 @@ export async function getExtensionResponse(prompt: string, system?: string): Pro
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
     return getOllamaResponse(prompt, url, model, system);
+  }
+}
+
+export async function getExtensionChat(messages: ChatMessage[]): Promise<string> {
+  const config = vscode.workspace.getConfiguration('askii');
+  const platform = config.get<string>('llmPlatform') || 'ollama';
+
+  if (platform === 'copilot') {
+    const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
+    const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
+    if (models.length === 0) throw new Error('GitHub Copilot not available');
+    const model = models[0];
+
+    const vsMessages: vscode.LanguageModelChatMessage[] = messages.map((m) => {
+      if (m.role === 'assistant') return vscode.LanguageModelChatMessage.Assistant(m.content);
+      return vscode.LanguageModelChatMessage.User(m.content);
+    });
+
+    const chatResponse = await model.sendRequest(
+      vsMessages,
+      {},
+      new vscode.CancellationTokenSource().token,
+    );
+    let responseText = '';
+    for await (const fragment of chatResponse.text) {
+      responseText += fragment;
+    }
+    return responseText;
+  } else if (platform === 'lmstudio') {
+    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
+    const mdl = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
+    return getLMStudioChat(messages, url, mdl);
+  } else {
+    const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
+    const mdl = config.get<string>('ollamaModel') || 'gemma3:270m';
+    return getOllamaChat(messages, url, mdl);
   }
 }
 

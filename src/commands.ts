@@ -27,10 +27,22 @@ import {
   getExtensionResponse,
   getExtensionResponseStreaming,
   getExtensionResponseWithImage,
+  getExtensionChat,
   getLLMExplanation,
 } from './providers';
-import { getWorkspaceStructure, parseWorkspaceActions } from '@common/workspace';
-import { escapeHtml, escapeJsonString, unescapeJsonString, extractCode } from '@common/utils';
+
+import {
+  getWorkspaceStructure,
+  parseWorkspaceActions,
+  sandboxPath,
+  executeViewAction,
+  executeSearchAction,
+  buildDoSystemPrompt,
+  type WorkspaceAction,
+  type ActionResult,
+} from '@common/workspace';
+import { type ChatMessage } from '@common/providers';
+import { escapeHtml, unescapeJsonString, extractCode } from '@common/utils';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import {
   buildControlSystemPrompt,
@@ -383,9 +395,7 @@ export async function askiiDoCommand() {
     placeHolder: 'e.g., Create a test file, refactor common patterns',
   });
 
-  if (!question) {
-    return;
-  }
+  if (!question) return;
 
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceRoot) {
@@ -393,207 +403,308 @@ export async function askiiDoCommand() {
     return;
   }
 
-  vscode.window.showInformationMessage('ASKII is working... (๑•﹏•)');
-
   const config = vscode.workspace.getConfiguration('askii');
   const maxRounds = config.get<number>('doMaxRounds') || 5;
   const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
   const formatAfterEdit = config.get<boolean>('formatAfterEdit') ?? false;
+  const rootPath = workspaceRoot.uri.fsPath;
+
+  const channel = vscode.window.createOutputChannel('ASKII Do');
+  channel.show(true);
+  channel.appendLine(`Task: ${question}`);
 
   try {
-    const workspaceStructure = getWorkspaceStructure(workspaceRoot.uri.fsPath);
+    const workspaceStructure = getWorkspaceStructure(rootPath);
+    const systemPrompt = buildDoSystemPrompt(workspaceStructure);
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: question },
+    ];
+
     let completedActions = 0;
     let roundCount = 0;
 
-    const systemPrompt = `You are ASKII, an AI agent that can create, modify, view, delete, rename, and list files in a workspace.
-
-Current workspace structure:
-\`\`\`
-${workspaceStructure}
-\`\`\`
-
-You have access to the following action types:
-- {"type": "view", "path": "path/to/file"} - View file contents, responses will be sent back to you
-- {"type": "list", "path": "path/to/folder"} - List files in a folder, results will be sent back to you
-- {"type": "create", "path": "path/to/file", "content": "file content"}
-- {"type": "modify", "path": "path/to/file", "oldContent": "text to replace", "newContent": "replacement text"}
-- {"type": "rename", "path": "old/path", "newPath": "new/path"} - Rename or move a file
-- {"type": "delete", "path": "path/to/file"}
-
-Always respond with ONLY a valid JSON array containing the actions. You can request to view files or list folders to inspect them, and their contents will be sent back to you for further analysis.`;
-
-    let userMessage = question;
-
     while (roundCount < maxRounds) {
-      const fullPrompt =
-        roundCount === 0
-          ? `${systemPrompt}\n\nUser request: ${userMessage}`
-          : `${systemPrompt}\n\n${userMessage}`;
+      channel.appendLine(`\n[Round ${roundCount + 1}/${maxRounds}]`);
 
-      const responseText = await getExtensionResponse(fullPrompt);
+      const responseText = await getExtensionChat(messages);
+      messages.push({ role: 'assistant', content: responseText });
+
       const actions = parseWorkspaceActions(responseText);
-
       if (actions.length === 0) {
+        channel.appendLine('No actions returned. Done.');
         break;
       }
 
-      const viewActions = actions.filter((a) => a.type === 'view' || a.type === 'list');
-      const otherActions = actions.filter((a) => a.type !== 'view' && a.type !== 'list');
+      const readActions = actions.filter((a) =>
+        a.type === 'view' || a.type === 'list' || a.type === 'search',
+      );
+      const writeActions = actions.filter(
+        (a) => a.type !== 'view' && a.type !== 'list' && a.type !== 'search',
+      );
 
-      const viewResults: { [key: string]: string } = {};
-      for (const action of viewActions) {
-        const filePath = path.join(workspaceRoot.uri.fsPath, action.path);
+      const feedbackParts: string[] = [];
+
+      // ── Read actions (no confirmation) ──────────────────────────────────────
+      const viewResults: Record<string, string> = {};
+      for (const action of readActions) {
         try {
-          if (action.type === 'list') {
-            const entries = fs.readdirSync(filePath).map((name) => {
-              const stat = fs.statSync(path.join(filePath, name));
-              return `${name} [${stat.isDirectory() ? 'folder' : 'file'}]`;
-            });
-            viewResults[action.path] = entries.join('\n');
-          } else {
-            viewResults[action.path] = escapeJsonString(fs.readFileSync(filePath, 'utf-8'));
-          }
-        } catch {
-          viewResults[action.path] = `Error: Cannot read path`;
-        }
-      }
-
-      for (const action of otherActions) {
-        const filePath = path.join(workspaceRoot.uri.fsPath, action.path);
-
-        if (action.type === 'create') {
-          const confirmed =
-            autoConfirm ||
-            (await vscode.window.showInformationMessage(
-              `Create file: ${action.path}?`,
-              { modal: false },
-              'Create',
-              'Skip',
-            )) === 'Create';
-          if (confirmed) {
-            const dir = path.dirname(filePath);
-            if (!fs.existsSync(dir)) {
-              fs.mkdirSync(dir, { recursive: true });
-            }
-            const unescapedContent = action.content ? unescapeJsonString(action.content) : '';
-            fs.writeFileSync(filePath, unescapedContent);
-            completedActions++;
-            vscode.window.showInformationMessage(`✓ Created: ${action.path}`);
-            if (formatAfterEdit) {
-              const uri = vscode.Uri.file(filePath);
-              const doc = await vscode.workspace.openTextDocument(uri);
-              const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
-                'vscode.executeFormatDocumentProvider',
-                doc.uri,
-                { tabSize: 2, insertSpaces: true },
-              );
-              if (edits && edits.length > 0) {
-                const workspaceEdit = new vscode.WorkspaceEdit();
-                workspaceEdit.set(doc.uri, edits);
-                await vscode.workspace.applyEdit(workspaceEdit);
-                await doc.save();
-              }
-            }
-          }
-        } else if (action.type === 'modify') {
-          const confirmed =
-            autoConfirm ||
-            (await vscode.window.showInformationMessage(
-              `Modify file: ${action.path}?`,
-              { modal: false },
-              'Modify',
-              'Skip',
-            )) === 'Modify';
-          if (confirmed) {
-            try {
-              const content = fs.readFileSync(filePath, 'utf-8');
-              const oldContent = action.oldContent ? unescapeJsonString(action.oldContent) : '';
-              const newContent = action.newContent ? unescapeJsonString(action.newContent) : '';
-              const updated = content.replace(oldContent, newContent);
-              fs.writeFileSync(filePath, updated);
-              completedActions++;
-              vscode.window.showInformationMessage(`✓ Modified: ${action.path}`);
-              if (formatAfterEdit) {
-                const uri = vscode.Uri.file(filePath);
-                const doc = await vscode.workspace.openTextDocument(uri);
-                const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
-                  'vscode.executeFormatDocumentProvider',
-                  doc.uri,
-                  { tabSize: 2, insertSpaces: true },
-                );
-                if (edits && edits.length > 0) {
-                  const workspaceEdit = new vscode.WorkspaceEdit();
-                  workspaceEdit.set(doc.uri, edits);
-                  await vscode.workspace.applyEdit(workspaceEdit);
-                  await doc.save();
-                }
-              }
-            } catch {
-              vscode.window.showErrorMessage(`Cannot modify file: ${action.path}`);
-            }
-          }
-        } else if (action.type === 'delete') {
-          const confirmed =
-            autoConfirm ||
-            (await vscode.window.showWarningMessage(
-              `Delete file: ${action.path}? This cannot be undone.`,
-              { modal: false },
-              'Delete',
-              'Cancel',
-            )) === 'Delete';
-          if (confirmed) {
-            try {
-              fs.unlinkSync(filePath);
-              completedActions++;
-              vscode.window.showInformationMessage(`✓ Deleted: ${action.path}`);
-            } catch {
-              vscode.window.showErrorMessage(`Cannot delete file: ${action.path}`);
-            }
-          }
-        } else if (action.type === 'rename') {
-          const newFilePath = action.newPath
-            ? path.join(workspaceRoot.uri.fsPath, action.newPath)
-            : null;
-          if (!newFilePath) {
-            vscode.window.showErrorMessage(`Rename missing newPath: ${action.path}`);
-          } else {
-            const confirmed =
-              autoConfirm ||
-              (await vscode.window.showInformationMessage(
-                `Rename: ${action.path} → ${action.newPath}?`,
-                { modal: false },
-                'Rename',
-                'Skip',
-              )) === 'Rename';
-            if (confirmed) {
+          if (action.type === 'search') {
+            channel.appendLine(`Search: "${action.pattern}"`);
+            viewResults[`search:${action.pattern}`] = executeSearchAction(action, rootPath);
+          } else if (action.type === 'view' && action.paths) {
+            for (const p of action.paths) {
+              channel.appendLine(`Viewing: ${p}`);
               try {
-                const newDir = path.dirname(newFilePath);
-                if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
-                fs.renameSync(filePath, newFilePath);
-                completedActions++;
-                vscode.window.showInformationMessage(
-                  `✓ Renamed: ${action.path} → ${action.newPath}`,
-                );
-              } catch {
-                vscode.window.showErrorMessage(`Cannot rename: ${action.path}`);
+                viewResults[p] = executeViewAction({ ...action, path: p, paths: undefined }, rootPath);
+              } catch (e) {
+                viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
               }
             }
+          } else {
+            channel.appendLine(`${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`);
+            viewResults[action.path!] = executeViewAction(action, rootPath);
           }
+        } catch (e) {
+          viewResults[action.path ?? 'unknown'] =
+            `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
         }
       }
 
       if (Object.keys(viewResults).length > 0) {
-        userMessage = `File contents retrieved:\n${JSON.stringify(viewResults, null, 2)}\n\nWhat would you like to do next? Respond with only a JSON array of actions or an empty array [] if done.`;
-      } else {
-        userMessage = `Actions completed. What would you like to do next? Respond with only a JSON array of actions or an empty array [] if done.`;
+        feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
       }
+
+      // ── Write actions (with confirmation) ───────────────────────────────────
+      const actionResults: ActionResult[] = [];
+
+      for (const action of writeActions) {
+        // Sandbox check
+        let filePath: string;
+        try {
+          filePath = sandboxPath(rootPath, action.path!);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'Path error';
+          channel.appendLine(`BLOCKED: ${msg}`);
+          actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail: msg });
+          continue;
+        }
+
+        if (action.type === 'run') {
+          channel.appendLine(`Run: ${action.command}`);
+          const choice = await vscode.window.showInformationMessage(
+            `ASKII Do — run command?\n${action.command}`,
+            { modal: true },
+            'Run',
+            'Skip',
+          );
+          if (choice !== 'Run') {
+            actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
+            continue;
+          }
+          try {
+            const { execSync } = await import('child_process');
+            const output = execSync(action.command!, {
+              cwd: rootPath,
+              encoding: 'utf-8',
+              timeout: 30000,
+            });
+            channel.appendLine(`Run output: ${output.substring(0, 200)}`);
+            actionResults.push({
+              action: `run:${action.command}`,
+              status: 'ok',
+              detail: output.substring(0, 500),
+            });
+          } catch (e: unknown) {
+            const err = e as { stdout?: string; stderr?: string; message?: string };
+            const detail = `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
+            channel.appendLine(`Run failed: ${detail.substring(0, 200)}`);
+            actionResults.push({
+              action: `run:${action.command}`,
+              status: 'error',
+              detail: detail.substring(0, 500),
+            });
+          }
+          continue;
+        }
+
+        // Confirmation for all other write actions
+        const confirmMsg = _doConfirmMessage(action);
+        let confirmed = autoConfirm;
+        if (!confirmed) {
+          const choice = await vscode.window.showInformationMessage(
+            `ASKII Do — ${confirmMsg}`,
+            { modal: true },
+            'Confirm',
+            'Skip',
+          );
+          confirmed = choice === 'Confirm';
+        }
+
+        if (!confirmed) {
+          actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
+          continue;
+        }
+
+        try {
+          const result = await _executeWriteAction(action, filePath, rootPath, formatAfterEdit);
+          if (result === 'ok') completedActions++;
+          actionResults.push({
+            action: `${action.type}:${action.path}`,
+            status: result === 'ok' ? 'ok' : 'error',
+            detail: result === 'ok' ? undefined : result,
+          });
+          if (result === 'ok') {
+            channel.appendLine(`✓ ${_doActionLabel(action)}`);
+          } else {
+            channel.appendLine(`✗ Failed: ${result}`);
+          }
+        } catch (e) {
+          const detail = e instanceof Error ? e.message : 'Unknown error';
+          channel.appendLine(`✗ Failed: ${detail}`);
+          actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail });
+        }
+      }
+
+      if (actionResults.length > 0) {
+        feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
+      }
+
+      if (feedbackParts.length === 0) break;
+
+      messages.push({
+        role: 'user',
+        content:
+          feedbackParts.join('\n\n') +
+          '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
+      });
+
       roundCount++;
     }
 
-    vscode.window.showInformationMessage(`Completed ${completedActions} actions! (⌐■_■)`);
+    if (roundCount >= maxRounds) channel.appendLine(`Max rounds (${maxRounds}) reached.`);
+    channel.appendLine(`\nCompleted ${completedActions} actions! (⌐■_■)`);
+    vscode.window.showInformationMessage(`ASKII Do: ${completedActions} actions completed.`);
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    channel.appendLine(`\nError: ${errorMsg}`);
     vscode.window.showErrorMessage(`ASKII Do failed: ${errorMsg}`);
+  }
+}
+
+async function _applyFormat(filePath: string): Promise<void> {
+  const uri = vscode.Uri.file(filePath);
+  const doc = await vscode.workspace.openTextDocument(uri);
+  const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+    'vscode.executeFormatDocumentProvider',
+    doc.uri,
+    { tabSize: 2, insertSpaces: true },
+  );
+  if (edits && edits.length > 0) {
+    const workspaceEdit = new vscode.WorkspaceEdit();
+    workspaceEdit.set(doc.uri, edits);
+    await vscode.workspace.applyEdit(workspaceEdit);
+    await doc.save();
+  }
+}
+
+async function _executeWriteAction(
+  action: WorkspaceAction,
+  filePath: string,
+  rootPath: string,
+  formatAfterEdit: boolean,
+): Promise<'ok' | string> {
+  switch (action.type) {
+    case 'mkdir': {
+      fs.mkdirSync(filePath, { recursive: true });
+      return 'ok';
+    }
+
+    case 'copy': {
+      if (!action.newPath) return 'copy requires newPath';
+      const destPath = sandboxPath(rootPath, action.newPath);
+      const destDir = path.dirname(destPath);
+      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+      fs.copyFileSync(filePath, destPath);
+      return 'ok';
+    }
+
+    case 'create':
+    case 'write': {
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const content = action.content ? unescapeJsonString(action.content) : '';
+      fs.writeFileSync(filePath, content);
+      if (formatAfterEdit) await _applyFormat(filePath);
+      return 'ok';
+    }
+
+    case 'modify': {
+      const existing = fs.readFileSync(filePath, 'utf-8');
+      if (action.startLine !== undefined || action.endLine !== undefined) {
+        const lines = existing.split('\n');
+        const start = (action.startLine ?? 1) - 1;
+        const end = action.endLine ?? lines.length;
+        const replacement = (action.newContent ? unescapeJsonString(action.newContent) : '').split('\n');
+        lines.splice(start, end - start, ...replacement);
+        fs.writeFileSync(filePath, lines.join('\n'));
+      } else {
+        const oldContent = action.oldContent ? unescapeJsonString(action.oldContent) : '';
+        const newContent = action.newContent ? unescapeJsonString(action.newContent) : '';
+        if (oldContent && !existing.includes(oldContent)) {
+          return `oldContent not found in ${action.path}`;
+        }
+        fs.writeFileSync(filePath, existing.replace(oldContent, newContent));
+      }
+      if (formatAfterEdit) await _applyFormat(filePath);
+      return 'ok';
+    }
+
+    case 'delete': {
+      fs.unlinkSync(filePath);
+      return 'ok';
+    }
+
+    case 'rename': {
+      if (!action.newPath) return 'rename requires newPath';
+      const newFilePath = sandboxPath(rootPath, action.newPath);
+      const newDir = path.dirname(newFilePath);
+      if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
+      fs.renameSync(filePath, newFilePath);
+      return 'ok';
+    }
+
+    default:
+      return `Unknown action type: ${(action as WorkspaceAction).type}`;
+  }
+}
+
+function _doConfirmMessage(action: WorkspaceAction): string {
+  switch (action.type) {
+    case 'delete': return `Delete: ${action.path}?`;
+    case 'rename': return `Rename: ${action.path} → ${action.newPath}?`;
+    case 'copy':   return `Copy: ${action.path} → ${action.newPath}?`;
+    case 'mkdir':  return `Create directory: ${action.path}?`;
+    default: {
+      const t = action.type.charAt(0).toUpperCase() + action.type.slice(1);
+      return `${t}: ${action.path}?`;
+    }
+  }
+}
+
+function _doActionLabel(action: WorkspaceAction): string {
+  switch (action.type) {
+    case 'mkdir':  return `Created directory: ${action.path}`;
+    case 'copy':   return `Copied: ${action.path} → ${action.newPath}`;
+    case 'create': return `Created: ${action.path}`;
+    case 'write':  return `Wrote: ${action.path}`;
+    case 'modify': return action.startLine !== undefined
+      ? `Modified (lines ${action.startLine}–${action.endLine}): ${action.path}`
+      : `Modified: ${action.path}`;
+    case 'delete': return `Deleted: ${action.path}`;
+    case 'rename': return `Renamed: ${action.path} → ${action.newPath}`;
+    default:       return `${action.type}: ${action.path}`;
   }
 }
 

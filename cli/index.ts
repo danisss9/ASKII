@@ -1,7 +1,22 @@
-import { getWorkspaceStructure, parseWorkspaceActions } from '@common/workspace';
+import {
+  getWorkspaceStructure,
+  parseWorkspaceActions,
+  sandboxPath,
+  executeViewAction,
+  executeSearchAction,
+  buildDoSystemPrompt,
+  type WorkspaceAction,
+  type ActionResult,
+} from '@common/workspace';
 import { unescapeJsonString, extractCode } from '@common/utils';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
-import { getOllamaResponse, getLMStudioResponse } from '@common/providers';
+import {
+  getOllamaResponse,
+  getLMStudioResponse,
+  getOllamaChat,
+  getLMStudioChat,
+  type ChatMessage,
+} from '@common/providers';
 import {
   buildControlSystemPrompt,
   parseControlAction,
@@ -84,6 +99,103 @@ async function getResponse(
       system,
       imageBase64 ? [imageBase64] : undefined,
     );
+  }
+}
+
+async function getChatResponse(config: Config, messages: ChatMessage[]): Promise<string> {
+  if (config.platform === 'lmstudio') {
+    return getLMStudioChat(messages, config.url, config.model);
+  }
+  return getOllamaChat(messages, config.url, config.model);
+}
+
+function executeCliWriteAction(
+  action: WorkspaceAction,
+  filePath: string,
+  workDir: string,
+): 'ok' | string {
+  switch (action.type) {
+    case 'mkdir': {
+      fs.mkdirSync(filePath, { recursive: true });
+      console.error(`  ✓ Created directory: ${action.path}`);
+      return 'ok';
+    }
+
+    case 'copy': {
+      if (!action.newPath) return 'copy requires newPath';
+      const destPath = sandboxPath(workDir, action.newPath);
+      const destDir = path.dirname(destPath);
+      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+      fs.copyFileSync(filePath, destPath);
+      console.error(`  ✓ Copied: ${action.path} → ${action.newPath}`);
+      return 'ok';
+    }
+
+    case 'create':
+    case 'write': {
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const content = action.content ? unescapeJsonString(action.content) : '';
+      fs.writeFileSync(filePath, content);
+      console.error(`  ✓ ${action.type === 'create' ? 'Created' : 'Wrote'}: ${action.path}`);
+      return 'ok';
+    }
+
+    case 'modify': {
+      const existing = fs.readFileSync(filePath, 'utf-8');
+      if (action.startLine !== undefined || action.endLine !== undefined) {
+        const lines = existing.split('\n');
+        const start = (action.startLine ?? 1) - 1;
+        const end = action.endLine ?? lines.length;
+        const replacement = (action.newContent ? unescapeJsonString(action.newContent) : '').split('\n');
+        lines.splice(start, end - start, ...replacement);
+        fs.writeFileSync(filePath, lines.join('\n'));
+        console.error(`  ✓ Modified (lines ${action.startLine}–${action.endLine}): ${action.path}`);
+      } else {
+        const oldContent = action.oldContent ? unescapeJsonString(action.oldContent) : '';
+        const newContent = action.newContent ? unescapeJsonString(action.newContent) : '';
+        if (oldContent && !existing.includes(oldContent)) {
+          return `oldContent not found in ${action.path}`;
+        }
+        fs.writeFileSync(filePath, existing.replace(oldContent, newContent));
+        console.error(`  ✓ Modified: ${action.path}`);
+      }
+      return 'ok';
+    }
+
+    case 'delete': {
+      fs.unlinkSync(filePath);
+      console.error(`  ✓ Deleted: ${action.path}`);
+      return 'ok';
+    }
+
+    case 'rename': {
+      if (!action.newPath) return 'rename requires newPath';
+      const newFilePath = sandboxPath(workDir, action.newPath);
+      const newDir = path.dirname(newFilePath);
+      if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
+      fs.renameSync(filePath, newFilePath);
+      console.error(`  ✓ Renamed: ${action.path} → ${action.newPath}`);
+      return 'ok';
+    }
+
+    default:
+      return `Unknown action type: ${(action as WorkspaceAction).type}`;
+  }
+}
+
+function buildCliConfirmMessage(action: WorkspaceAction): string {
+  switch (action.type) {
+    case 'delete':
+      return `Delete file: ${action.path}? (backup will be created)`;
+    case 'rename':
+      return `Rename: ${action.path} → ${action.newPath}?`;
+    case 'copy':
+      return `Copy: ${action.path} → ${action.newPath}?`;
+    case 'mkdir':
+      return `Create directory: ${action.path}?`;
+    default:
+      return `${action.type}: ${action.path}?`;
   }
 }
 
@@ -268,7 +380,7 @@ async function main() {
       process.exit(1);
     }
 
-    const workDir = getFlagValue(flags, '--dir') || process.cwd();
+    const workDir = path.resolve(getFlagValue(flags, '--dir') || process.cwd());
 
     console.error(`ASKII is working... ${getRandomThinkingKaomoji()}`);
 
@@ -277,137 +389,159 @@ async function main() {
     try {
       const workspaceStructure = getWorkspaceStructure(workDir);
       console.error(`\nWorkspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
+
+      const systemPrompt = buildDoSystemPrompt(workspaceStructure);
+      const messages: ChatMessage[] = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: task },
+      ];
+
       let completedActions = 0;
       let roundCount = 0;
 
-      const systemPrompt = `You are ASKII, an AI agent that can create, modify, view, delete, rename, and list files in a workspace.
-
-Current workspace structure:
-\`\`\`
-${workspaceStructure}
-\`\`\`
-
-You have access to the following action types:
-- {"type": "view", "path": "path/to/file"} - View file contents, results sent back to you
-- {"type": "list", "path": "path/to/folder"} - List files in a folder, results sent back to you
-- {"type": "create", "path": "path/to/file", "content": "file content"}
-- {"type": "modify", "path": "path/to/file", "oldContent": "text to replace", "newContent": "replacement text"}
-- {"type": "rename", "path": "old/path", "newPath": "new/path"} - Rename or move a file
-- {"type": "delete", "path": "path/to/file"}
-
-Always respond with ONLY a valid JSON array containing the actions. You can request to view files or list folders to inspect them, and their contents will be sent back to you.`;
-
-      let userMessage = task;
-
       while (roundCount < config.maxRounds) {
-        const fullPrompt =
-          roundCount === 0
-            ? `${systemPrompt}\n\nUser request: ${userMessage}`
-            : `${systemPrompt}\n\n${userMessage}`;
+        console.error(`\n[Round ${roundCount + 1}/${config.maxRounds}]`);
 
-        const responseText = await getResponse(config, fullPrompt);
+        const responseText = await getChatResponse(config, messages);
+        messages.push({ role: 'assistant', content: responseText });
+
         const actions = parseWorkspaceActions(responseText);
-
-        if (actions.length === 0) break;
-
-        const viewActions = actions.filter((a) => a.type === 'view' || a.type === 'list');
-        const otherActions = actions.filter((a) => a.type !== 'view' && a.type !== 'list');
-
-        const viewResults: Record<string, string> = {};
-        for (const action of viewActions) {
-          const filePath = path.join(workDir, action.path);
-          try {
-            if (action.type === 'list') {
-              console.error(`  → Listing: ${action.path}`);
-              const entries = fs.readdirSync(filePath).map((name) => {
-                const stat = fs.statSync(path.join(filePath, name));
-                return `${name} [${stat.isDirectory() ? 'folder' : 'file'}]`;
-              });
-              viewResults[action.path] = entries.join('\n');
-            } else {
-              console.error(`  → Viewing: ${action.path}`);
-              viewResults[action.path] = fs.readFileSync(filePath, 'utf-8');
-            }
-          } catch {
-            viewResults[action.path] = 'Error: Cannot read path';
-          }
+        if (actions.length === 0) {
+          console.error('No actions returned. Done.');
+          break;
         }
 
-        for (const action of otherActions) {
-          const filePath = path.join(workDir, action.path);
+        const readActions = actions.filter(
+          (a) => a.type === 'view' || a.type === 'list' || a.type === 'search',
+        );
+        const writeActions = actions.filter(
+          (a) => a.type !== 'view' && a.type !== 'list' && a.type !== 'search',
+        );
 
-          if (action.type === 'create') {
-            const ok = await confirm(rl, `Create file: ${action.path}?`, config.yes);
-            if (ok) {
-              const dir = path.dirname(filePath);
-              if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-              const content = action.content ? unescapeJsonString(action.content) : '';
-              fs.writeFileSync(filePath, content);
-              completedActions++;
-              console.error(`  ✓ Created: ${action.path}`);
-            }
-          } else if (action.type === 'modify') {
-            const ok = await confirm(rl, `Modify file: ${action.path}?`, config.yes);
-            if (ok) {
-              try {
-                const content = fs.readFileSync(filePath, 'utf-8');
-                const oldContent = action.oldContent ? unescapeJsonString(action.oldContent) : '';
-                const newContent = action.newContent ? unescapeJsonString(action.newContent) : '';
-                fs.writeFileSync(filePath, content.replace(oldContent, newContent));
-                completedActions++;
-                console.error(`  ✓ Modified: ${action.path}`);
-              } catch {
-                console.error(`  ✗ Cannot modify: ${action.path}`);
-              }
-            }
-          } else if (action.type === 'delete') {
-            const ok = await confirm(
-              rl,
-              `Delete file: ${action.path}? This cannot be undone.`,
-              config.yes,
-            );
-            if (ok) {
-              try {
-                fs.unlinkSync(filePath);
-                completedActions++;
-                console.error(`  ✓ Deleted: ${action.path}`);
-              } catch {
-                console.error(`  ✗ Cannot delete: ${action.path}`);
-              }
-            }
-          } else if (action.type === 'rename') {
-            if (!action.newPath) {
-              console.error(`  ✗ Rename missing newPath: ${action.path}`);
-            } else {
-              const newFilePath = path.join(workDir, action.newPath);
-              const ok = await confirm(
-                rl,
-                `Rename: ${action.path} → ${action.newPath}?`,
-                config.yes,
-              );
-              if (ok) {
+        const feedbackParts: string[] = [];
+
+        // ── Read actions ──────────────────────────────────────────────────────
+        const viewResults: Record<string, string> = {};
+        for (const action of readActions) {
+          try {
+            if (action.type === 'search') {
+              console.error(`  → Search: "${action.pattern}"`);
+              viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);
+            } else if (action.type === 'view' && action.paths) {
+              for (const p of action.paths) {
+                console.error(`  → Viewing: ${p}`);
                 try {
-                  const newDir = path.dirname(newFilePath);
-                  if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
-                  fs.renameSync(filePath, newFilePath);
-                  completedActions++;
-                  console.error(`  ✓ Renamed: ${action.path} → ${action.newPath}`);
-                } catch {
-                  console.error(`  ✗ Cannot rename: ${action.path}`);
+                  viewResults[p] = executeViewAction({ ...action, path: p, paths: undefined }, workDir);
+                } catch (e) {
+                  viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
                 }
               }
+            } else {
+              console.error(
+                `  → ${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`,
+              );
+              viewResults[action.path!] = executeViewAction(action, workDir);
             }
+          } catch (e) {
+            viewResults[action.path ?? 'unknown'] =
+              `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
           }
         }
 
         if (Object.keys(viewResults).length > 0) {
-          userMessage = `File contents retrieved:\n${JSON.stringify(viewResults, null, 2)}\n\nWhat would you like to do next? Respond with only a JSON array of actions or an empty array [] if done.`;
-        } else {
-          userMessage = `Actions completed. What would you like to do next? Respond with only a JSON array of actions or an empty array [] if done.`;
+          feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
         }
+
+        // ── Write actions ─────────────────────────────────────────────────────
+        const actionResults: ActionResult[] = [];
+
+        for (const action of writeActions) {
+          // Sandbox validation
+          let filePath: string;
+          try {
+            filePath = sandboxPath(workDir, action.path!);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : 'Path error';
+            console.error(`  ✗ BLOCKED: ${msg}`);
+            actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail: msg });
+            continue;
+          }
+
+          if (action.type === 'run') {
+            // run ALWAYS requires explicit confirmation — ignores -y/--yes
+            console.error(`  → Run: ${action.command}`);
+            const ok = await confirm(rl, `Run command: "${action.command}"? (executes shell code)`, false);
+            if (!ok) {
+              actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
+              continue;
+            }
+            try {
+              const { execSync } = await import('child_process');
+              const output = execSync(action.command!, {
+                cwd: workDir,
+                encoding: 'utf-8',
+                timeout: 30000,
+              });
+              console.error(`  ✓ Run output:\n${output}`);
+              actionResults.push({
+                action: `run:${action.command}`,
+                status: 'ok',
+                detail: output.substring(0, 500),
+              });
+            } catch (e: unknown) {
+              const err = e as { stdout?: string; stderr?: string; message?: string };
+              const detail = `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
+              console.error(`  ✗ Run failed:\n${detail}`);
+              actionResults.push({
+                action: `run:${action.command}`,
+                status: 'error',
+                detail: detail.substring(0, 500),
+              });
+            }
+            continue;
+          }
+
+          const promptMsg = buildCliConfirmMessage(action);
+          const ok = await confirm(rl, promptMsg, config.yes);
+          if (!ok) {
+            actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
+            continue;
+          }
+
+          try {
+            const result = executeCliWriteAction(action, filePath, workDir);
+            if (result === 'ok') completedActions++;
+            actionResults.push({
+              action: `${action.type}:${action.path}`,
+              status: result === 'ok' ? 'ok' : 'error',
+              detail: result === 'ok' ? undefined : result,
+            });
+          } catch (e) {
+            const detail = e instanceof Error ? e.message : 'Unknown error';
+            console.error(`  ✗ Failed: ${detail}`);
+            actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail });
+          }
+        }
+
+        if (actionResults.length > 0) {
+          feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
+        }
+
+        if (feedbackParts.length === 0) break;
+
+        messages.push({
+          role: 'user',
+          content:
+            feedbackParts.join('\n\n') +
+            '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
+        });
+
         roundCount++;
       }
 
+      if (roundCount >= config.maxRounds) {
+        console.error(`\nMax rounds (${config.maxRounds}) reached.`);
+      }
       rl.close();
       console.error(`\nCompleted ${completedActions} actions! ${getRandomKaomoji()}`);
     } catch (error) {
