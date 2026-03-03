@@ -6,6 +6,7 @@ import {
   executeSearchAction,
   buildDoSystemPrompt,
   writeBackup,
+  recordCreatedFile,
   deleteAllBackups,
   restoreAllBackups,
   hasBackups,
@@ -142,6 +143,7 @@ function executeCliWriteAction(
     case 'create':
     case 'write': {
       if (action.type === 'write') writeBackup(workDir, filePath);
+      if (action.type === 'create') recordCreatedFile(workDir, action.path!);
       const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       const content = action.content ? unescapeJsonString(action.content) : '';
@@ -561,9 +563,9 @@ async function main() {
       if (hasBackups(workDir)) {
         const doUndo = await confirm(rl, 'Undo all changes? (y = restore backups, n = keep changes and delete backups)', false);
         if (doUndo) {
-          const restored = restoreAllBackups(workDir);
+          const { restored, deleted } = restoreAllBackups(workDir);
           deleteAllBackups(workDir);
-          console.error(`Undone — restored ${restored.length} file(s).`);
+          console.error(`Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`);
         } else {
           deleteAllBackups(workDir);
         }

@@ -33,6 +33,7 @@ export type ActionResult = {
 };
 
 const BACKUP_DIR = path.join('.askii', 'backups');
+const CREATED_LOG = path.join('.askii', 'created.json');
 
 /** Copy filePath into .askii/backups/, preserving relative path. No-op if file doesn't exist. */
 export function writeBackup(workspaceRoot: string, filePath: string): void {
@@ -47,16 +48,36 @@ export function writeBackup(workspaceRoot: string, filePath: string): void {
   }
 }
 
-/** Delete the entire .askii/backups/ directory. */
+/** Record a newly created file so it can be deleted on restore. */
+export function recordCreatedFile(workspaceRoot: string, relativePath: string): void {
+  try {
+    const logPath = path.join(workspaceRoot, CREATED_LOG);
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    let list: string[] = [];
+    if (fs.existsSync(logPath)) {
+      try { list = JSON.parse(fs.readFileSync(logPath, 'utf-8')); } catch { /* ignore */ }
+    }
+    if (!list.includes(relativePath)) list.push(relativePath);
+    fs.writeFileSync(logPath, JSON.stringify(list));
+  } catch {
+    // Best-effort
+  }
+}
+
+/** Delete the entire .askii/backups/ directory and created-files log. */
 export function deleteAllBackups(workspaceRoot: string): void {
   const backupDir = path.join(workspaceRoot, BACKUP_DIR);
   if (fs.existsSync(backupDir)) {
     fs.rmSync(backupDir, { recursive: true, force: true });
   }
+  const logPath = path.join(workspaceRoot, CREATED_LOG);
+  if (fs.existsSync(logPath)) {
+    fs.unlinkSync(logPath);
+  }
 }
 
-/** Restore all backed-up files to their original paths. Returns list of restored relative paths. */
-export function restoreAllBackups(workspaceRoot: string): string[] {
+/** Restore all backed-up files and delete any files that were created this session. */
+export function restoreAllBackups(workspaceRoot: string): { restored: string[]; deleted: string[] } {
   const backupDir = path.join(workspaceRoot, BACKUP_DIR);
   const restored: string[] = [];
   function walk(dir: string): void {
@@ -75,12 +96,33 @@ export function restoreAllBackups(workspaceRoot: string): string[] {
     }
   }
   walk(backupDir);
-  return restored;
+
+  const deleted: string[] = [];
+  const logPath = path.join(workspaceRoot, CREATED_LOG);
+  if (fs.existsSync(logPath)) {
+    try {
+      const list: string[] = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
+      for (const rel of list) {
+        try {
+          const fullPath = path.join(workspaceRoot, rel);
+          if (fs.existsSync(fullPath)) {
+            fs.unlinkSync(fullPath);
+            deleted.push(rel);
+          }
+        } catch { /* best-effort */ }
+      }
+    } catch { /* ignore malformed log */ }
+  }
+
+  return { restored, deleted };
 }
 
-/** Returns true if any backups exist for this workspace. */
+/** Returns true if any backups or created-file records exist for this workspace. */
 export function hasBackups(workspaceRoot: string): boolean {
-  return fs.existsSync(path.join(workspaceRoot, BACKUP_DIR));
+  return (
+    fs.existsSync(path.join(workspaceRoot, BACKUP_DIR)) ||
+    fs.existsSync(path.join(workspaceRoot, CREATED_LOG))
+  );
 }
 
 export function getWorkspaceStructure(dirPath: string): string {
@@ -140,7 +182,7 @@ export function sandboxPath(workspaceRoot: string, relativePath: string): string
   return resolved;
 }
 
-const LIST_EXCLUDED = new Set(['node_modules', 'dist', '.git']);
+const LIST_EXCLUDED = new Set(['node_modules', 'dist', '.git', '.askii']);
 
 /**
  * Executes a view (single file, optional line range) or list action.

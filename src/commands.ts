@@ -39,6 +39,7 @@ import {
   executeSearchAction,
   buildDoSystemPrompt,
   writeBackup,
+  recordCreatedFile,
   deleteAllBackups,
   restoreAllBackups,
   hasBackups,
@@ -603,10 +604,10 @@ export async function askiiDoCommand() {
         'Undo',
       );
       if (choice === 'Undo') {
-        const restored = restoreAllBackups(rootPath);
+        const { restored, deleted } = restoreAllBackups(rootPath);
         deleteAllBackups(rootPath);
-        channel.appendLine(`Undone — restored ${restored.length} file(s).`);
-        vscode.window.showInformationMessage(`ASKII Do: Restored ${restored.length} file(s).`);
+        channel.appendLine(`Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`);
+        vscode.window.showInformationMessage(`ASKII Do: Restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`);
       } else if (choice === 'Confirm') {
         deleteAllBackups(rootPath);
       }
@@ -660,6 +661,7 @@ async function _executeWriteAction(
     case 'create':
     case 'write': {
       if (action.type === 'write') writeBackup(rootPath, filePath);
+      if (action.type === 'create') recordCreatedFile(rootPath, action.path!);
       const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       const content = action.content ? unescapeJsonString(action.content) : '';
