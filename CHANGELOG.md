@@ -4,6 +4,28 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.4] - 2026-03-03
+
+### Added
+
+- **Streaming responses in Ask ASKII**: The webview now streams AI output in real time (token by token) for Ollama and Copilot; LM Studio delivers a single chunk. New `getOllamaResponseStreaming` in `common/providers.ts` and `getExtensionResponseStreaming` in `src/providers.ts`
+- **Multi-turn follow-up in Ask ASKII**: A chat bubble button in the response panel lets you ask follow-up questions in the same conversation, maintaining context from previous turns
+- **Copy response button in Ask ASKII**: Icon button in the panel header copies the raw response text to the clipboard with a visual checkmark confirmation
+- **Ask ASKII works without a selection**: The command no longer requires an active editor or selected text — you can ask any free-form question; code context is included only when text is selected
+- **File and language context in Ask ASKII**: When code is selected, the file name and language ID are included in the prompt so the LLM has richer context
+- **ASKII Edit works without a selection**: When nothing is selected, the entire file is sent for editing. When a selection is present, the full file is included as context but only the selected portion is returned and replaced
+- **ASKII Edit diff preview**: After applying an edit, VS Code's built-in diff editor opens side-by-side showing original vs. AI-proposed code, powered by a new `askii-diff://` in-memory content provider
+- **Undo button after ASKII Edit**: The success notification now includes an "Undo" button that immediately reverts the applied edit
+- **`--lang` and `--file` flags for CLI `ask` and `edit`**: Pass `--lang typescript --file src/utils.ts` to include language and filename metadata in the prompt (e.g. `cat myfile.ts | askii ask --lang typescript --file src/utils.ts "what does this do?"`)
+- **GitHub Actions release workflow**: New `.github/workflows/release.yml` triggered on `askii_*` tags — packages the `.vsix`, publishes the CLI to npm, creates a GitHub Release with the `.vsix` attached, and publishes the extension to the VS Code Marketplace
+
+### Changed
+
+- **`CONTROL_SYSTEM_PROMPT` replaced with `buildControlSystemPrompt(width, height)`**: The control system prompt is now generated dynamically with the actual screenshot dimensions so the LLM knows the exact pixel bounds of the image
+- **DPI-aware mouse coordinates in Control mode**: On macOS and Linux, physical screenshot pixel coordinates are now scaled down to logical screen points before being passed to `osascript` / `xdotool`, fixing misaligned clicks on HiDPI/Retina displays
+- **Windows mouse coordinates clamped to 65535**: Normalized absolute mouse coordinates are now clamped to the valid `[0, 65535]` range, preventing overflow at the screen edges
+- **`getExtensionResponse` accepts an optional `system` prompt**: All three platforms (Copilot, LM Studio, Ollama) now forward a system message when provided
+
 ## [0.2.3] - 2026-02-27
 
 ### Changed
