@@ -38,6 +38,10 @@ import {
   executeViewAction,
   executeSearchAction,
   buildDoSystemPrompt,
+  writeBackup,
+  deleteAllBackups,
+  restoreAllBackups,
+  hasBackups,
   type WorkspaceAction,
   type ActionResult,
 } from '@common/workspace';
@@ -409,6 +413,8 @@ export async function askiiDoCommand() {
   const formatAfterEdit = config.get<boolean>('formatAfterEdit') ?? false;
   const rootPath = workspaceRoot.uri.fsPath;
 
+  deleteAllBackups(rootPath);
+
   const channel = vscode.window.createOutputChannel('ASKII Do');
   channel.show(true);
   channel.appendLine(`Task: ${question}`);
@@ -585,7 +591,24 @@ export async function askiiDoCommand() {
 
     if (roundCount >= maxRounds) channel.appendLine(`Max rounds (${maxRounds}) reached.`);
     channel.appendLine(`\nCompleted ${completedActions} actions! (⌐■_■)`);
-    vscode.window.showInformationMessage(`ASKII Do: ${completedActions} actions completed.`);
+
+    if (hasBackups(rootPath)) {
+      const choice = await vscode.window.showInformationMessage(
+        `ASKII Do: ${completedActions} actions completed.`,
+        'Confirm',
+        'Undo',
+      );
+      if (choice === 'Undo') {
+        const restored = restoreAllBackups(rootPath);
+        deleteAllBackups(rootPath);
+        channel.appendLine(`Undone — restored ${restored.length} file(s).`);
+        vscode.window.showInformationMessage(`ASKII Do: Restored ${restored.length} file(s).`);
+      } else if (choice === 'Confirm') {
+        deleteAllBackups(rootPath);
+      }
+    } else {
+      vscode.window.showInformationMessage(`ASKII Do: ${completedActions} actions completed.`);
+    }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     channel.appendLine(`\nError: ${errorMsg}`);
@@ -632,6 +655,7 @@ async function _executeWriteAction(
 
     case 'create':
     case 'write': {
+      if (action.type === 'write') writeBackup(rootPath, filePath);
       const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       const content = action.content ? unescapeJsonString(action.content) : '';
@@ -641,6 +665,7 @@ async function _executeWriteAction(
     }
 
     case 'modify': {
+      writeBackup(rootPath, filePath);
       const existing = fs.readFileSync(filePath, 'utf-8');
       if (action.startLine !== undefined || action.endLine !== undefined) {
         const lines = existing.split('\n');
@@ -662,12 +687,14 @@ async function _executeWriteAction(
     }
 
     case 'delete': {
+      writeBackup(rootPath, filePath);
       fs.unlinkSync(filePath);
       return 'ok';
     }
 
     case 'rename': {
       if (!action.newPath) return 'rename requires newPath';
+      writeBackup(rootPath, filePath);
       const newFilePath = sandboxPath(rootPath, action.newPath);
       const newDir = path.dirname(newFilePath);
       if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });

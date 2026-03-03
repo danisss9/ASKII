@@ -32,6 +32,57 @@ export type ActionResult = {
   detail?: string;
 };
 
+const BACKUP_DIR = path.join('.askii', 'backups');
+
+/** Copy filePath into .askii/backups/, preserving relative path. No-op if file doesn't exist. */
+export function writeBackup(workspaceRoot: string, filePath: string): void {
+  try {
+    if (!fs.existsSync(filePath)) return;
+    const rel = path.relative(workspaceRoot, filePath);
+    const backupPath = path.join(workspaceRoot, BACKUP_DIR, rel);
+    fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+    fs.copyFileSync(filePath, backupPath);
+  } catch {
+    // Best-effort — don't block the action if backup fails
+  }
+}
+
+/** Delete the entire .askii/backups/ directory. */
+export function deleteAllBackups(workspaceRoot: string): void {
+  const backupDir = path.join(workspaceRoot, BACKUP_DIR);
+  if (fs.existsSync(backupDir)) {
+    fs.rmSync(backupDir, { recursive: true, force: true });
+  }
+}
+
+/** Restore all backed-up files to their original paths. Returns list of restored relative paths. */
+export function restoreAllBackups(workspaceRoot: string): string[] {
+  const backupDir = path.join(workspaceRoot, BACKUP_DIR);
+  const restored: string[] = [];
+  function walk(dir: string): void {
+    if (!fs.existsSync(dir)) return;
+    for (const name of fs.readdirSync(dir)) {
+      const fullPath = path.join(dir, name);
+      if (fs.statSync(fullPath).isDirectory()) {
+        walk(fullPath);
+      } else {
+        const rel = path.relative(backupDir, fullPath);
+        const dest = path.join(workspaceRoot, rel);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(fullPath, dest);
+        restored.push(rel);
+      }
+    }
+  }
+  walk(backupDir);
+  return restored;
+}
+
+/** Returns true if any backups exist for this workspace. */
+export function hasBackups(workspaceRoot: string): boolean {
+  return fs.existsSync(path.join(workspaceRoot, BACKUP_DIR));
+}
+
 export function getWorkspaceStructure(dirPath: string): string {
   let structure = '';
   try {

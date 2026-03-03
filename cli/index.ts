@@ -5,6 +5,10 @@ import {
   executeViewAction,
   executeSearchAction,
   buildDoSystemPrompt,
+  writeBackup,
+  deleteAllBackups,
+  restoreAllBackups,
+  hasBackups,
   type WorkspaceAction,
   type ActionResult,
 } from '@common/workspace';
@@ -133,6 +137,7 @@ function executeCliWriteAction(
 
     case 'create':
     case 'write': {
+      if (action.type === 'write') writeBackup(workDir, filePath);
       const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       const content = action.content ? unescapeJsonString(action.content) : '';
@@ -142,6 +147,7 @@ function executeCliWriteAction(
     }
 
     case 'modify': {
+      writeBackup(workDir, filePath);
       const existing = fs.readFileSync(filePath, 'utf-8');
       if (action.startLine !== undefined || action.endLine !== undefined) {
         const lines = existing.split('\n');
@@ -164,6 +170,7 @@ function executeCliWriteAction(
     }
 
     case 'delete': {
+      writeBackup(workDir, filePath);
       fs.unlinkSync(filePath);
       console.error(`  ✓ Deleted: ${action.path}`);
       return 'ok';
@@ -171,6 +178,7 @@ function executeCliWriteAction(
 
     case 'rename': {
       if (!action.newPath) return 'rename requires newPath';
+      writeBackup(workDir, filePath);
       const newFilePath = sandboxPath(workDir, action.newPath);
       const newDir = path.dirname(newFilePath);
       if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
@@ -382,6 +390,8 @@ async function main() {
 
     const workDir = path.resolve(getFlagValue(flags, '--dir') || process.cwd());
 
+    deleteAllBackups(workDir);
+
     console.error(`ASKII is working... ${getRandomThinkingKaomoji()}`);
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
@@ -542,8 +552,19 @@ async function main() {
       if (roundCount >= config.maxRounds) {
         console.error(`\nMax rounds (${config.maxRounds}) reached.`);
       }
-      rl.close();
       console.error(`\nCompleted ${completedActions} actions! ${getRandomKaomoji()}`);
+
+      if (hasBackups(workDir)) {
+        const doUndo = await confirm(rl, 'Undo all changes? (y = restore backups, n = keep changes and delete backups)', false);
+        if (doUndo) {
+          const restored = restoreAllBackups(workDir);
+          deleteAllBackups(workDir);
+          console.error(`Undone — restored ${restored.length} file(s).`);
+        } else {
+          deleteAllBackups(workDir);
+        }
+      }
+      rl.close();
     } catch (error) {
       rl.close();
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
