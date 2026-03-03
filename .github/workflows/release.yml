@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write # create GitHub releases and upload assets
-  id-token: write # npm provenance (trusted publishers / OIDC)
+  id-token: write # npm provenance attestation
 
 jobs:
   release:
@@ -58,7 +58,9 @@ jobs:
 
       - name: Publish CLI to npm
         working-directory: ./cli
-        run: npm publish --access public
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # ── VS Code Marketplace ───────────────────────────────────────────────
       # Requires a MARKETPLACE_PAT secret: a Personal Access Token from
