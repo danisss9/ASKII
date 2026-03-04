@@ -55,9 +55,11 @@ import {
   describeAction,
   executeControlAction,
   getMonitors,
+  getSystemInfo,
   parseControlResponse,
   type ControlAction,
   type ControlHistoryEntry,
+  type SystemInfo,
 } from '@common/control';
 import {
   buildBrowserSystemPrompt,
@@ -937,6 +939,7 @@ export async function askiiControlCommand() {
   const history: ControlHistoryEntry[] = [];
   let round = 0;
   let prevScreenshot: string | undefined;
+  let systemInfo: SystemInfo | undefined;
 
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'ASKII Control', cancellable: true },
@@ -954,7 +957,13 @@ export async function askiiControlCommand() {
             base64: imageBase64,
             width: screenW,
             height: screenH,
+            physWidth,
+            physHeight,
           } = await takeScreenshot(monitorId);
+
+          if (!systemInfo) {
+            systemInfo = await getSystemInfo(physWidth, physHeight);
+          }
 
           const screenChanged = prevScreenshot === undefined || prevScreenshot !== imageBase64;
           if (prevScreenshot !== undefined && !screenChanged) {
@@ -969,7 +978,7 @@ export async function askiiControlCommand() {
 
           outputChannel.appendLine('Asking AI...');
           const rawResponse = await getExtensionResponseWithImage(
-            `${buildControlSystemPrompt(screenW, screenH, history)}\n\n${prompt}`,
+            `${buildControlSystemPrompt(screenW, screenH, systemInfo, history)}\n\n${prompt}`,
             imageBase64,
           );
 

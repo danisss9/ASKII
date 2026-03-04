@@ -51,6 +51,7 @@ export interface Monitor {
 export function buildControlSystemPrompt(
   width: number,
   height: number,
+  systemInfo?: SystemInfo,
   history?: ControlHistoryEntry[],
 ): string {
   const historySection =
@@ -64,7 +65,30 @@ export function buildControlSystemPrompt(
           .join('\n')
       : '';
 
-  return `You are a computer control assistant. You will receive a screenshot (${width}x${height} pixels) and must determine the next single action to take to complete the given instruction.
+  const sysLines: string[] = [];
+  if (systemInfo) {
+    sysLines.push(`- OS: ${systemInfo.os}`);
+    if (systemInfo.locale) sysLines.push(`- Locale: ${systemInfo.locale}`);
+    if (systemInfo.currentTime) sysLines.push(`- Current date/time: ${systemInfo.currentTime}`);
+    if (systemInfo.activeWindow) sysLines.push(`- Active window: ${systemInfo.activeWindow}`);
+    if (systemInfo.openWindows && systemInfo.openWindows.length > 0) {
+      sysLines.push(`- Open windows: ${systemInfo.openWindows.join(', ')}`);
+    }
+    if (systemInfo.screenWidth && systemInfo.screenHeight) {
+      const isScaled = systemInfo.screenWidth !== width || systemInfo.screenHeight !== height;
+      sysLines.push(
+        isScaled
+          ? `- Screen resolution: ${systemInfo.screenWidth}x${systemInfo.screenHeight} (screenshot scaled to ${width}x${height})`
+          : `- Screen resolution: ${systemInfo.screenWidth}x${systemInfo.screenHeight}`,
+      );
+    } else {
+      sysLines.push(`- Screenshot resolution: ${width}x${height}`);
+    }
+  }
+  const systemSection =
+    sysLines.length > 0 ? `\n\nSystem information:\n${sysLines.join('\n')}` : '';
+
+  return `You are a computer control assistant. You will receive a screenshot (${width}x${height} pixels) and must determine the next single action to take to complete the given instruction.${systemSection}
 
 Respond with ONLY a valid JSON object (no markdown, no extra text) in one of these formats:
 {"action": "mouse_move", "x": number, "y": number, "reasoning": "explanation"}
@@ -79,7 +103,9 @@ Respond with ONLY a valid JSON object (no markdown, no extra text) in one of the
 
 x and y are pixel coordinates within the screenshot image: x ranges from 0 to ${width - 1} (left to right), y ranges from 0 to ${height - 1} (top to bottom). Be as precise as possible.
 
-For key_press, supported keys: Enter, Tab, Escape, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, F1-F12. For combos use + separator: Ctrl+C, Ctrl+V, Ctrl+Z, Ctrl+S, Ctrl+A, Ctrl+X, Ctrl+W, Alt+Tab, Shift+Tab, Ctrl+Shift+Z, etc.
+IMPORTANT: Prefer keyboard shortcuts and keyboard_input over mouse actions whenever possible. Use key_press for common shortcuts (e.g., Ctrl+S to save, Ctrl+C/V to copy/paste, Ctrl+Z to undo, Alt+F4 to close, Alt+Tab to switch windows, Win+D to show desktop, Win to open Start Menu, Win+E for File Explorer, Win+R for Run dialog, Tab/Shift+Tab to navigate between fields, Enter to confirm). Only use mouse actions when keyboard alternatives are not available or practical.
+
+For key_press, supported keys: Enter, Tab, Escape, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, Win (Windows key), F1-F12. For combos use + separator: Ctrl+C, Ctrl+V, Ctrl+Z, Ctrl+S, Ctrl+A, Ctrl+X, Ctrl+W, Alt+Tab, Shift+Tab, Ctrl+Shift+Z, Win+D, Win+E, Win+R, Win+L, etc.
 For mouse_scroll, amount is 1-10 scroll clicks.
 
 You may return a SINGLE action object OR a JSON array of actions to execute in sequence when you are confident about multiple consecutive steps:
@@ -265,6 +291,176 @@ export async function refineCoordinates(
   };
 }
 
+// === SYSTEM INFO ===
+
+export interface SystemInfo {
+  os: string;
+  activeWindow?: string;
+  openWindows?: string[];
+  screenWidth?: number;
+  screenHeight?: number;
+  locale?: string;
+  currentTime?: string;
+}
+
+export async function getSystemInfo(physWidth?: number, physHeight?: number): Promise<SystemInfo> {
+  const p = platform();
+  let osName = p === 'win32' ? 'Windows' : p === 'darwin' ? 'macOS' : 'Linux';
+  let activeWindow: string | undefined;
+  let openWindows: string[] | undefined;
+  let locale: string | undefined;
+  const screenWidth = physWidth;
+  const screenHeight = physHeight;
+  const currentTime = new Date().toLocaleString(undefined, {
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+
+  try {
+    if (p === 'win32') {
+      const osVer = runPowerShellCapture(`(Get-CimInstance Win32_OperatingSystem).Caption`);
+      if (osVer) osName = osVer;
+
+      const winTitle = runPowerShellCapture(
+        `$td = @"
+using System; using System.Runtime.InteropServices; using System.Text;
+public class FgWin {
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder t, int n);
+}
+"@
+Add-Type -TypeDefinition $td -ErrorAction SilentlyContinue
+$h = [FgWin]::GetForegroundWindow()
+$sb = New-Object System.Text.StringBuilder 512
+[FgWin]::GetWindowText($h, $sb, 512) | Out-Null
+$sb.ToString()`,
+      );
+      if (winTitle) activeWindow = winTitle;
+
+      const allWinRaw = runPowerShellCapture(
+        `Get-Process | Where-Object { $_.MainWindowTitle -ne '' } | Select-Object -ExpandProperty MainWindowTitle | Select-Object -First 15`,
+      );
+      if (allWinRaw) {
+        openWindows = allWinRaw
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+
+      const localeRaw = runPowerShellCapture(`(Get-Culture).Name`);
+      if (localeRaw) locale = localeRaw;
+    } else if (p === 'darwin') {
+      try {
+        const macVer = execSync('sw_vers -productVersion', {
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+          .toString()
+          .trim();
+        if (macVer) osName = `macOS ${macVer}`;
+      } catch {
+        /* ignore */
+      }
+      try {
+        const win = execSync(
+          `osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'`,
+          { stdio: ['ignore', 'pipe', 'ignore'] },
+        )
+          .toString()
+          .trim();
+        if (win) activeWindow = win;
+      } catch {
+        /* ignore */
+      }
+      try {
+        const allWin = execSync(
+          `osascript -e 'tell application "System Events" to get name of every application process whose visible is true'`,
+          { stdio: ['ignore', 'pipe', 'ignore'] },
+        )
+          .toString()
+          .trim();
+        if (allWin)
+          openWindows = allWin
+            .split(', ')
+            .map((s) => s.trim())
+            .filter(Boolean);
+      } catch {
+        /* ignore */
+      }
+      try {
+        const loc = execSync('defaults read -g AppleLocale', {
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+          .toString()
+          .trim();
+        if (loc) locale = loc.replace('_', '-');
+      } catch {
+        /* ignore */
+      }
+    } else {
+      try {
+        const rel = execSync(`cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2`, {
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+          .toString()
+          .trim();
+        if (rel) osName = rel;
+      } catch {
+        /* ignore */
+      }
+      try {
+        const win = execSync('xdotool getactivewindow getwindowname', {
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+          .toString()
+          .trim();
+        if (win) activeWindow = win;
+      } catch {
+        /* ignore */
+      }
+      try {
+        const allWinRaw = execSync(
+          `xdotool search --onlyvisible --name '' 2>/dev/null | head -15 | xargs -I{} xdotool getwindowname {} 2>/dev/null`,
+          { stdio: ['ignore', 'pipe', 'ignore'] },
+        )
+          .toString()
+          .trim();
+        if (allWinRaw) {
+          openWindows = [
+            ...new Set(
+              allWinRaw
+                .split(/\n/)
+                .map((s) => s.trim())
+                .filter(Boolean),
+            ),
+          ];
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
+        const loc = execSync(`locale | grep '^LANG=' | cut -d= -f2 | cut -d. -f1 | tr '_' '-'`, {
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+          .toString()
+          .trim();
+        if (loc) locale = loc;
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return { os: osName, activeWindow, openWindows, screenWidth, screenHeight, locale, currentTime };
+}
+
 // === MONITORS ===
 
 export async function getMonitors(): Promise<Monitor[]> {
@@ -289,14 +485,20 @@ export async function getMonitors(): Promise<Monitor[]> {
 const MAX_SCREENSHOT_WIDTH = 1920;
 const MAX_SCREENSHOT_HEIGHT = 1080;
 
-export async function takeScreenshot(
-  monitorId?: string | number,
-): Promise<{ base64: string; width: number; height: number }> {
+export async function takeScreenshot(monitorId?: string | number): Promise<{
+  base64: string;
+  width: number;
+  height: number;
+  physWidth: number;
+  physHeight: number;
+}> {
   const opts: { format: 'png'; screen?: string | number } = { format: 'png' };
   if (monitorId !== undefined) opts.screen = monitorId;
   let img: Buffer = await screenshot(opts);
   let width = img.readUInt32BE(16);
   let height = img.readUInt32BE(20);
+  const physWidth = width;
+  const physHeight = height;
 
   // Downscale to reduce token cost when the display exceeds the max resolution
   if (width > MAX_SCREENSHOT_WIDTH || height > MAX_SCREENSHOT_HEIGHT) {
@@ -311,7 +513,7 @@ export async function takeScreenshot(
     }
   }
 
-  return { base64: img.toString('base64'), width, height };
+  return { base64: img.toString('base64'), width, height, physWidth, physHeight };
 }
 
 // === DESCRIBE ===
@@ -379,6 +581,20 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 function runPowerShell(script: string): void {
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   execSync(`powershell -NonInteractive -NoProfile -EncodedCommand ${encoded}`, { stdio: 'ignore' });
+}
+
+/** Run a PowerShell script and capture its stdout output. Returns empty string on failure. */
+function runPowerShellCapture(script: string): string {
+  try {
+    const encoded = Buffer.from(script, 'utf16le').toString('base64');
+    return execSync(`powershell -NonInteractive -NoProfile -EncodedCommand ${encoded}`, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -534,6 +750,10 @@ const VK_CODES: Record<string, number> = {
   Down: 0x28,
   Insert: 0x2d,
   Delete: 0x2e,
+  Win: 0x5b,
+  Windows: 0x5b,
+  LWin: 0x5b,
+  RWin: 0x5c,
   F1: 0x70,
   F2: 0x71,
   F3: 0x72,

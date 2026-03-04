@@ -28,10 +28,12 @@ import {
   describeAction,
   executeControlAction,
   getMonitors,
+  getSystemInfo,
   parseControlResponse,
   refineCoordinates,
   type ControlAction,
   type ControlHistoryEntry,
+  type SystemInfo,
 } from '@common/control';
 import {
   buildBrowserSystemPrompt,
@@ -660,6 +662,7 @@ async function main() {
       const ZOOM_ACTIONS = new Set(['mouse_left_click', 'mouse_right_click', 'mouse_double_click']);
       let round = 0;
       let prevScreenshot: string | undefined;
+      let systemInfo: SystemInfo | undefined;
 
       while (round < config.maxRounds && !abortController.signal.aborted) {
         console.error(`Round ${round + 1}/${config.maxRounds} — taking screenshot...`);
@@ -668,7 +671,13 @@ async function main() {
           base64: imageBase64,
           width: screenW,
           height: screenH,
+          physWidth,
+          physHeight,
         } = await takeScreenshot(monitorId);
+
+        if (!systemInfo) {
+          systemInfo = await getSystemInfo(physWidth, physHeight);
+        }
 
         if (prevScreenshot !== undefined && prevScreenshot === imageBase64) {
           console.error('Warning: screen unchanged since last action.');
@@ -685,7 +694,7 @@ async function main() {
         const rawResponse = await getResponse(
           config,
           prompt,
-          buildControlSystemPrompt(screenW, screenH, history),
+          buildControlSystemPrompt(screenW, screenH, systemInfo, history),
           imageBase64,
         );
 
