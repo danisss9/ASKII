@@ -155,6 +155,8 @@ Launches a Puppeteer browser, takes a screenshot of the current page and its URL
 
 By default the browser window is **visible**. Pass `--headless` to run in the background.
 
+> **Requires Chrome or Chromium** to be installed. Use `--chrome-path` (or `ASKII_CHROME_PATH`) to specify the executable path if it is not detected automatically.
+
 **bash**
 
 ```bash
@@ -163,6 +165,7 @@ askii browse --yes --ollama-model llava "search Google for Node.js and open the 
 askii browse --headless --yes --ollama-model llava "check the title of https://github.com"
 askii browse --max-rounds 10 --ollama-model llava "fill in the login form on example.com"
 askii browse -p lmstudio --lmstudio-model llava-1.5 "go to news.ycombinator.com"
+askii browse --chrome-path "/usr/bin/chromium" --ollama-model llava "go to example.com"
 ```
 
 **PowerShell**
@@ -173,6 +176,7 @@ askii browse --yes --ollama-model llava "search Google for Node.js and open the 
 askii browse --headless --yes --ollama-model llava "check the title of https://github.com"
 askii browse --max-rounds 10 --ollama-model llava "fill in the login form on example.com"
 askii browse -p lmstudio --lmstudio-model llava-1.5 "go to news.ycombinator.com"
+askii browse --chrome-path "C:\Program Files\Google\Chrome\Application\chrome.exe" --ollama-model llava "go to example.com"
 ```
 
 Each round the AI can return one of:
@@ -204,6 +208,7 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 | `--code`           | `-c`  | Code input (alternative to stdin)                |                          |
 | `--yes`            | `-y`  | Auto-confirm all actions                         |                          |
 | `--headless`       |       | Run Puppeteer headlessly for `browse`            | `false` (visible)        |
+| `--chrome-path`    |       | Path to Chrome/Chromium executable for `browse` |                          |
 
 ## Environment Variables
 
@@ -223,6 +228,7 @@ export ASKII_LMSTUDIO_MODEL=qwen/qwen3-coder-30b
 # Shared
 export ASKII_MODE=funny
 export ASKII_MAX_ROUNDS=5
+export ASKII_CHROME_PATH=/usr/bin/chromium
 ```
 
 **PowerShell**
@@ -241,6 +247,7 @@ $env:ASKII_LMSTUDIO_MODEL = "qwen/qwen3-coder-30b"
 # Shared
 $env:ASKII_MODE = "funny"
 $env:ASKII_MAX_ROUNDS = "5"
+$env:ASKII_CHROME_PATH = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 ```
 
 ## Platforms

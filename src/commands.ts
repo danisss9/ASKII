@@ -653,6 +653,7 @@ export async function askiiBrowseCommand() {
   const maxRounds = config.get<number>('doMaxRounds') ?? 5;
   const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
   const headless = config.get<boolean>('browserHeadless') ?? false;
+  const chromePath = config.get<string>('chromePath') || undefined;
 
   const outputChannel = vscode.window.createOutputChannel('ASKII Browse');
   outputChannel.show(true);
@@ -671,13 +672,14 @@ export async function askiiBrowseCommand() {
       });
 
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const puppeteer = require('puppeteer') as typeof import('puppeteer');
-      let browser: import('puppeteer').Browser | undefined;
+      const puppeteer = require('puppeteer-core') as typeof import('puppeteer-core');
+      let browser: import('puppeteer-core').Browser | undefined;
 
       try {
         outputChannel.appendLine('Launching browser...');
         browser = await puppeteer.launch({
           headless: headless ? true : false,
+          executablePath: chromePath,
           args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
         });
 

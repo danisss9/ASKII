@@ -120,6 +120,8 @@ Search for "ASKII Inline Helper Mode" and select:
 7. The browser is closed automatically when the loop ends
 
 > **Requires a vision-capable model**. Set `askii.browserHeadless` to `false` (default) to watch the browser window while ASKII works.
+>
+> **Requires Chrome or Chromium** to be installed. Set `askii.chromePath` to the executable path if it is not detected automatically.
 
 ---
 
@@ -149,6 +151,7 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control / Browse (default: `false`)
 - `askii.formatAfterEdit`: Auto-format files after ASKII Edit or Do (default: `false`)
 - `askii.browserHeadless`: Run the Puppeteer browser headlessly for ASKII Browse (default: `false` — browser window is visible)
+- `askii.chromePath`: Path to the Chrome/Chromium executable for ASKII Browse (e.g. `C:\Program Files\Google\Chrome\Application\chrome.exe`). Leave empty to use the system default
 
 ## Default Mode Examples
 

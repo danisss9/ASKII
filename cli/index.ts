@@ -54,6 +54,7 @@ interface Config {
   maxRounds: number;
   yes: boolean;
   headless: boolean;
+  chromePath: string | undefined;
 }
 
 function getFlagValue(flags: string[], ...names: string[]): string | undefined {
@@ -100,6 +101,7 @@ function getConfig(flags: string[]): Config {
     maxRounds: parseInt(getFlagValue(flags, '--max-rounds') || process.env.ASKII_MAX_ROUNDS || '5'),
     yes: hasFlag(flags, '-y', '--yes'),
     headless: hasFlag(flags, '--headless'),
+    chromePath: getFlagValue(flags, '--chrome-path') || process.env.ASKII_CHROME_PATH || undefined,
   };
 }
 
@@ -277,6 +279,7 @@ Options:
       --lang <language>      Language of the code (e.g. typescript, python)
       --file <filename>      Filename of the code (e.g. src/utils.ts)
       --headless             Run Puppeteer in headless mode for "browse" (default: visible)
+      --chrome-path <path>   Path to Chrome/Chromium executable for "browse" (env: ASKII_CHROME_PATH)
   -y, --yes                  Auto-confirm all actions
   -h, --help                 Show help
 
@@ -804,8 +807,8 @@ async function main() {
     });
 
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const puppeteer = require('puppeteer') as typeof import('puppeteer');
-    let browser: import('puppeteer').Browser | undefined;
+    const puppeteer = require('puppeteer-core') as typeof import('puppeteer-core');
+    let browser: import('puppeteer-core').Browser | undefined;
 
     try {
       console.error(`ASKII Browse starting... ${getRandomThinkingKaomoji()}`);
@@ -815,6 +818,7 @@ async function main() {
 
       browser = await puppeteer.launch({
         headless: config.headless ? true : false,
+        executablePath: config.chromePath,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
       });
 

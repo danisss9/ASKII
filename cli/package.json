@@ -1,6 +1,6 @@
 {
   "name": "askii-cli",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "ASKII CLI - AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
   "bin": {
     "askii": "./dist/index.js"
@@ -35,7 +35,7 @@
     "@lmstudio/sdk": "^1.5.0",
     "jimp": "^0.22.12",
     "ollama": "^0.6.3",
-    "puppeteer": "^24.3.0",
+    "puppeteer-core": "^24.3.0",
     "screenshot-desktop": "^1.12.7"
   },
   "devDependencies": {

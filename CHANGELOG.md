@@ -4,6 +4,15 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.6] - 2026-03-04
+
+### Changed
+
+- **ASKII Browse now uses `puppeteer-core`**: Replaced the full `puppeteer` package (which auto-downloads Chromium) with `puppeteer-core`, which requires an existing Chrome/Chromium installation. This removes the bundled browser download and reduces install size
+- **`askii.chromePath` setting**: New string config for the extension (default: empty) that sets the path to the Chrome/Chromium executable used by ASKII Browse. Leave empty to use the system default. Example: `C:\Program Files\Google\Chrome\Application\chrome.exe`
+- **`--chrome-path` CLI flag / `ASKII_CHROME_PATH` env var**: CLI equivalent of `askii.chromePath` — pass the path to Chrome via `--chrome-path /path/to/chrome` or the `ASKII_CHROME_PATH` environment variable
+- **`puppeteer-core` bundled by esbuild**: Both the extension and CLI now bundle `puppeteer-core` directly into their output files rather than keeping it as an external dependency
+
 ## [0.2.5] - 2026-03-03
 
 ### Added

@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -120,6 +120,11 @@
           "type": "boolean",
           "default": false,
           "description": "Launch the Puppeteer browser in headless mode for ASKII Browse (set to false to show the browser window)"
+        },
+        "askii.chromePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Chrome/Chromium executable for ASKII Browse (e.g. C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe). Leave empty to use the system default."
         }
       }
     }
@@ -159,7 +164,7 @@
     "jimp": "^0.22.12",
     "markdown-it": "^14.1.1",
     "ollama": "^0.6.3",
-    "puppeteer": "^24.37.5",
+    "puppeteer-core": "^24.37.5",
     "screenshot-desktop": "^1.12.7"
   }
 }
