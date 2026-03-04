@@ -4,6 +4,17 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.7] - 2026-03-04
+
+### Added
+
+- **OpenAI platform support**: Added `openai` as a new LLM platform across the extension and CLI, powered by the official `openai` npm SDK
+- **`askii.openaiApiKey` setting**: Your OpenAI API key (used when `llmPlatform` is `openai`)
+- **`askii.openaiModel` setting**: OpenAI model to use (default: `gpt-4o`)
+- **`askii.openaiUrl` setting**: Custom OpenAI-compatible base URL — leave empty for `api.openai.com`, or set to an Azure OpenAI endpoint or any compatible API
+- **`getOpenAIResponse` / `getOpenAIChat`** in `common/providers.ts`: Shared OpenAI provider functions supporting system prompts, vision (base64 image_url), and optional custom `baseURL`
+- **CLI `--openai-key`, `--openai-model`, `--openai-url` flags**: CLI equivalents of the extension settings; also readable via `ASKII_OPENAI_KEY`, `ASKII_OPENAI_MODEL`, `ASKII_OPENAI_URL` environment variables
+
 ## [0.2.6] - 2026-03-04
 
 ### Changed

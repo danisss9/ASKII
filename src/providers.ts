@@ -5,6 +5,8 @@ import {
   getOllamaChat,
   getLMStudioResponse,
   getLMStudioChat,
+  getOpenAIResponse,
+  getOpenAIChat,
   type ChatMessage,
 } from '@common/providers';
 
@@ -21,6 +23,11 @@ export async function getExtensionResponseWithImage(
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
     return getLMStudioResponse(prompt, url, model, undefined, imageBase64);
+  } else if (platform === 'openai') {
+    const apiKey = config.get<string>('openaiApiKey') || '';
+    const model = config.get<string>('openaiModel') || 'gpt-4o';
+    const baseURL = config.get<string>('openaiUrl') || undefined;
+    return getOpenAIResponse(prompt, apiKey, model, baseURL, undefined, imageBase64);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -91,6 +98,12 @@ export async function getExtensionResponseStreaming(
     // LMStudio SDK does not expose a simple streaming interface; deliver as one chunk
     const result = await getLMStudioResponse(prompt, url, model, system);
     onChunk(result);
+  } else if (platform === 'openai') {
+    const apiKey = config.get<string>('openaiApiKey') || '';
+    const model = config.get<string>('openaiModel') || 'gpt-4o';
+    const baseURL = config.get<string>('openaiUrl') || undefined;
+    const result = await getOpenAIResponse(prompt, apiKey, model, baseURL, system);
+    onChunk(result);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -127,6 +140,11 @@ export async function getExtensionResponse(prompt: string, system?: string): Pro
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
     return getLMStudioResponse(prompt, url, model, system);
+  } else if (platform === 'openai') {
+    const apiKey = config.get<string>('openaiApiKey') || '';
+    const model = config.get<string>('openaiModel') || 'gpt-4o';
+    const baseURL = config.get<string>('openaiUrl') || undefined;
+    return getOpenAIResponse(prompt, apiKey, model, baseURL, system);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -163,6 +181,11 @@ export async function getExtensionChat(messages: ChatMessage[]): Promise<string>
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     const mdl = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
     return getLMStudioChat(messages, url, mdl);
+  } else if (platform === 'openai') {
+    const apiKey = config.get<string>('openaiApiKey') || '';
+    const mdl = config.get<string>('openaiModel') || 'gpt-4o';
+    const baseURL = config.get<string>('openaiUrl') || undefined;
+    return getOpenAIChat(messages, apiKey, mdl, baseURL);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const mdl = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -219,6 +242,14 @@ export async function getLLMExplanation(
       const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getLMStudioResponse(userPrompt, url, model, systemPrompt);
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      return result || 'No explanation available.';
+    } else if (platform === 'openai') {
+      const apiKey = config.get<string>('openaiApiKey') || '';
+      const model = config.get<string>('openaiModel') || 'gpt-4o';
+      const baseURL = config.get<string>('openaiUrl') || undefined;
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      const result = await getOpenAIResponse(userPrompt, apiKey, model, baseURL, systemPrompt);
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       return result || 'No explanation available.';
     } else {

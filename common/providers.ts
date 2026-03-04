@@ -1,5 +1,6 @@
 import { Ollama } from 'ollama';
 import { type ChatMessageInput, LMStudioClient } from '@lmstudio/sdk';
+import OpenAI from 'openai';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -71,6 +72,47 @@ export async function getLMStudioResponse(
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     throw new Error(`LM Studio error: ${errorMessage}`);
   }
+}
+
+export async function getOpenAIResponse(
+  prompt: string,
+  apiKey: string,
+  model: string,
+  baseURL?: string,
+  system?: string,
+  imageBase64?: string,
+): Promise<string> {
+  const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+  if (system) messages.push({ role: 'system', content: system });
+  if (imageBase64) {
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } },
+        { type: 'text', text: prompt },
+      ],
+    });
+  } else {
+    messages.push({ role: 'user', content: prompt });
+  }
+  const response = await client.chat.completions.create({ model, messages });
+  return response.choices[0]?.message?.content || 'No response';
+}
+
+export async function getOpenAIChat(
+  messages: ChatMessage[],
+  apiKey: string,
+  model: string,
+  baseURL?: string,
+): Promise<string> {
+  const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  const oaiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+  const response = await client.chat.completions.create({ model, messages: oaiMessages });
+  return response.choices[0]?.message?.content || 'No response';
 }
 
 export async function getLMStudioChat(

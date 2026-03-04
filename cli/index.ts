@@ -20,6 +20,8 @@ import {
   getLMStudioResponse,
   getOllamaChat,
   getLMStudioChat,
+  getOpenAIResponse,
+  getOpenAIChat,
   type ChatMessage,
 } from '@common/providers';
 import {
@@ -47,9 +49,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 interface Config {
-  platform: 'ollama' | 'lmstudio';
+  platform: 'ollama' | 'lmstudio' | 'openai';
   url: string;
   model: string;
+  openaiApiKey: string;
+  openaiBaseURL: string | undefined;
   mode: 'helpful' | 'funny';
   maxRounds: number;
   yes: boolean;
@@ -91,10 +95,25 @@ function getConfig(flags: string[]): Config {
     process.env.ASKII_LMSTUDIO_MODEL ||
     'qwen/qwen3-coder-30b';
 
+  const openaiModel =
+    getFlagValue(flags, '--openai-model') || process.env.ASKII_OPENAI_MODEL || 'gpt-4o';
+
+  const openaiApiKey = getFlagValue(flags, '--openai-key') || process.env.ASKII_OPENAI_KEY || '';
+
+  const openaiBaseURL =
+    getFlagValue(flags, '--openai-url') || process.env.ASKII_OPENAI_URL || undefined;
+
+  const modelMap: Record<string, string> = {
+    lmstudio: lmStudioModel,
+    openai: openaiModel,
+  };
+
   return {
     platform,
     url: platform === 'lmstudio' ? lmStudioUrl : ollamaUrl,
-    model: platform === 'lmstudio' ? lmStudioModel : ollamaModel,
+    model: modelMap[platform] ?? ollamaModel,
+    openaiApiKey,
+    openaiBaseURL,
     mode: (getFlagValue(flags, '--mode') || process.env.ASKII_MODE || 'funny') as
       | 'helpful'
       | 'funny',
@@ -113,6 +132,15 @@ async function getResponse(
 ): Promise<string> {
   if (config.platform === 'lmstudio') {
     return getLMStudioResponse(prompt, config.url, config.model, system, imageBase64);
+  } else if (config.platform === 'openai') {
+    return getOpenAIResponse(
+      prompt,
+      config.openaiApiKey,
+      config.model,
+      config.openaiBaseURL,
+      system,
+      imageBase64,
+    );
   } else {
     return getOllamaResponse(
       prompt,
@@ -127,6 +155,8 @@ async function getResponse(
 async function getChatResponse(config: Config, messages: ChatMessage[]): Promise<string> {
   if (config.platform === 'lmstudio') {
     return getLMStudioChat(messages, config.url, config.model);
+  } else if (config.platform === 'openai') {
+    return getOpenAIChat(messages, config.openaiApiKey, config.model, config.openaiBaseURL);
   }
   return getOllamaChat(messages, config.url, config.model);
 }
@@ -267,11 +297,14 @@ Commands:
   browse <task>         Browser agent — launches Puppeteer and navigates the web
 
 Options:
-  -p, --platform <p>         LLM platform: ollama, lmstudio (default: ollama)
+  -p, --platform <p>         LLM platform: ollama, lmstudio, openai (default: ollama)
       --ollama-url <url>     Ollama server URL (default: http://localhost:11434)
       --lmstudio-url <url>   LM Studio server URL (default: ws://localhost:1234)
       --ollama-model <m>     Ollama model (default: gemma3:270m)
       --lmstudio-model <m>   LM Studio model (default: qwen/qwen3-coder-30b)
+      --openai-key <key>     OpenAI API key (env: ASKII_OPENAI_KEY)
+      --openai-model <m>     OpenAI model (default: gpt-4o)
+      --openai-url <url>     OpenAI-compatible base URL (env: ASKII_OPENAI_URL)
       --mode <mode>          Response mode: helpful, funny (default: funny)
       --max-rounds <n>       Max agent rounds for "do" / "control" / "browse" (default: 5)
       --dir <path>           Working directory for "do" (default: cwd)
@@ -287,6 +320,7 @@ Environment variables:
   ASKII_PLATFORM
   ASKII_OLLAMA_URL      ASKII_LMSTUDIO_URL
   ASKII_OLLAMA_MODEL    ASKII_LMSTUDIO_MODEL
+  ASKII_OPENAI_KEY      ASKII_OPENAI_MODEL    ASKII_OPENAI_URL
   ASKII_MODE            ASKII_MAX_ROUNDS
 
 Examples:

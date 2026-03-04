@@ -60,10 +60,11 @@
           "enum": [
             "ollama",
             "copilot",
-            "lmstudio"
+            "lmstudio",
+            "openai"
           ],
           "default": "ollama",
-          "description": "LLM platform to use (ollama, copilot, or lmstudio)"
+          "description": "LLM platform to use (ollama, copilot, lmstudio, or openai)"
         },
         "askii.ollamaUrl": {
           "type": "string",
@@ -89,6 +90,21 @@
           "type": "string",
           "default": "qwen/qwen3-coder-30b",
           "description": "LM Studio model to use for explanations"
+        },
+        "askii.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key (used when llmPlatform is openai)"
+        },
+        "askii.openaiModel": {
+          "type": "string",
+          "default": "gpt-4o",
+          "description": "OpenAI model to use (e.g. gpt-4o, gpt-4-turbo)"
+        },
+        "askii.openaiUrl": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI-compatible base URL (leave empty for api.openai.com). Use this for Azure OpenAI or other compatible APIs."
         },
         "askii.inlineHelperMode": {
           "type": "string",
@@ -164,6 +180,7 @@
     "jimp": "^0.22.12",
     "markdown-it": "^14.1.1",
     "ollama": "^0.6.3",
+    "openai": "^6.25.0",
     "puppeteer-core": "^24.37.5",
     "screenshot-desktop": "^1.12.7"
   }

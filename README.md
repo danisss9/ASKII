@@ -1,13 +1,13 @@
 # ASKII
 
-A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-powered explanations to your code lines. Choose between Ollama, GitHub Copilot, or LM Studio as your AI provider, and toggle between humorous comments and helpful code advice!
+A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-powered explanations to your code lines. Choose between Ollama, GitHub Copilot, LM Studio, or OpenAI as your AI provider, and toggle between humorous comments and helpful code advice!
 
 ## Features
 
 - **Random Kaomoji**: Adds a random kaomoji emoticon after the current line
-- **AI Explanations**: Uses Ollama, GitHub Copilot, or LM Studio to generate concise explanations of your code
+- **AI Explanations**: Uses Ollama, GitHub Copilot, LM Studio, or OpenAI to generate concise explanations of your code
 - **Inline Helper Modes**: Choose between off, helpful, or funny modes
-- **Multi-Platform AI**: Support for Ollama (local), GitHub Copilot (cloud), and LM Studio (local with official SDK)
+- **Multi-Platform AI**: Support for Ollama (local), GitHub Copilot (cloud), LM Studio (local with official SDK), and OpenAI (cloud, or any OpenAI-compatible API)
 - **Four Command Modes**:
   - **Ask ASKII**: Ask questions about your selected code
   - **ASKII Edit**: Have ASKII modify your selected code based on your request
@@ -29,11 +29,18 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 - Active GitHub Copilot subscription
 - Select `copilot` in the `askii.llmPlatform` setting
 
-### Option 3: LM Studio (New!)
+### Option 3: LM Studio
 
 - **LM Studio**: Download from [https://lmstudio.ai](https://lmstudio.ai)
 - Start LM Studio and load your preferred model
 - Select `lmstudio` in the `askii.llmPlatform` setting
+
+### Option 4: OpenAI (New!)
+
+- An **OpenAI API key** (or any OpenAI-compatible API key)
+- Select `openai` in the `askii.llmPlatform` setting
+- Set your API key in `askii.openaiApiKey`
+- Optionally set a custom `askii.openaiUrl` for Azure OpenAI or other compatible APIs (leave empty for `api.openai.com`)
 
 ## Usage
 
@@ -46,6 +53,7 @@ Open VS Code Settings (`Ctrl+,` or `Cmd+,`) and search for "ASKII LLM Platform" 
 - `ollama` (default)
 - `copilot`
 - `lmstudio`
+- `openai`
 
 ### Choose Your Inline Helper Mode
 
@@ -140,12 +148,15 @@ Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickl
 
 All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 
-- `askii.llmPlatform`: Choose LLM provider (`ollama` | `copilot` | `lmstudio`)
+- `askii.llmPlatform`: Choose LLM provider (`ollama` | `copilot` | `lmstudio` | `openai`)
 - `askii.ollamaUrl`: URL for Ollama API server (default: `http://localhost:11434`)
 - `askii.lmStudioUrl`: URL for LM Studio API server (default: `ws://localhost:1234`)
 - `askii.ollamaModel`: Ollama model name (default: `gemma3:270m`)
 - `askii.copilotModel`: GitHub Copilot model (default: `gpt-4o`)
 - `askii.lmStudioModel`: LM Studio model (default: `qwen/qwen3-coder-30b`)
+- `askii.openaiApiKey`: OpenAI API key (used when `llmPlatform` is `openai`)
+- `askii.openaiModel`: OpenAI model (default: `gpt-4o`)
+- `askii.openaiUrl`: OpenAI-compatible base URL — leave empty for `api.openai.com`, or use for Azure OpenAI / other compatible APIs
 - `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny`, default: `funny`)
 - `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control / Browse commands (default: 5)
 - `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control / Browse (default: `false`)
