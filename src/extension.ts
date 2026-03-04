@@ -11,6 +11,7 @@ import {
   askiiEditCommand,
   askiiDoCommand,
   askiiControlCommand,
+  askiiBrowseCommand,
   askiiDiffProvider,
 } from './commands';
 
@@ -50,6 +51,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.controlTask', askiiControlCommand),
   );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('askii.browseTask', askiiBrowseCommand),
+  );
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.text = '(⌐■_■)';
@@ -65,6 +69,7 @@ export function activate(context: vscode.ExtensionContext) {
         { label: '$(edit) ASKII Edit', command: 'askii.editCode' },
         { label: '$(files) ASKII Do', command: 'askii.doTask' },
         { label: '$(screen-full) ASKII Control', command: 'askii.controlTask' },
+        { label: '$(browser) ASKII Browse', command: 'askii.browseTask' },
         { label: '$(refresh) Clear Cache', command: 'askii.clearCache' },
       ]);
 

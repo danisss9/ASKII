@@ -34,7 +34,7 @@ async function main() {
     sourcesContent: false,
     platform: 'node',
     outfile: 'dist/extension.js',
-    external: ['vscode'],
+    external: ['vscode', 'puppeteer'],
     logLevel: 'silent',
     alias: {
       '@common': path.resolve(__dirname, 'common'),

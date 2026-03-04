@@ -10,8 +10,22 @@ export type ControlAction =
   | { action: 'mouse_left_click'; x: number; y: number; reasoning: string }
   | { action: 'mouse_right_click'; x: number; y: number; reasoning: string }
   | { action: 'mouse_double_click'; x: number; y: number; reasoning: string }
-  | { action: 'mouse_drag'; fromX: number; fromY: number; toX: number; toY: number; reasoning: string }
-  | { action: 'mouse_scroll'; x: number; y: number; direction: 'up' | 'down' | 'left' | 'right'; amount: number; reasoning: string }
+  | {
+      action: 'mouse_drag';
+      fromX: number;
+      fromY: number;
+      toX: number;
+      toY: number;
+      reasoning: string;
+    }
+  | {
+      action: 'mouse_scroll';
+      x: number;
+      y: number;
+      direction: 'up' | 'down' | 'left' | 'right';
+      amount: number;
+      reasoning: string;
+    }
   | { action: 'keyboard_input'; text: string; reasoning: string }
   | { action: 'key_press'; key: string; reasoning: string }
   | { action: 'DONE'; reasoning: string };
@@ -110,10 +124,22 @@ export function parseControlResponse(response: string): ControlResponse | null {
   } catch {
     // Try array first, then object
     const arrMatch = clean.match(/\[[\s\S]*\]/);
-    if (arrMatch) { try { parsed = JSON.parse(arrMatch[0]); } catch { /* ignore */ } }
+    if (arrMatch) {
+      try {
+        parsed = JSON.parse(arrMatch[0]);
+      } catch {
+        /* ignore */
+      }
+    }
     if (!parsed) {
       const objMatch = clean.match(/\{[\s\S]*?\}/);
-      if (objMatch) { try { parsed = JSON.parse(objMatch[0]); } catch { /* ignore */ } }
+      if (objMatch) {
+        try {
+          parsed = JSON.parse(objMatch[0]);
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }
 
@@ -139,7 +165,7 @@ export function parseControlResponse(response: string): ControlResponse | null {
 // === ZOOM / CROP ===
 
 const ZOOM_RADIUS = 200; // half-size of crop box in pixels
-const ZOOM_SCALE = 2;    // how much to magnify the crop
+const ZOOM_SCALE = 2; // how much to magnify the crop
 
 /** Crop a region from a PNG buffer and scale it up using jimp. Returns null on failure. */
 export async function cropAndScale(
@@ -186,12 +212,18 @@ x: 0–${zoomedW - 1}, y: 0–${zoomedH - 1} in the ZOOMED image coordinates.`;
 
 /** Parse zoom refinement response. */
 export function parseZoomResponse(response: string): { x: number; y: number } | null {
-  const clean = response.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const clean = response
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '');
   const tryParse = (s: string) => {
     try {
       const p = JSON.parse(s);
-      if (typeof p?.x === 'number' && typeof p?.y === 'number') return { x: p.x as number, y: p.y as number };
-    } catch { /* ignore */ }
+      if (typeof p?.x === 'number' && typeof p?.y === 'number')
+        return { x: p.x as number, y: p.y as number };
+    } catch {
+      /* ignore */
+    }
     return null;
   };
   return tryParse(clean) ?? tryParse(clean.match(/\{[\s\S]*?\}/)?.[0] ?? '');
@@ -311,13 +343,13 @@ export function describeAction(action: ControlAction): string {
 
 const DEFAULT_ACTION_DELAYS: Record<string, number> = {
   mouse_move: 300,
-  mouse_left_click: 800,
-  mouse_right_click: 800,
-  mouse_double_click: 800,
+  mouse_left_click: 1500,
+  mouse_right_click: 1500,
+  mouse_double_click: 1500,
   mouse_drag: 1000,
   mouse_scroll: 500,
   keyboard_input: 1000,
-  key_press: 500,
+  key_press: 1000,
 };
 
 export function getActionDelay(action: ControlAction, baseDelay?: number): number {
@@ -330,7 +362,14 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (!ms || signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
   });
 }
 
@@ -480,15 +519,40 @@ function win32Scroll(normX: number, normY: number, delta: number, horizontal: bo
 
 // VK code map for key_press on Windows
 const VK_CODES: Record<string, number> = {
-  Backspace: 0x08, Tab: 0x09, Enter: 0x0d, Escape: 0x1b, Space: 0x20,
-  PageUp: 0x21, PageDown: 0x22, End: 0x23, Home: 0x24,
-  Left: 0x25, Up: 0x26, Right: 0x27, Down: 0x28,
-  Insert: 0x2d, Delete: 0x2e,
-  F1: 0x70, F2: 0x71, F3: 0x72, F4: 0x73, F5: 0x74, F6: 0x75,
-  F7: 0x76, F8: 0x77, F9: 0x78, F10: 0x79, F11: 0x7a, F12: 0x7b,
+  Backspace: 0x08,
+  Tab: 0x09,
+  Enter: 0x0d,
+  Escape: 0x1b,
+  Space: 0x20,
+  PageUp: 0x21,
+  PageDown: 0x22,
+  End: 0x23,
+  Home: 0x24,
+  Left: 0x25,
+  Up: 0x26,
+  Right: 0x27,
+  Down: 0x28,
+  Insert: 0x2d,
+  Delete: 0x2e,
+  F1: 0x70,
+  F2: 0x71,
+  F3: 0x72,
+  F4: 0x73,
+  F5: 0x74,
+  F6: 0x75,
+  F7: 0x76,
+  F8: 0x77,
+  F9: 0x78,
+  F10: 0x79,
+  F11: 0x7a,
+  F12: 0x7b,
 };
 const VK_MODS: Record<string, number> = {
-  Ctrl: 0x11, Shift: 0x10, Alt: 0x12, Win: 0x5b, Cmd: 0x5b,
+  Ctrl: 0x11,
+  Shift: 0x10,
+  Alt: 0x12,
+  Win: 0x5b,
+  Cmd: 0x5b,
 };
 
 function resolveVk(key: string): number {
@@ -501,7 +565,10 @@ function win32KeyPress(key: string): void {
   const parts = key.split('+');
   const mainVk = resolveVk(parts[parts.length - 1]);
   if (mainVk < 0) return;
-  const modVks = parts.slice(0, -1).map((m) => VK_MODS[m] ?? -1).filter((v) => v >= 0);
+  const modVks = parts
+    .slice(0, -1)
+    .map((m) => VK_MODS[m] ?? -1)
+    .filter((v) => v >= 0);
   const modArray = modVks.length > 0 ? `@(${modVks.join(', ')})` : '@()';
 
   const psLines = [
@@ -532,21 +599,48 @@ function win32KeyPress(key: string): void {
 
 // macOS key codes for osascript
 const MAC_KEY_CODES: Record<string, number> = {
-  Enter: 36, Tab: 48, Escape: 53, Backspace: 51, Delete: 117,
-  Up: 126, Down: 125, Left: 123, Right: 124,
-  Home: 115, End: 119, PageUp: 116, PageDown: 121, Space: 49,
-  F1: 122, F2: 120, F3: 99, F4: 118, F5: 96, F6: 97,
-  F7: 98, F8: 100, F9: 101, F10: 109, F11: 103, F12: 111,
+  Enter: 36,
+  Tab: 48,
+  Escape: 53,
+  Backspace: 51,
+  Delete: 117,
+  Up: 126,
+  Down: 125,
+  Left: 123,
+  Right: 124,
+  Home: 115,
+  End: 119,
+  PageUp: 116,
+  PageDown: 121,
+  Space: 49,
+  F1: 122,
+  F2: 120,
+  F3: 99,
+  F4: 118,
+  F5: 96,
+  F6: 97,
+  F7: 98,
+  F8: 100,
+  F9: 101,
+  F10: 109,
+  F11: 103,
+  F12: 111,
 };
 const MAC_MODS: Record<string, string> = {
-  Ctrl: 'control down', Shift: 'shift down', Alt: 'option down',
-  Cmd: 'command down', Win: 'command down',
+  Ctrl: 'control down',
+  Shift: 'shift down',
+  Alt: 'option down',
+  Cmd: 'command down',
+  Win: 'command down',
 };
 
 function macKeyPress(key: string): void {
   const parts = key.split('+');
   const mainKey = parts[parts.length - 1];
-  const modifiers = parts.slice(0, -1).map((m) => MAC_MODS[m]).filter(Boolean);
+  const modifiers = parts
+    .slice(0, -1)
+    .map((m) => MAC_MODS[m])
+    .filter(Boolean);
   const usingClause = modifiers.length > 0 ? ` using {${modifiers.join(', ')}}` : '';
 
   let keyExpr: string;
@@ -565,20 +659,48 @@ function macKeyPress(key: string): void {
 
 // Linux xdotool key name mapping
 const XDOTOOL_KEY_NAMES: Record<string, string> = {
-  Enter: 'Return', Tab: 'Tab', Escape: 'Escape', Backspace: 'BackSpace',
-  Delete: 'Delete', Up: 'Up', Down: 'Down', Left: 'Left', Right: 'Right',
-  Home: 'Home', End: 'End', PageUp: 'Prior', PageDown: 'Next', Space: 'space',
-  F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6',
-  F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12',
+  Enter: 'Return',
+  Tab: 'Tab',
+  Escape: 'Escape',
+  Backspace: 'BackSpace',
+  Delete: 'Delete',
+  Up: 'Up',
+  Down: 'Down',
+  Left: 'Left',
+  Right: 'Right',
+  Home: 'Home',
+  End: 'End',
+  PageUp: 'Prior',
+  PageDown: 'Next',
+  Space: 'space',
+  F1: 'F1',
+  F2: 'F2',
+  F3: 'F3',
+  F4: 'F4',
+  F5: 'F5',
+  F6: 'F6',
+  F7: 'F7',
+  F8: 'F8',
+  F9: 'F9',
+  F10: 'F10',
+  F11: 'F11',
+  F12: 'F12',
 };
 const XDOTOOL_MODS: Record<string, string> = {
-  Ctrl: 'ctrl', Shift: 'shift', Alt: 'alt', Win: 'super', Cmd: 'super',
+  Ctrl: 'ctrl',
+  Shift: 'shift',
+  Alt: 'alt',
+  Win: 'super',
+  Cmd: 'super',
 };
 
 function linuxKeyPress(key: string): void {
   const parts = key.split('+');
   const mainKey = parts[parts.length - 1];
-  const modifiers = parts.slice(0, -1).map((m) => XDOTOOL_MODS[m]).filter(Boolean);
+  const modifiers = parts
+    .slice(0, -1)
+    .map((m) => XDOTOOL_MODS[m])
+    .filter(Boolean);
   const xKey = XDOTOOL_KEY_NAMES[mainKey] ?? (mainKey.length === 1 ? mainKey : null);
   if (!xKey) return;
   const combo = [...modifiers, xKey].join('+');
@@ -618,7 +740,12 @@ export async function executeControlAction(
 
   if (action.action === 'mouse_move') {
     if (p === 'win32') {
-      win32Mouse(normalizeWin32(action.x, physWidth ?? 1), normalizeWin32(action.y, physHeight ?? 1), 0, 0);
+      win32Mouse(
+        normalizeWin32(action.x, physWidth ?? 1),
+        normalizeWin32(action.y, physHeight ?? 1),
+        0,
+        0,
+      );
     } else if (p === 'darwin') {
       const logical = getLogicalScreenSize(p);
       const { lx, ly } = scaleToLogical(action.x, action.y, physWidth, physHeight, logical);
@@ -653,7 +780,10 @@ export async function executeControlAction(
     }
   } else if (action.action === 'mouse_double_click') {
     if (p === 'win32') {
-      win32DoubleClick(normalizeWin32(action.x, physWidth ?? 1), normalizeWin32(action.y, physHeight ?? 1));
+      win32DoubleClick(
+        normalizeWin32(action.x, physWidth ?? 1),
+        normalizeWin32(action.y, physHeight ?? 1),
+      );
     } else if (p === 'darwin') {
       const logical = getLogicalScreenSize(p);
       const { lx, ly } = scaleToLogical(action.x, action.y, physWidth, physHeight, logical);
@@ -663,7 +793,17 @@ export async function executeControlAction(
     } else {
       const logical = getLogicalScreenSize(p);
       const { lx, ly } = scaleToLogical(action.x, action.y, physWidth, physHeight, logical);
-      execFileSync('xdotool', ['mousemove', String(lx), String(ly), 'click', '--repeat', '2', '--delay', '100', '1']);
+      execFileSync('xdotool', [
+        'mousemove',
+        String(lx),
+        String(ly),
+        'click',
+        '--repeat',
+        '2',
+        '--delay',
+        '100',
+        '1',
+      ]);
     }
   } else if (action.action === 'mouse_drag') {
     if (p === 'win32') {
@@ -674,8 +814,20 @@ export async function executeControlAction(
       win32Drag(nfx, nfy, ntx, nty);
     } else if (p === 'darwin') {
       const logical = getLogicalScreenSize(p);
-      const { lx: lfx, ly: lfy } = scaleToLogical(action.fromX, action.fromY, physWidth, physHeight, logical);
-      const { lx: ltx, ly: lty } = scaleToLogical(action.toX, action.toY, physWidth, physHeight, logical);
+      const { lx: lfx, ly: lfy } = scaleToLogical(
+        action.fromX,
+        action.fromY,
+        physWidth,
+        physHeight,
+        logical,
+      );
+      const { lx: ltx, ly: lty } = scaleToLogical(
+        action.toX,
+        action.toY,
+        physWidth,
+        physHeight,
+        logical,
+      );
       const script = [
         'tell application "System Events"',
         `  drag {${lfx}, ${lfy}} to {${ltx}, ${lty}}`,
@@ -684,13 +836,31 @@ export async function executeControlAction(
       execFileSync('osascript', [], { input: script, stdio: ['pipe', 'ignore', 'ignore'] });
     } else {
       const logical = getLogicalScreenSize(p);
-      const { lx: lfx, ly: lfy } = scaleToLogical(action.fromX, action.fromY, physWidth, physHeight, logical);
-      const { lx: ltx, ly: lty } = scaleToLogical(action.toX, action.toY, physWidth, physHeight, logical);
+      const { lx: lfx, ly: lfy } = scaleToLogical(
+        action.fromX,
+        action.fromY,
+        physWidth,
+        physHeight,
+        logical,
+      );
+      const { lx: ltx, ly: lty } = scaleToLogical(
+        action.toX,
+        action.toY,
+        physWidth,
+        physHeight,
+        logical,
+      );
       execFileSync('xdotool', [
-        'mousemove', String(lfx), String(lfy),
-        'mousedown', '1',
-        'mousemove', String(ltx), String(lty),
-        'mouseup', '1',
+        'mousemove',
+        String(lfx),
+        String(lfy),
+        'mousedown',
+        '1',
+        'mousemove',
+        String(ltx),
+        String(lty),
+        'mouseup',
+        '1',
       ]);
     }
   } else if (action.action === 'mouse_scroll') {
@@ -731,8 +901,13 @@ export async function executeControlAction(
       const btnMap = { up: '4', down: '5', left: '6', right: '7' };
       const btn = btnMap[action.direction];
       execFileSync('xdotool', [
-        'mousemove', String(lx), String(ly),
-        'click', '--repeat', String(amount), btn,
+        'mousemove',
+        String(lx),
+        String(ly),
+        'click',
+        '--repeat',
+        String(amount),
+        btn,
       ]);
     }
   } else if (action.action === 'keyboard_input') {

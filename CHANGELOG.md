@@ -16,6 +16,11 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - **Stop mid-execution in Control**: The extension shows a cancellable progress notification; click **Stop** at any time to abort the loop. The CLI handles `Ctrl+C` (SIGINT) gracefully
 - **Screenshot auto-downscaling**: Screenshots larger than 1920×1080 are automatically resized with jimp before being sent to the LLM, reducing token usage and latency
 - **Per-action adaptive delays**: Each action type waits a calibrated amount of time after execution (mouse move: 300 ms, clicks: 800 ms, scroll: 500 ms, keyboard input: 1 000 ms, key press: 500 ms)
+- **ASKII Browse command** (`askii.browseTask`): A new agentic browser command powered by Puppeteer. Give ASKII a natural-language task (e.g., "Search Google for foo and click the first result") and it will launch a browser, take screenshots of the current page, and drive it through a JSON-action protocol (goto, click, type, wait_for, back, forward, DONE) until the task is complete or `askii.doMaxRounds` is reached
+- **`common/browser.ts` helper module**: Defines `BrowserAction` union type, `buildBrowserSystemPrompt`, `parseBrowserAction`, `describeBrowserAction`, `executeBrowserAction`, and `takePageScreenshot` helpers used by the browse loop
+- **`askii.browserHeadless` setting**: Boolean config (default `false`) that controls whether ASKII Browse launches Puppeteer in headless mode. Set to `false` to watch the browser window while the agent works
+- **Browse entry in status-bar quick-pick**: The `(⌐■_■)` status-bar menu now includes an **ASKII Browse** option
+- **Puppeteer dependency**: Added `puppeteer ^24.3.0` as a runtime dependency; marked external in esbuild so Chromium is resolved from `node_modules` at runtime
 
 ### Changed
 

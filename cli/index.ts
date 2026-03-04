@@ -33,6 +33,13 @@ import {
   type ControlAction,
   type ControlHistoryEntry,
 } from '@common/control';
+import {
+  buildBrowserSystemPrompt,
+  parseBrowserAction,
+  describeBrowserAction,
+  executeBrowserAction,
+  takePageScreenshot,
+} from '@common/browser';
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -44,6 +51,7 @@ interface Config {
   mode: 'helpful' | 'funny';
   maxRounds: number;
   yes: boolean;
+  headless: boolean;
 }
 
 function getFlagValue(flags: string[], ...names: string[]): string | undefined {
@@ -89,6 +97,7 @@ function getConfig(flags: string[]): Config {
       | 'funny',
     maxRounds: parseInt(getFlagValue(flags, '--max-rounds') || process.env.ASKII_MAX_ROUNDS || '5'),
     yes: hasFlag(flags, '-y', '--yes'),
+    headless: hasFlag(flags, '--headless'),
   };
 }
 
@@ -159,7 +168,9 @@ function executeCliWriteAction(
         const lines = existing.split('\n');
         const start = (action.startLine ?? 1) - 1;
         const end = action.endLine ?? lines.length;
-        const replacement = (action.newContent ? unescapeJsonString(action.newContent) : '').split('\n');
+        const replacement = (action.newContent ? unescapeJsonString(action.newContent) : '').split(
+          '\n',
+        );
         lines.splice(start, end - start, ...replacement);
         fs.writeFileSync(filePath, lines.join('\n'));
         console.error(`  ✓ Modified (lines ${action.startLine}–${action.endLine}): ${action.path}`);
@@ -249,6 +260,7 @@ Commands:
   explain <line>        Explain a single line of code
   do <task>             Agentic task runner — creates, modifies, and deletes files
   control <instruction> Screen control — takes screenshots and drives mouse/keyboard
+  browse <task>         Browser agent — launches Puppeteer and navigates the web
 
 Options:
   -p, --platform <p>         LLM platform: ollama, lmstudio (default: ollama)
@@ -257,11 +269,12 @@ Options:
       --ollama-model <m>     Ollama model (default: gemma3:270m)
       --lmstudio-model <m>   LM Studio model (default: qwen/qwen3-coder-30b)
       --mode <mode>          Response mode: helpful, funny (default: funny)
-      --max-rounds <n>       Max agent rounds for "do" / "control" (default: 5)
+      --max-rounds <n>       Max agent rounds for "do" / "control" / "browse" (default: 5)
       --dir <path>           Working directory for "do" (default: cwd)
   -c, --code <code>          Code input (alternative to stdin)
       --lang <language>      Language of the code (e.g. typescript, python)
       --file <filename>      Filename of the code (e.g. src/utils.ts)
+      --headless             Run Puppeteer in headless mode for "browse" (default: visible)
   -y, --yes                  Auto-confirm all actions
   -h, --help                 Show help
 
@@ -281,6 +294,8 @@ Examples:
   askii -p lmstudio --lmstudio-model "my-model" do "refactor index.ts"
   askii control --ollama-model llava "open Notepad and type hello world"
   askii control --yes --ollama-model llava "click the search bar and search for cats"
+  askii browse --ollama-model llava "go to https://example.com and click Learn more"
+  askii browse --yes --headless --ollama-model llava "search Google for Node.js"
 `);
 }
 
@@ -447,7 +462,10 @@ async function main() {
               for (const p of action.paths) {
                 console.error(`  → Viewing: ${p}`);
                 try {
-                  viewResults[p] = executeViewAction({ ...action, path: p, paths: undefined }, workDir);
+                  viewResults[p] = executeViewAction(
+                    { ...action, path: p, paths: undefined },
+                    workDir,
+                  );
                 } catch (e) {
                   viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
                 }
@@ -479,14 +497,22 @@ async function main() {
           } catch (e) {
             const msg = e instanceof Error ? e.message : 'Path error';
             console.error(`  ✗ BLOCKED: ${msg}`);
-            actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail: msg });
+            actionResults.push({
+              action: `${action.type}:${action.path}`,
+              status: 'error',
+              detail: msg,
+            });
             continue;
           }
 
           if (action.type === 'run') {
             // run ALWAYS requires explicit confirmation — ignores -y/--yes
             console.error(`  → Run: ${action.command}`);
-            const ok = await confirm(rl, `Run command: "${action.command}"? (executes shell code)`, false);
+            const ok = await confirm(
+              rl,
+              `Run command: "${action.command}"? (executes shell code)`,
+              false,
+            );
             if (!ok) {
               actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
               continue;
@@ -506,7 +532,8 @@ async function main() {
               });
             } catch (e: unknown) {
               const err = e as { stdout?: string; stderr?: string; message?: string };
-              const detail = `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
+              const detail =
+                `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
               console.error(`  ✗ Run failed:\n${detail}`);
               actionResults.push({
                 action: `run:${action.command}`,
@@ -535,7 +562,11 @@ async function main() {
           } catch (e) {
             const detail = e instanceof Error ? e.message : 'Unknown error';
             console.error(`  ✗ Failed: ${detail}`);
-            actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail });
+            actionResults.push({
+              action: `${action.type}:${action.path}`,
+              status: 'error',
+              detail,
+            });
           }
         }
 
@@ -561,11 +592,17 @@ async function main() {
       console.error(`\nCompleted ${completedActions} actions! ${getRandomKaomoji()}`);
 
       if (hasBackups(workDir)) {
-        const doUndo = await confirm(rl, 'Undo all changes? (y = restore backups, n = keep changes and delete backups)', false);
+        const doUndo = await confirm(
+          rl,
+          'Undo all changes? (y = restore backups, n = keep changes and delete backups)',
+          false,
+        );
         if (doUndo) {
           const { restored, deleted } = restoreAllBackups(workDir);
           deleteAllBackups(workDir);
-          console.error(`Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`);
+          console.error(
+            `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
+          );
         } else {
           deleteAllBackups(workDir);
         }
@@ -627,7 +664,11 @@ async function main() {
       while (round < config.maxRounds && !abortController.signal.aborted) {
         console.error(`Round ${round + 1}/${config.maxRounds} — taking screenshot...`);
 
-        const { base64: imageBase64, width: screenW, height: screenH } = await takeScreenshot(monitorId);
+        const {
+          base64: imageBase64,
+          width: screenW,
+          height: screenH,
+        } = await takeScreenshot(monitorId);
 
         if (prevScreenshot !== undefined && prevScreenshot === imageBase64) {
           console.error('Warning: screen unchanged since last action.');
@@ -673,7 +714,12 @@ async function main() {
             console.error('Refining coordinates (zoom)...');
             const imgBuf = Buffer.from(imageBase64, 'base64');
             const refined = await refineCoordinates(
-              imgBuf, a.x, a.y, screenW, screenH, a,
+              imgBuf,
+              a.x,
+              a.y,
+              screenW,
+              screenH,
+              a,
               (sys, img) => getResponse(config, sys, undefined, img),
             );
             if (refined) {
@@ -708,7 +754,12 @@ async function main() {
         for (const a of actions) {
           if (abortController.signal.aborted) break;
           await executeControlAction(a as ControlAction, screenW, screenH, abortController.signal);
-          history.push({ round: round + 1, description: describeAction(a as ControlAction), reasoning: a.reasoning, screenChanged });
+          history.push({
+            round: round + 1,
+            description: describeAction(a as ControlAction),
+            reasoning: a.reasoning,
+            screenChanged,
+          });
         }
         console.error('Executed.\n');
 
@@ -724,6 +775,117 @@ async function main() {
       rl.close();
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);
+    }
+  } else if (command === 'browse') {
+    const task = positional.slice(1).join(' ');
+
+    if (!task) {
+      console.error('Error: provide a task as an argument');
+      process.exit(1);
+    }
+
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    const abortController = new AbortController();
+
+    process.once('SIGINT', () => {
+      abortController.abort();
+      console.error('\n\nStopped by user (Ctrl+C).');
+      rl.close();
+      process.exit(0);
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const puppeteer = require('puppeteer') as typeof import('puppeteer');
+    let browser: import('puppeteer').Browser | undefined;
+
+    try {
+      console.error(`ASKII Browse starting... ${getRandomThinkingKaomoji()}`);
+      console.error(`Task: ${task}`);
+      console.error('(Make sure your model supports vision/images)');
+      console.error('Press Ctrl+C to stop at any time.\n');
+
+      browser = await puppeteer.launch({
+        headless: config.headless ? true : false,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
+      });
+
+      const [page] = await browser.pages();
+      await page.setViewport(null);
+
+      let round = 0;
+
+      while (round < config.maxRounds && !abortController.signal.aborted) {
+        console.error(`Round ${round + 1}/${config.maxRounds} — capturing screenshot...`);
+
+        const imageBase64 = await takePageScreenshot(page);
+        const currentUrl = page.url();
+
+        console.error(`Current URL: ${currentUrl}`);
+
+        const userPrompt =
+          round === 0
+            ? `Task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and determine the next action.`
+            : `Continuing task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and return the next action or DONE.`;
+
+        console.error('Asking AI...');
+        const rawResponse = await getResponse(
+          config,
+          userPrompt,
+          buildBrowserSystemPrompt(),
+          imageBase64,
+        );
+
+        if (abortController.signal.aborted) break;
+
+        const action = parseBrowserAction(rawResponse);
+
+        if (!action) {
+          console.error('Error: could not parse AI response.');
+          console.error(`Raw response: ${rawResponse}`);
+          break;
+        }
+
+        if (action.action === 'DONE') {
+          console.error(`\nDone! ${getRandomKaomoji()}`);
+          console.error(`Reasoning: ${action.reasoning}`);
+          break;
+        }
+
+        console.error(`\nAction:    ${describeBrowserAction(action)}`);
+        console.error(`Reasoning: ${action.reasoning}`);
+
+        const ok = await confirm(rl, 'Execute this action?', config.yes);
+        if (!ok || abortController.signal.aborted) {
+          console.error('Stopped.');
+          break;
+        }
+
+        try {
+          await executeBrowserAction(action, page);
+          console.error('Executed.\n');
+        } catch (execErr) {
+          console.error(
+            `Action failed: ${execErr instanceof Error ? execErr.message : 'Unknown error'}`,
+          );
+        }
+
+        round++;
+      }
+
+      if (round >= config.maxRounds && !abortController.signal.aborted) {
+        console.error(`Max rounds (${config.maxRounds}) reached.`);
+      }
+
+      rl.close();
+    } catch (error) {
+      rl.close();
+      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      process.exit(1);
+    } finally {
+      if (browser) {
+        console.error('Closing browser...');
+        await browser.close().catch(() => undefined);
+      }
     }
   } else {
     console.error(`Unknown command: ${command}`);

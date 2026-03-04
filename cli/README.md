@@ -100,14 +100,14 @@ askii do --dir .\my-project "refactor index.ts"
 
 The agent can use the following actions each round:
 
-| Action   | Description                                              | Requires confirmation |
-| -------- | -------------------------------------------------------- | --------------------- |
-| `list`   | List files in a folder (`[file]` / `[folder]` labels)   | No                    |
-| `view`   | Read a file's contents                                   | No                    |
-| `create` | Create a new file                                        | Yes                   |
-| `modify` | Replace text in an existing file                         | Yes                   |
-| `rename` | Rename or move a file                                    | Yes                   |
-| `delete` | Delete a file                                            | Yes                   |
+| Action   | Description                                           | Requires confirmation |
+| -------- | ----------------------------------------------------- | --------------------- |
+| `list`   | List files in a folder (`[file]` / `[folder]` labels) | No                    |
+| `view`   | Read a file's contents                                | No                    |
+| `create` | Create a new file                                     | Yes                   |
+| `modify` | Replace text in an existing file                      | Yes                   |
+| `rename` | Rename or move a file                                 | Yes                   |
+| `delete` | Delete a file                                         | Yes                   |
 
 The loop continues after every round — not only after reads — until the AI returns `[]` or the round limit is hit.
 
@@ -138,6 +138,7 @@ askii control -p lmstudio --lmstudio-model llava-1.5 "open the browser"
 ```
 
 Each round the AI can return one of:
+
 - **mouse_move** — move the cursor to `(x, y)`
 - **mouse_left_click** — left-click at `(x, y)`
 - **mouse_right_click** — right-click at `(x, y)`
@@ -148,20 +149,61 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 
 ---
 
+### `browse` — Browser agent
+
+Launches a Puppeteer browser, takes a screenshot of the current page and its URL, sends both to the AI, and executes the returned action. Repeats until the AI returns `DONE` or `--max-rounds` is reached. Requires a **vision-capable model** (e.g. `llava`, `moondream2`).
+
+By default the browser window is **visible**. Pass `--headless` to run in the background.
+
+**bash**
+
+```bash
+askii browse --ollama-model llava "go to https://example.com and click Learn more"
+askii browse --yes --ollama-model llava "search Google for Node.js and open the first result"
+askii browse --headless --yes --ollama-model llava "check the title of https://github.com"
+askii browse --max-rounds 10 --ollama-model llava "fill in the login form on example.com"
+askii browse -p lmstudio --lmstudio-model llava-1.5 "go to news.ycombinator.com"
+```
+
+**PowerShell**
+
+```powershell
+askii browse --ollama-model llava "go to https://example.com and click Learn more"
+askii browse --yes --ollama-model llava "search Google for Node.js and open the first result"
+askii browse --headless --yes --ollama-model llava "check the title of https://github.com"
+askii browse --max-rounds 10 --ollama-model llava "fill in the login form on example.com"
+askii browse -p lmstudio --lmstudio-model llava-1.5 "go to news.ycombinator.com"
+```
+
+Each round the AI can return one of:
+
+- **goto** — navigate to a URL
+- **click** — click an element by CSS selector
+- **type** — type text into an element by CSS selector (clears existing value first)
+- **wait_for** — wait until a CSS selector appears in the DOM
+- **back** — navigate back in browser history
+- **forward** — navigate forward in browser history
+- **DONE** — task complete, stop the loop
+
+Without `--yes`, each proposed action is shown with its reasoning and requires `y` confirmation before executing.
+
+---
+
 ## Options
 
-| Flag                  | Short | Description                                     | Default                    |
-| --------------------- | ----- | ----------------------------------------------- | -------------------------- |
-| `--platform`          | `-p`  | LLM platform: `ollama`, `lmstudio`              | `ollama`                   |
-| `--ollama-url`        |       | Ollama server URL                               | `http://localhost:11434`   |
-| `--lmstudio-url`      |       | LM Studio server URL                            | `ws://localhost:1234`      |
-| `--ollama-model`      |       | Ollama model                                    | `gemma3:270m`              |
-| `--lmstudio-model`    |       | LM Studio model                                 | `qwen/qwen3-coder-30b`     |
-| `--mode`              |       | Response style: `helpful`, `funny`              | `funny`                    |
-| `--max-rounds`        |       | Max agent rounds for `do` / `control`           | `5`                        |
-| `--dir`               |       | Working directory for `do`                      | cwd                        |
-| `--code`              | `-c`  | Code input (alternative to stdin)               |                            |
-| `--yes`               | `-y`  | Auto-confirm all actions                        |                            |
+| Flag               | Short | Description                                      | Default                  |
+| ------------------ | ----- | ------------------------------------------------ | ------------------------ |
+| `--platform`       | `-p`  | LLM platform: `ollama`, `lmstudio`               | `ollama`                 |
+| `--ollama-url`     |       | Ollama server URL                                | `http://localhost:11434` |
+| `--lmstudio-url`   |       | LM Studio server URL                             | `ws://localhost:1234`    |
+| `--ollama-model`   |       | Ollama model                                     | `gemma3:270m`            |
+| `--lmstudio-model` |       | LM Studio model                                  | `qwen/qwen3-coder-30b`   |
+| `--mode`           |       | Response style: `helpful`, `funny`               | `funny`                  |
+| `--max-rounds`     |       | Max agent rounds for `do` / `control` / `browse` | `5`                      |
+| `--dir`            |       | Working directory for `do`                       | cwd                      |
+| `--code`           | `-c`  | Code input (alternative to stdin)                |                          |
+| `--yes`            | `-y`  | Auto-confirm all actions                         |                          |
+| `--headless`       |       | Run Puppeteer headlessly for `browse`            | `false` (visible)        |
 
 ## Environment Variables
 

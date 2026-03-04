@@ -13,6 +13,7 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
   - **ASKII Edit**: Have ASKII modify your selected code based on your request
   - **ASKII Do**: Agentic workspace agent — view, list, create, modify, rename, and delete files across multiple rounds until the task is complete
   - **ASKII Control**: Give ASKII a screen instruction — it takes screenshots and drives your mouse and keyboard until the task is done
+  - **ASKII Browse**: Give ASKII a browser task — it launches a Puppeteer browser, takes page screenshots, and navigates the web until the task is done
 
 ## Requirements
 
@@ -102,6 +103,26 @@ Search for "ASKII Inline Helper Mode" and select:
 
 ---
 
+#### ASKII Browse (Browser Agent)
+
+1. Open command palette
+2. Search for **"ASKII Browse"**
+3. Describe what you want done in a browser (e.g., "Go to https://example.com and click Learn more")
+4. ASKII launches a Puppeteer browser (visible by default), takes a screenshot of the current page and its URL, then proposes the next action with its reasoning. Supported actions:
+   - **goto**: Navigate to a URL
+   - **click**: Click an element by CSS selector
+   - **type**: Type text into an element by CSS selector
+   - **wait_for**: Wait until a CSS selector appears in the DOM
+   - **back / forward**: Navigate the browser history
+   - **DONE**: Returned when the task is complete
+5. **Confirm each action** before it executes — or enable `askii.doAutoConfirm` to run unattended
+6. After each action a new screenshot is taken and the loop repeats until ASKII returns **DONE** or `askii.doMaxRounds` is reached
+7. The browser is closed automatically when the loop ends
+
+> **Requires a vision-capable model**. Set `askii.browserHeadless` to `false` (default) to watch the browser window while ASKII works.
+
+---
+
 ### Quick Access with Status Bar Button
 
 Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickly access:
@@ -110,6 +131,7 @@ Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickl
 - ASKII Edit
 - ASKII Do
 - ASKII Control
+- ASKII Browse
 - Clear Cache
 
 ## Configuration
@@ -123,9 +145,10 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.copilotModel`: GitHub Copilot model (default: `gpt-4o`)
 - `askii.lmStudioModel`: LM Studio model (default: `qwen/qwen3-coder-30b`)
 - `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny`, default: `funny`)
-- `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control commands (default: 5)
-- `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control (default: `false`)
+- `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control / Browse commands (default: 5)
+- `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control / Browse (default: `false`)
 - `askii.formatAfterEdit`: Auto-format files after ASKII Edit or Do (default: `false`)
+- `askii.browserHeadless`: Run the Puppeteer browser headlessly for ASKII Browse (default: `false` — browser window is visible)
 
 ## Default Mode Examples
 

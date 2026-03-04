@@ -59,6 +59,13 @@ import {
   type ControlAction,
   type ControlHistoryEntry,
 } from '@common/control';
+import {
+  buildBrowserSystemPrompt,
+  parseBrowserAction,
+  describeBrowserAction,
+  executeBrowserAction,
+  takePageScreenshot,
+} from '@common/browser';
 
 export async function askAskiiCommand() {
   const editor = vscode.window.activeTextEditor;
@@ -630,6 +637,132 @@ export async function askiiDoCommand() {
     channel.appendLine(`\nError: ${errorMsg}`);
     vscode.window.showErrorMessage(`ASKII Do failed: ${errorMsg}`);
   }
+}
+
+export async function askiiBrowseCommand() {
+  const task = await vscode.window.showInputBox({
+    prompt: 'Give ASKII a browser task',
+    placeHolder: 'e.g., Go to https://example.com and click Learn more',
+  });
+
+  if (!task) return;
+
+  const config = vscode.workspace.getConfiguration('askii');
+  const maxRounds = config.get<number>('doMaxRounds') ?? 5;
+  const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
+  const headless = config.get<boolean>('browserHeadless') ?? false;
+
+  const outputChannel = vscode.window.createOutputChannel('ASKII Browse');
+  outputChannel.show(true);
+  outputChannel.appendLine(`ASKII Browse started ${getRandomThinkingKaomoji()}`);
+  outputChannel.appendLine(`Task: ${task}`);
+  outputChannel.appendLine('');
+
+  const abortController = new AbortController();
+
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'ASKII Browse', cancellable: true },
+    async (_progress, token) => {
+      token.onCancellationRequested(() => {
+        abortController.abort();
+        outputChannel.appendLine('Stopped by user.');
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const puppeteer = require('puppeteer') as typeof import('puppeteer');
+      let browser: import('puppeteer').Browser | undefined;
+
+      try {
+        outputChannel.appendLine('Launching browser...');
+        browser = await puppeteer.launch({
+          headless: headless ? true : false,
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
+        });
+
+        const [page] = await browser.pages();
+        await page.setViewport(null);
+
+        let round = 0;
+
+        while (round < maxRounds && !abortController.signal.aborted) {
+          outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — capturing screenshot...`);
+
+          const imageBase64 = await takePageScreenshot(page);
+          const currentUrl = page.url();
+
+          outputChannel.appendLine(`Current URL: ${currentUrl}`);
+
+          const systemPrompt = buildBrowserSystemPrompt();
+          const userPrompt =
+            round === 0
+              ? `Task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and determine the next action.`
+              : `Continuing task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and return the next action or DONE.`;
+
+          outputChannel.appendLine('Asking AI...');
+          const rawResponse = await getExtensionResponseWithImage(
+            `${systemPrompt}\n\n${userPrompt}`,
+            imageBase64,
+          );
+
+          if (abortController.signal.aborted) break;
+
+          const action = parseBrowserAction(rawResponse);
+
+          if (!action) {
+            outputChannel.appendLine('Error: could not parse AI response.');
+            outputChannel.appendLine(`Raw: ${rawResponse}`);
+            break;
+          }
+
+          if (action.action === 'DONE') {
+            outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
+            outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
+            break;
+          }
+
+          const description = describeBrowserAction(action);
+          outputChannel.appendLine(`Action: ${description}`);
+          outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
+
+          if (!autoConfirm) {
+            const choice = await vscode.window.showInformationMessage(
+              `ASKII Browse: ${description}`,
+              { modal: false },
+              'Execute',
+              'Stop',
+            );
+            if (choice !== 'Execute' || abortController.signal.aborted) {
+              outputChannel.appendLine('Stopped by user.');
+              break;
+            }
+          }
+
+          try {
+            await executeBrowserAction(action, page);
+            outputChannel.appendLine('Done.\n');
+          } catch (execErr) {
+            const msg = execErr instanceof Error ? execErr.message : 'Unknown error';
+            outputChannel.appendLine(`Action failed: ${msg}`);
+          }
+
+          round++;
+        }
+
+        if (round >= maxRounds && !abortController.signal.aborted) {
+          outputChannel.appendLine(`Max rounds (${maxRounds}) reached.`);
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        outputChannel.appendLine(`Error: ${errorMsg}`);
+        vscode.window.showErrorMessage(`ASKII Browse failed: ${errorMsg}`);
+      } finally {
+        /*         if (browser) {
+          outputChannel.appendLine('Closing browser...');
+          await browser.close().catch(() => undefined);
+        } */
+      }
+    },
+  );
 }
 
 async function _applyFormat(filePath: string): Promise<void> {

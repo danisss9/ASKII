@@ -45,6 +45,11 @@
         "command": "askii.controlTask",
         "title": "ASKII Control",
         "category": "ASKII"
+      },
+      {
+        "command": "askii.browseTask",
+        "title": "ASKII Browse",
+        "category": "ASKII"
       }
     ],
     "configuration": {
@@ -110,6 +115,11 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically format files after ASKII Edit or ASKII Do creates/modifies them"
+        },
+        "askii.browserHeadless": {
+          "type": "boolean",
+          "default": false,
+          "description": "Launch the Puppeteer browser in headless mode for ASKII Browse (set to false to show the browser window)"
         }
       }
     }
@@ -149,6 +159,7 @@
     "jimp": "^0.22.12",
     "markdown-it": "^14.1.1",
     "ollama": "^0.6.3",
+    "puppeteer": "^24.37.5",
     "screenshot-desktop": "^1.12.7"
   }
 }

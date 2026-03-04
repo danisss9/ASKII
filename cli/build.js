@@ -14,6 +14,7 @@ async function main() {
     sourcesContent: false,
     platform: 'node',
     outfile: 'dist/index.js',
+    external: ['puppeteer'],
     banner: {
       js: '#!/usr/bin/env node',
     },
