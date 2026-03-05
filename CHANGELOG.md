@@ -4,7 +4,7 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
-## [0.2.7] - 2026-03-04
+## [0.2.6] - 2026-03-05
 
 ### Added
 
@@ -14,15 +14,24 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - **`askii.openaiUrl` setting**: Custom OpenAI-compatible base URL — leave empty for `api.openai.com`, or set to an Azure OpenAI endpoint or any compatible API
 - **`getOpenAIResponse` / `getOpenAIChat`** in `common/providers.ts`: Shared OpenAI provider functions supporting system prompts, vision (base64 image_url), and optional custom `baseURL`
 - **CLI `--openai-key`, `--openai-model`, `--openai-url` flags**: CLI equivalents of the extension settings; also readable via `ASKII_OPENAI_KEY`, `ASKII_OPENAI_MODEL`, `ASKII_OPENAI_URL` environment variables
+- **Streaming responses in ASKII Do**: The Do command now streams LLM output token-by-token to the output channel / stderr instead of waiting for the full response — all four providers (Ollama, OpenAI, LM Studio, Copilot) supported. New `getOllamaChatStreaming`, `getOpenAIChatStreaming`, `getLMStudioChatStreaming` in `common/providers.ts` and `getExtensionChatStreaming` / `getChatResponseStreaming` in `src/providers.ts` / `cli/index.ts`
+- **`retryLLMCall` utility** (`common/providers.ts`): Generic retry wrapper for LLM calls — retries up to 2 times on transient failures with an optional callback for retry logging; used in the CLI `do` command
+- **`scroll` browser action** (`common/browser.ts`): ASKII Browse can now scroll pages up or down (`{"action": "scroll", "direction": "up"|"down", "amount": 1-10}`). Implemented via `page.evaluate(() => window.scrollBy(...))`. Documented in the browser system prompt
+- **`click_text` browser action** (`common/browser.ts`): Click a visible element by its exact text label instead of a CSS selector (`{"action": "click_text", "text": "Submit"}`). Executes a DOM search across all elements matching by `textContent` or `value`. Prefer over `click` when text is clearly readable
+- **`click_text` control action** (`common/control.ts`): ASKII Control now accepts `click_text` — the system makes a second LLM call with the screenshot to resolve the text to pixel coordinates, then executes `mouse_left_click` at those coordinates. Documented in the control system prompt
+- **`checkControlDependencies()`** (`common/control.ts`): Exported function that verifies required OS tools are installed (`xdotool` on Linux, `osascript` on macOS). Called at startup of both the extension and CLI control commands — shows a clear error listing missing tools instead of crashing mid-execution
 
-## [0.2.6] - 2026-03-04
+### Fixed
+
+- **ReDoS in workspace search**: The `pattern` field from LLM responses is now regex-escaped before being compiled, preventing potential denial-of-service from LLM-generated metacharacters in search actions
+- **Raw response logged on empty parse**: When the `do` command LLM response parses to zero actions, the first 500 characters of the raw response are now logged so users can diagnose malformed LLM output
 
 ### Changed
 
+- **Workspace listing limit raised 100 → 200** (`common/workspace.ts`): `getWorkspaceStructure` now returns up to 200 top-level entries (previously 100) and appends `[...N more items not shown]` when the directory exceeds the limit
 - **ASKII Browse now uses `puppeteer-core`**: Replaced the full `puppeteer` package (which auto-downloads Chromium) with `puppeteer-core`, which requires an existing Chrome/Chromium installation. This removes the bundled browser download and reduces install size
 - **`askii.chromePath` setting**: New string config for the extension (default: empty) that sets the path to the Chrome/Chromium executable used by ASKII Browse. Leave empty to use the system default. Example: `C:\Program Files\Google\Chrome\Application\chrome.exe`
 - **`--chrome-path` CLI flag / `ASKII_CHROME_PATH` env var**: CLI equivalent of `askii.chromePath` — pass the path to Chrome via `--chrome-path /path/to/chrome` or the `ASKII_CHROME_PATH` environment variable
-- **`puppeteer-core` bundled by esbuild**: Both the extension and CLI now bundle `puppeteer-core` directly into their output files rather than keeping it as an external dependency
 
 ## [0.2.5] - 2026-03-03
 

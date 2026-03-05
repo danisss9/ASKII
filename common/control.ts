@@ -28,6 +28,7 @@ export type ControlAction =
     }
   | { action: 'keyboard_input'; text: string; reasoning: string }
   | { action: 'key_press'; key: string; reasoning: string }
+  | { action: 'click_text'; text: string; reasoning: string }
   | { action: 'DONE'; reasoning: string };
 
 export type ControlResponse =
@@ -99,6 +100,7 @@ Respond with ONLY a valid JSON object (no markdown, no extra text) in one of the
 {"action": "mouse_scroll", "x": number, "y": number, "direction": "up"|"down"|"left"|"right", "amount": number, "reasoning": "explanation"}
 {"action": "keyboard_input", "text": "text to type", "reasoning": "explanation"}
 {"action": "key_press", "key": "key name or combo", "reasoning": "explanation"}
+{"action": "click_text", "text": "visible text of the element", "reasoning": "explanation"}
 {"action": "DONE", "reasoning": "explanation of what was accomplished"}
 
 x and y are pixel coordinates within the screenshot image: x ranges from 0 to ${width - 1} (left to right), y ranges from 0 to ${height - 1} (top to bottom). Be as precise as possible.
@@ -106,6 +108,7 @@ x and y are pixel coordinates within the screenshot image: x ranges from 0 to ${
 IMPORTANT: Prefer keyboard shortcuts and keyboard_input over mouse actions whenever possible. Use key_press for common shortcuts (e.g., Ctrl+S to save, Ctrl+C/V to copy/paste, Ctrl+Z to undo, Alt+F4 to close, Alt+Tab to switch windows, Win+D to show desktop, Win to open Start Menu, Win+E for File Explorer, Win+R for Run dialog, Tab/Shift+Tab to navigate between fields, Enter to confirm). Only use mouse actions when keyboard alternatives are not available or practical.
 
 For key_press, supported keys: Enter, Tab, Escape, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, Win (Windows key), F1-F12. For combos use + separator: Ctrl+C, Ctrl+V, Ctrl+Z, Ctrl+S, Ctrl+A, Ctrl+X, Ctrl+W, Alt+Tab, Shift+Tab, Ctrl+Shift+Z, Win+D, Win+E, Win+R, Win+L, etc.
+For click_text, provide the exact visible label text of the button, link, or menu item. The system will find and click it for you — prefer this over mouse_left_click when you can clearly read the target text on screen.
 For mouse_scroll, amount is 1-10 scroll clicks.
 
 You may return a SINGLE action object OR a JSON array of actions to execute in sequence when you are confident about multiple consecutive steps:
@@ -536,6 +539,8 @@ export function describeAction(action: ControlAction): string {
       return `Type: "${action.text}"`;
     case 'key_press':
       return `Press: ${action.key}`;
+    case 'click_text':
+      return `Click element with text: "${action.text}"`;
     case 'DONE':
       return 'DONE';
   }
@@ -552,6 +557,7 @@ const DEFAULT_ACTION_DELAYS: Record<string, number> = {
   mouse_scroll: 500,
   keyboard_input: 1000,
   key_press: 1000,
+  click_text: 1500,
 };
 
 export function getActionDelay(action: ControlAction, baseDelay?: number): number {
@@ -1184,4 +1190,24 @@ export async function executeControlAction(
   }
 
   await sleep(getActionDelay(action, delay), signal);
+}
+
+/** Check for required OS-level tools. Returns array of missing tool descriptions. */
+export function checkControlDependencies(): string[] {
+  const p = platform();
+  const missing: string[] = [];
+  if (p === 'linux') {
+    try {
+      execSync('which xdotool', { stdio: 'ignore' });
+    } catch {
+      missing.push('xdotool (install with: sudo apt install xdotool)');
+    }
+  } else if (p === 'darwin') {
+    try {
+      execSync('which osascript', { stdio: 'ignore' });
+    } catch {
+      missing.push('osascript (should be pre-installed on macOS)');
+    }
+  }
+  return missing;
 }

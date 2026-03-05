@@ -3,10 +3,13 @@ import {
   getOllamaResponse,
   getOllamaResponseStreaming,
   getOllamaChat,
+  getOllamaChatStreaming,
   getLMStudioResponse,
   getLMStudioChat,
+  getLMStudioChatStreaming,
   getOpenAIResponse,
   getOpenAIChat,
+  getOpenAIChatStreaming,
   type ChatMessage,
 } from '@common/providers';
 
@@ -190,6 +193,44 @@ export async function getExtensionChat(messages: ChatMessage[]): Promise<string>
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const mdl = config.get<string>('ollamaModel') || 'gemma3:270m';
     return getOllamaChat(messages, url, mdl);
+  }
+}
+
+export async function getExtensionChatStreaming(
+  messages: ChatMessage[],
+  onChunk: (chunk: string) => void,
+): Promise<string> {
+  const config = vscode.workspace.getConfiguration('askii');
+  const platform = config.get<string>('llmPlatform') || 'ollama';
+
+  if (platform === 'copilot') {
+    const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
+    const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
+    if (models.length === 0) throw new Error('GitHub Copilot not available');
+    const model = models[0];
+    const vsMessages: vscode.LanguageModelChatMessage[] = messages.map((m) => {
+      if (m.role === 'assistant') return vscode.LanguageModelChatMessage.Assistant(m.content);
+      return vscode.LanguageModelChatMessage.User(m.content);
+    });
+    const chatResponse = await model.sendRequest(vsMessages, {}, new vscode.CancellationTokenSource().token);
+    let full = '';
+    for await (const fragment of chatResponse.text) {
+      if (fragment) { onChunk(fragment); full += fragment; }
+    }
+    return full;
+  } else if (platform === 'lmstudio') {
+    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
+    const mdl = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
+    return getLMStudioChatStreaming(messages, url, mdl, onChunk);
+  } else if (platform === 'openai') {
+    const apiKey = config.get<string>('openaiApiKey') || '';
+    const mdl = config.get<string>('openaiModel') || 'gpt-4o';
+    const baseURL = config.get<string>('openaiUrl') || undefined;
+    return getOpenAIChatStreaming(messages, apiKey, mdl, onChunk, baseURL);
+  } else {
+    const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
+    const mdl = config.get<string>('ollamaModel') || 'gemma3:270m';
+    return getOllamaChatStreaming(messages, url, mdl, onChunk);
   }
 }
 

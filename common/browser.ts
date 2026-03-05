@@ -9,6 +9,8 @@ export type BrowserAction =
   | { action: 'wait_for'; selector: string; reasoning: string }
   | { action: 'back'; reasoning: string }
   | { action: 'forward'; reasoning: string }
+  | { action: 'scroll'; direction: 'up' | 'down'; amount: number; reasoning: string }
+  | { action: 'click_text'; text: string; reasoning: string }
   | { action: 'DONE'; reasoning: string };
 
 // === SYSTEM PROMPT ===
@@ -23,6 +25,8 @@ Respond with ONLY a valid JSON object (no markdown, no extra text) in one of the
 {"action": "wait_for", "selector": "CSS selector", "reasoning": "explanation"}
 {"action": "back", "reasoning": "explanation"}
 {"action": "forward", "reasoning": "explanation"}
+{"action": "scroll", "direction": "up"|"down", "amount": 1-10, "reasoning": "explanation"}
+{"action": "click_text", "text": "visible text of the element", "reasoning": "explanation"}
 {"action": "DONE", "reasoning": "explanation of what was accomplished"}
 
 Action descriptions:
@@ -32,6 +36,8 @@ Action descriptions:
 - wait_for: Wait until the CSS selector appears in the DOM
 - back: Navigate back in browser history
 - forward: Navigate forward in browser history
+- scroll: Scroll the page up or down; amount is 1-10 scroll units
+- click_text: Click a visible element by its exact text label; prefer over click when you can read the element's text
 - DONE: Return this when the task is fully completed
 
 For CSS selectors, prefer specific selectors like: input[name="q"], button[type="submit"], a[href*="example"], #id, .class.
@@ -78,6 +84,10 @@ export function describeBrowserAction(action: BrowserAction): string {
       return 'Navigate back';
     case 'forward':
       return 'Navigate forward';
+    case 'scroll':
+      return `Scroll ${action.direction} by ${action.amount}`;
+    case 'click_text':
+      return `Click element with text: "${action.text}"`;
     case 'DONE':
       return 'Done';
   }
@@ -105,6 +115,23 @@ export async function executeBrowserAction(action: BrowserAction, page: Page): P
       break;
     case 'forward':
       await page.goForward({ waitUntil: 'domcontentloaded', timeout: 15000 });
+      break;
+    case 'scroll':
+      await page.evaluate(
+        (dir: string, amt: number) => window.scrollBy(0, dir === 'down' ? amt * 100 : -amt * 100),
+        action.direction,
+        action.amount,
+      );
+      break;
+    case 'click_text':
+      await page.evaluate((targetText: string) => {
+        const el = Array.from(document.querySelectorAll('button, a, input, [role="button"], label, *')).find(
+          (e) =>
+            e.textContent?.trim() === targetText ||
+            (e as HTMLInputElement).value?.trim() === targetText,
+        );
+        if (el) { (el as HTMLElement).click(); }
+      }, action.text);
       break;
     case 'DONE':
       break;

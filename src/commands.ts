@@ -27,7 +27,7 @@ import {
   getExtensionResponse,
   getExtensionResponseStreaming,
   getExtensionResponseWithImage,
-  getExtensionChat,
+  getExtensionChatStreaming,
   getLLMExplanation,
 } from './providers';
 
@@ -57,6 +57,7 @@ import {
   getMonitors,
   getSystemInfo,
   parseControlResponse,
+  checkControlDependencies,
   type ControlAction,
   type ControlHistoryEntry,
   type SystemInfo,
@@ -447,12 +448,19 @@ export async function askiiDoCommand() {
     while (roundCount < maxRounds) {
       channel.appendLine(`\n[Round ${roundCount + 1}/${maxRounds}]`);
 
-      const responseText = await getExtensionChat(messages);
+      channel.append('AI: ');
+      const responseText = await getExtensionChatStreaming(messages, (chunk) =>
+        channel.append(chunk),
+      );
+      channel.appendLine('');
       messages.push({ role: 'assistant', content: responseText });
 
       const actions = parseWorkspaceActions(responseText);
       if (actions.length === 0) {
         channel.appendLine('No actions returned. Done.');
+        if (responseText.trim()) {
+          channel.appendLine(`Raw (first 500): ${responseText.substring(0, 500)}`);
+        }
         break;
       }
 
@@ -759,11 +767,6 @@ export async function askiiBrowseCommand() {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         outputChannel.appendLine(`Error: ${errorMsg}`);
         vscode.window.showErrorMessage(`ASKII Browse failed: ${errorMsg}`);
-      } finally {
-        /*         if (browser) {
-          outputChannel.appendLine('Closing browser...');
-          await browser.close().catch(() => undefined);
-        } */
       }
     },
   );
@@ -911,6 +914,14 @@ export async function askiiControlCommand() {
 
   if (!instruction) return;
 
+  const missingDeps = checkControlDependencies();
+  if (missingDeps.length > 0) {
+    vscode.window.showErrorMessage(
+      `ASKII Control: missing required tools:\n${missingDeps.join('\n')}`,
+    );
+    return;
+  }
+
   const config = vscode.workspace.getConfiguration('askii');
   const maxRounds = config.get<number>('doMaxRounds') ?? 5;
   const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
@@ -1029,6 +1040,29 @@ export async function askiiControlCommand() {
             }
             // Small delay between confirmation and execution
             await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+          }
+
+          // Resolve click_text actions to coordinates via a second LLM call
+          for (const a of actions) {
+            if ((a as ControlAction).action === 'click_text') {
+              const ct = a as { action: 'click_text'; text: string; reasoning: string };
+              try {
+                const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
+                const raw = await getExtensionResponseWithImage(resolvePrompt, imageBase64);
+                const m = raw.match(/\{[\s\S]*?\}/);
+                if (m) {
+                  const coords = JSON.parse(m[0]);
+                  if (typeof coords.x === 'number' && typeof coords.y === 'number') {
+                    Object.assign(a, { action: 'mouse_left_click', x: coords.x, y: coords.y });
+                    outputChannel.appendLine(`Resolved "${ct.text}" → (${coords.x}, ${coords.y})`);
+                  }
+                }
+              } catch {
+                outputChannel.appendLine(
+                  `Warning: could not resolve text "${ct.text}" to coordinates`,
+                );
+              }
+            }
           }
 
           // Execute sequence

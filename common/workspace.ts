@@ -133,10 +133,14 @@ export function getWorkspaceStructure(dirPath: string): string {
       (f: string) => !f.startsWith('.') && f !== 'node_modules' && f !== 'dist',
     );
 
-    for (const file of filtered.slice(0, 100)) {
+    const LISTING_LIMIT = 200;
+    for (const file of filtered.slice(0, LISTING_LIMIT)) {
       const stat = fs.statSync(path.join(dirPath, file));
       const isDir = stat.isDirectory();
       structure += `${file} [${isDir ? 'folder' : 'file'}]\n`;
+    }
+    if (filtered.length > LISTING_LIMIT) {
+      structure += `[...${filtered.length - LISTING_LIMIT} more items not shown]\n`;
     }
   } catch (_) {
     // Ignore errors
@@ -244,7 +248,8 @@ export function executeSearchAction(action: WorkspaceAction, workspaceRoot: stri
         try {
           const content = fs.readFileSync(fullPath, 'utf-8');
           const lines = content.split('\n');
-          const regex = new RegExp(pattern, 'i');
+          const escapedPattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const regex = new RegExp(escapedPattern, 'i');
           lines.forEach((line, i) => {
             if (regex.test(line)) {
               const rel = path.relative(workspaceRoot, fullPath);

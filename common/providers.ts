@@ -48,6 +48,26 @@ export async function getOllamaChat(
   return response.message.content || 'No response';
 }
 
+export async function getOllamaChatStreaming(
+  messages: ChatMessage[],
+  url: string,
+  model: string,
+  onChunk: (chunk: string) => void,
+): Promise<string> {
+  const ollama = new Ollama({ host: url });
+  const stream = await ollama.chat({
+    model,
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    stream: true,
+  });
+  let full = '';
+  for await (const chunk of stream) {
+    const text = chunk.message.content;
+    if (text) { onChunk(text); full += text; }
+  }
+  return full;
+}
+
 export async function getLMStudioResponse(
   prompt: string,
   url: string,
@@ -115,6 +135,27 @@ export async function getOpenAIChat(
   return response.choices[0]?.message?.content || 'No response';
 }
 
+export async function getOpenAIChatStreaming(
+  messages: ChatMessage[],
+  apiKey: string,
+  model: string,
+  onChunk: (chunk: string) => void,
+  baseURL?: string,
+): Promise<string> {
+  const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  const oaiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+  const stream = await client.chat.completions.create({ model, messages: oaiMessages, stream: true });
+  let full = '';
+  for await (const chunk of stream) {
+    const text = chunk.choices[0]?.delta?.content ?? '';
+    if (text) { onChunk(text); full += text; }
+  }
+  return full;
+}
+
 export async function getLMStudioChat(
   messages: ChatMessage[],
   url: string,
@@ -133,4 +174,35 @@ export async function getLMStudioChat(
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     throw new Error(`LM Studio error: ${errorMessage}`);
   }
+}
+
+export async function getLMStudioChatStreaming(
+  messages: ChatMessage[],
+  url: string,
+  model: string,
+  onChunk: (chunk: string) => void,
+): Promise<string> {
+  // LM Studio SDK does not expose a streaming chat interface; deliver as one chunk.
+  const result = await getLMStudioChat(messages, url, model);
+  onChunk(result);
+  return result;
+}
+
+export async function retryLLMCall<T>(
+  fn: () => Promise<T>,
+  maxRetries = 2,
+  onRetry?: (attempt: number, error: Error) => void,
+): Promise<T> {
+  let lastError: Error = new Error('Unknown error');
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      if (attempt < maxRetries && onRetry) {
+        onRetry(attempt + 1, lastError);
+      }
+    }
+  }
+  throw lastError;
 }

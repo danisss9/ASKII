@@ -18,10 +18,11 @@ import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import {
   getOllamaResponse,
   getLMStudioResponse,
-  getOllamaChat,
-  getLMStudioChat,
+  getOllamaChatStreaming,
+  getLMStudioChatStreaming,
   getOpenAIResponse,
-  getOpenAIChat,
+  getOpenAIChatStreaming,
+  retryLLMCall,
   type ChatMessage,
 } from '@common/providers';
 import {
@@ -33,6 +34,7 @@ import {
   getSystemInfo,
   parseControlResponse,
   refineCoordinates,
+  checkControlDependencies,
   type ControlAction,
   type ControlHistoryEntry,
   type SystemInfo,
@@ -152,13 +154,23 @@ async function getResponse(
   }
 }
 
-async function getChatResponse(config: Config, messages: ChatMessage[]): Promise<string> {
+async function getChatResponseStreaming(
+  config: Config,
+  messages: ChatMessage[],
+  onChunk: (chunk: string) => void,
+): Promise<string> {
   if (config.platform === 'lmstudio') {
-    return getLMStudioChat(messages, config.url, config.model);
+    return getLMStudioChatStreaming(messages, config.url, config.model, onChunk);
   } else if (config.platform === 'openai') {
-    return getOpenAIChat(messages, config.openaiApiKey, config.model, config.openaiBaseURL);
+    return getOpenAIChatStreaming(
+      messages,
+      config.openaiApiKey,
+      config.model,
+      onChunk,
+      config.openaiBaseURL,
+    );
   }
-  return getOllamaChat(messages, config.url, config.model);
+  return getOllamaChatStreaming(messages, config.url, config.model, onChunk);
 }
 
 function executeCliWriteAction(
@@ -472,12 +484,22 @@ async function main() {
       while (roundCount < config.maxRounds) {
         console.error(`\n[Round ${roundCount + 1}/${config.maxRounds}]`);
 
-        const responseText = await getChatResponse(config, messages);
+        process.stderr.write('AI: ');
+        const responseText = await retryLLMCall(
+          () => getChatResponseStreaming(config, messages, (chunk) => process.stderr.write(chunk)),
+          2,
+          (attempt, err) =>
+            console.error(`\nLLM call failed (attempt ${attempt}): ${err.message}. Retrying...`),
+        );
+        process.stderr.write('\n');
         messages.push({ role: 'assistant', content: responseText });
 
         const actions = parseWorkspaceActions(responseText);
         if (actions.length === 0) {
           console.error('No actions returned. Done.');
+          if (responseText.trim()) {
+            console.error(`Raw (first 500): ${responseText.substring(0, 500)}`);
+          }
           break;
         }
 
@@ -660,6 +682,14 @@ async function main() {
       process.exit(1);
     }
 
+    const missingDeps = checkControlDependencies();
+    if (missingDeps.length > 0) {
+      console.error(
+        `Error: missing required tools:\n${missingDeps.map((d) => `  - ${d}`).join('\n')}`,
+      );
+      process.exit(1);
+    }
+
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
     const abortController = new AbortController();
 
@@ -796,6 +826,27 @@ async function main() {
           break;
         }
 
+        // Resolve click_text actions to coordinates via a second LLM call
+        for (const a of actions) {
+          if ((a as ControlAction).action === 'click_text') {
+            const ct = a as { action: 'click_text'; text: string; reasoning: string };
+            try {
+              const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
+              const raw = await getResponse(config, resolvePrompt, undefined, imageBase64);
+              const m = raw.match(/\{[\s\S]*?\}/);
+              if (m) {
+                const coords = JSON.parse(m[0]);
+                if (typeof coords.x === 'number' && typeof coords.y === 'number') {
+                  Object.assign(a, { action: 'mouse_left_click', x: coords.x, y: coords.y });
+                  console.error(`Resolved "${ct.text}" → (${coords.x}, ${coords.y})`);
+                }
+              }
+            } catch {
+              console.error(`Warning: could not resolve text "${ct.text}" to coordinates`);
+            }
+          }
+        }
+
         // Execute sequence
         for (const a of actions) {
           if (abortController.signal.aborted) break;
@@ -928,11 +979,6 @@ async function main() {
       rl.close();
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);
-    } finally {
-      if (browser) {
-        console.error('Closing browser...');
-        await browser.close().catch(() => undefined);
-      }
     }
   } else {
     console.error(`Unknown command: ${command}`);
