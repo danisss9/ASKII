@@ -6,9 +6,10 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 
 - **Random Kaomoji**: Adds a random kaomoji emoticon after the current line
 - **AI Explanations**: Uses Ollama, GitHub Copilot, LM Studio, or OpenAI to generate concise explanations of your code
-- **Inline Helper Modes**: Choose between off, helpful, or funny modes
+- **Inline Helper Modes**: Choose between `off`, `helpful`, `funny`, or `wiki` modes
+- **Wiki RAG**: Index your own `.md` documentation files and inject relevant snippets as context into any command — or display them inline as you navigate code
 - **Multi-Platform AI**: Support for Ollama (local), GitHub Copilot (cloud), LM Studio (local with official SDK), and OpenAI (cloud, or any OpenAI-compatible API)
-- **Four Command Modes**:
+- **Five Command Modes**:
   - **Ask ASKII**: Ask questions about your selected code
   - **ASKII Edit**: Have ASKII modify your selected code based on your request
   - **ASKII Do**: Agentic workspace agent — view, list, create, modify, rename, and delete files across multiple rounds until the task is complete
@@ -59,9 +60,10 @@ Open VS Code Settings (`Ctrl+,` or `Cmd+,`) and search for "ASKII LLM Platform" 
 
 Search for "ASKII Inline Helper Mode" and select:
 
-- `off` - No inline decorations
-- `helpful` - Practical coding advice
-- `funny` - Humorous comments (default)
+- `off` — No inline decorations
+- `helpful` — Practical coding advice
+- `funny` — Humorous comments (default)
+- `wiki` — Shows a one-sentence explanation informed by your indexed wiki docs. Searches the wiki index for the current line and passes the top matching chunks as context to the LLM. Requires `askii.wikiPath` to be set and indexed
 
 ### Commands
 
@@ -133,6 +135,19 @@ Search for "ASKII Inline Helper Mode" and select:
 
 ---
 
+### Wiki RAG (Documentation Context)
+
+Point ASKII at a folder of `.md` files and it will index them into a local vector database (powered by [MiniSearch](https://github.com/lucaong/minisearch) — pure JS, no native dependencies). The relevant chunks are automatically prepended as context when you Ask, Edit, or Do tasks.
+
+1. Set `askii.wikiPath` to the folder containing your `.md` docs
+2. Run **ASKII: Reload Wiki** from the command palette (or status-bar menu) to build the index — a progress spinner shows while indexing and a notification confirms when done
+3. Enable `askii.wikiEnabled` to inject wiki context into Ask / Edit / Do commands
+4. Optionally set `askii.inlineHelperMode` to `wiki` for inline decorations that show LLM explanations enriched by your docs
+
+The index is cached in memory after the first load — no disk reads on subsequent queries.
+
+---
+
 ### Quick Access with Status Bar Button
 
 Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickly access:
@@ -142,6 +157,7 @@ Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickl
 - ASKII Do
 - ASKII Control
 - ASKII Browse
+- Reload Wiki
 - Clear Cache
 
 ## Configuration
@@ -157,7 +173,9 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.openaiApiKey`: OpenAI API key (used when `llmPlatform` is `openai`)
 - `askii.openaiModel`: OpenAI model (default: `gpt-4o`)
 - `askii.openaiUrl`: OpenAI-compatible base URL — leave empty for `api.openai.com`, or use for Azure OpenAI / other compatible APIs
-- `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny`, default: `funny`)
+- `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny` | `wiki`, default: `off`)
+- `askii.wikiEnabled`: Enable wiki RAG context for Ask / Edit / Do commands (default: `false`)
+- `askii.wikiPath`: Path to a folder containing `.md` documentation files to index for wiki RAG. Run **ASKII: Reload Wiki** after changing this or updating the docs
 - `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control / Browse commands (default: 5)
 - `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control / Browse (default: `false`)
 - `askii.formatAfterEdit`: Auto-format files after ASKII Edit or Do (default: `false`)
@@ -176,6 +194,12 @@ const sum = a + b; (◕‿◕) The age-old tradition of making numbers hang out 
 
 ```javascript
 const sum = a + b; (◕‿◕) Adds two variables; prefer const for variables that won't be reassigned.
+```
+
+### Wiki Mode
+
+```javascript
+connectToDatabase(config); (⌐■_■) [docs/database.md — Connection] Pass the config object returned by loadConfig(); see the Connection section for supported options.
 ```
 
 ## Technical Details

@@ -14,6 +14,7 @@ import {
   type ActionResult,
 } from '@common/workspace';
 import { unescapeJsonString, extractCode } from '@common/utils';
+import { buildWikiIndex, saveWikiIndex, loadWikiIndex, searchWiki } from '@common/wiki';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import {
   getOllamaResponse,
@@ -61,6 +62,8 @@ interface Config {
   yes: boolean;
   headless: boolean;
   chromePath: string | undefined;
+  wikiPath: string | undefined;
+  useWiki: boolean;
 }
 
 function getFlagValue(flags: string[], ...names: string[]): string | undefined {
@@ -123,7 +126,21 @@ function getConfig(flags: string[]): Config {
     yes: hasFlag(flags, '-y', '--yes'),
     headless: hasFlag(flags, '--headless'),
     chromePath: getFlagValue(flags, '--chrome-path') || process.env.ASKII_CHROME_PATH || undefined,
+    wikiPath: getFlagValue(flags, '--wiki-path') || process.env.ASKII_WIKI_PATH || undefined,
+    useWiki: hasFlag(flags, '--use-wiki') || process.env.ASKII_USE_WIKI === '1',
   };
+}
+
+function getCliWikiContext(config: Config, query: string): string {
+  if (!config.useWiki || !config.wikiPath) return '';
+  const index = loadWikiIndex(config.wikiPath);
+  if (!index) {
+    console.error('  [wiki] No index found — run: askii wiki-reload --wiki-path <path>');
+    return '';
+  }
+  const ctx = searchWiki(query, index);
+  if (ctx) console.error(`  [wiki] Injecting ${ctx.length} chars of context`);
+  return ctx;
 }
 
 async function getResponse(
@@ -307,6 +324,7 @@ Commands:
   do <task>             Agentic task runner — creates, modifies, and deletes files
   control <instruction> Screen control — takes screenshots and drives mouse/keyboard
   browse <task>         Browser agent — launches Puppeteer and navigates the web
+  wiki-reload           Index .md files from --wiki-path into the local vector database
 
 Options:
   -p, --platform <p>         LLM platform: ollama, lmstudio, openai (default: ollama)
@@ -325,6 +343,8 @@ Options:
       --file <filename>      Filename of the code (e.g. src/utils.ts)
       --headless             Run Puppeteer in headless mode for "browse" (default: visible)
       --chrome-path <path>   Path to Chrome/Chromium executable for "browse" (env: ASKII_CHROME_PATH)
+      --wiki-path <path>     Path to folder with .md docs for wiki RAG (env: ASKII_WIKI_PATH)
+      --use-wiki             Inject wiki context into ask/edit/do (env: ASKII_USE_WIKI=1)
   -y, --yes                  Auto-confirm all actions
   -h, --help                 Show help
 
@@ -334,6 +354,7 @@ Environment variables:
   ASKII_OLLAMA_MODEL    ASKII_LMSTUDIO_MODEL
   ASKII_OPENAI_KEY      ASKII_OPENAI_MODEL    ASKII_OPENAI_URL
   ASKII_MODE            ASKII_MAX_ROUNDS
+  ASKII_WIKI_PATH       ASKII_USE_WIKI
 
 Examples:
   cat myfile.ts | askii ask "what does this do?"
@@ -347,6 +368,8 @@ Examples:
   askii control --yes --ollama-model llava "click the search bar and search for cats"
   askii browse --ollama-model llava "go to https://example.com and click Learn more"
   askii browse --yes --headless --ollama-model llava "search Google for Node.js"
+  askii wiki-reload --wiki-path ./docs
+  askii ask --wiki-path ./docs --use-wiki "how do I configure the database?"
 `);
 }
 
@@ -363,7 +386,26 @@ async function main() {
 
   const config = getConfig(flags);
 
-  if (command === 'ask') {
+  if (command === 'wiki-reload') {
+    const wikiPath = config.wikiPath || getFlagValue(flags, '--wiki-path') || process.env.ASKII_WIKI_PATH;
+    if (!wikiPath) {
+      console.error('Error: provide --wiki-path <path> or set ASKII_WIKI_PATH');
+      process.exit(1);
+    }
+    if (!fs.existsSync(wikiPath)) {
+      console.error(`Error: wiki path not found: ${wikiPath}`);
+      process.exit(1);
+    }
+    try {
+      console.error(`Indexing wiki files in: ${wikiPath}`);
+      const index = buildWikiIndex(wikiPath);
+      saveWikiIndex(index, wikiPath);
+      console.error(`Wiki indexed: ${index.chunkCount} chunks from ${index.fileCount} file(s). ${getRandomKaomoji()}`);
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      process.exit(1);
+    }
+  } else if (command === 'ask') {
     const stdin = await readStdin();
     const code = getFlagValue(flags, '-c', '--code') || stdin;
     const question = positional.slice(1).join(' ');
@@ -375,15 +417,18 @@ async function main() {
       process.exit(1);
     }
 
+    const wikiCtxAsk = getCliWikiContext(config, question);
+    const wikiSectionAsk = wikiCtxAsk ? `Relevant documentation:\n${wikiCtxAsk}\n\n` : '';
+
     let prompt: string;
     if (code) {
       const metaLines = [file ? `File: ${file}` : null, lang ? `Language: ${lang}` : null]
         .filter(Boolean)
         .join('\n');
       const codeBlock = `\`\`\`${lang ?? ''}\n${code}\n\`\`\``;
-      prompt = `${metaLines ? metaLines + '\n' : ''}Code:\n${codeBlock}\n\nQuestion: ${question}`;
+      prompt = `${wikiSectionAsk}${metaLines ? metaLines + '\n' : ''}Code:\n${codeBlock}\n\nQuestion: ${question}`;
     } else {
-      prompt = `Question: ${question}`;
+      prompt = `${wikiSectionAsk}Question: ${question}`;
     }
 
     console.error(`ASKII is thinking... ${getRandomThinkingKaomoji()}`);
@@ -415,7 +460,9 @@ async function main() {
     const metaLines = [file ? `File: ${file}` : null, lang ? `Language: ${lang}` : null]
       .filter(Boolean)
       .join('\n');
-    const prompt = `${metaLines ? metaLines + '\n' : ''}Update this code:\n\`\`\`${lang ?? ''}\n${code}\n\`\`\`\n\nRequest: ${instruction}\n\nReturn only the updated code without explanation.`;
+    const wikiCtxEdit = getCliWikiContext(config, instruction);
+    const wikiSectionEdit = wikiCtxEdit ? `Relevant documentation:\n${wikiCtxEdit}\n\n` : '';
+    const prompt = `${wikiSectionEdit}${metaLines ? metaLines + '\n' : ''}Update this code:\n\`\`\`${lang ?? ''}\n${code}\n\`\`\`\n\nRequest: ${instruction}\n\nReturn only the updated code without explanation.`;
 
     console.error(`ASKII is editing... (•_•)>⌐■-■`);
 
@@ -465,14 +512,24 @@ async function main() {
     deleteAllBackups(workDir);
 
     console.error(`ASKII is working... ${getRandomThinkingKaomoji()}`);
+    console.error('Press Ctrl+C to stop at any time.\n');
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    const abortController = new AbortController();
+
+    process.once('SIGINT', () => {
+      abortController.abort();
+      console.error('\n\nStopped by user (Ctrl+C).');
+      rl.close();
+      process.exit(0);
+    });
 
     try {
       const workspaceStructure = getWorkspaceStructure(workDir);
       console.error(`\nWorkspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
 
-      const systemPrompt = buildDoSystemPrompt(workspaceStructure);
+      const wikiAvailableDo = !!(config.wikiPath && loadWikiIndex(config.wikiPath));
+      const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailableDo);
       const messages: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: task },
@@ -481,7 +538,7 @@ async function main() {
       let completedActions = 0;
       let roundCount = 0;
 
-      while (roundCount < config.maxRounds) {
+      while (roundCount < config.maxRounds && !abortController.signal.aborted) {
         console.error(`\n[Round ${roundCount + 1}/${config.maxRounds}]`);
 
         process.stderr.write('AI: ');
@@ -492,6 +549,8 @@ async function main() {
             console.error(`\nLLM call failed (attempt ${attempt}): ${err.message}. Retrying...`),
         );
         process.stderr.write('\n');
+
+        if (abortController.signal.aborted) break;
         messages.push({ role: 'assistant', content: responseText });
 
         const actions = parseWorkspaceActions(responseText);
@@ -504,10 +563,10 @@ async function main() {
         }
 
         const readActions = actions.filter(
-          (a) => a.type === 'view' || a.type === 'list' || a.type === 'search',
+          (a) => a.type === 'view' || a.type === 'list' || a.type === 'search' || a.type === 'wiki_search',
         );
         const writeActions = actions.filter(
-          (a) => a.type !== 'view' && a.type !== 'list' && a.type !== 'search',
+          (a) => a.type !== 'view' && a.type !== 'list' && a.type !== 'search' && a.type !== 'wiki_search',
         );
 
         const feedbackParts: string[] = [];
@@ -516,7 +575,14 @@ async function main() {
         const viewResults: Record<string, string> = {};
         for (const action of readActions) {
           try {
-            if (action.type === 'search') {
+            if (action.type === 'wiki_search') {
+              const q = action.query ?? '';
+              console.error(`  → Wiki search: "${q}"`);
+              const wikiData = config.wikiPath ? loadWikiIndex(config.wikiPath) : null;
+              viewResults[`wiki_search:${q}`] = wikiData
+                ? (searchWiki(q, wikiData) || 'No wiki results found')
+                : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
+            } else if (action.type === 'search') {
               console.error(`  → Search: "${action.pattern}"`);
               viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);
             } else if (action.type === 'view' && action.paths) {

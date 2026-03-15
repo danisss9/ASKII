@@ -12,6 +12,7 @@ import {
   getOpenAIChatStreaming,
   type ChatMessage,
 } from '@common/providers';
+import { loadWikiIndex, searchWikiRaw } from '@common/wiki';
 
 export async function getExtensionResponseWithImage(
   prompt: string,
@@ -244,12 +245,28 @@ export async function getLLMExplanation(
 
   if (mode === 'off') return '';
 
-  const isHelpful = mode === 'helpful';
+  // Wiki mode: search the index for context, then ask the LLM with that context
+  let wikiContext = '';
+  if (mode === 'wiki') {
+    const wikiPath = config.get<string>('wikiPath') ?? '';
+    if (!wikiPath) return 'Set askii.wikiPath to enable wiki mode';
+    const data = loadWikiIndex(wikiPath);
+    if (!data) return 'Run "ASKII: Reload Wiki" to build the index';
+    const hits = searchWikiRaw(lineText, data, 2);
+    if (hits.length > 0) {
+      wikiContext = hits.map(h => `[${h.source} — ${h.heading}]\n${h.content}`).join('\n\n---\n\n');
+    }
+  }
+
+  const isHelpful = mode === 'helpful' || mode === 'wiki';
   const systemPrompt = isHelpful
     ? 'You are ASKII, a helpful coding assistant. Provide clear, concise explanations.'
     : 'You are ASKII, a witty coding assistant. Provide humorous comments.';
+  const wikiSection = wikiContext
+    ? `Relevant documentation:\n${wikiContext}\n\n`
+    : '';
   const userPrompt = isHelpful
-    ? `Explain this code in one sentence: ${lineText}`
+    ? `${wikiSection}Explain this code in one sentence: ${lineText}`
     : `Make a funny comment about this code in one sentence: ${lineText}`;
 
   try {

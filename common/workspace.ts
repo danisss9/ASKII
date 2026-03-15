@@ -11,6 +11,7 @@ export interface WorkspaceAction {
     | 'rename'
     | 'list'
     | 'search'
+    | 'wiki_search'
     | 'run'
     | 'copy'
     | 'mkdir';
@@ -22,7 +23,8 @@ export interface WorkspaceAction {
   newContent?: string;
   startLine?: number;   // partial view / line-range modify (1-indexed)
   endLine?: number;
-  pattern?: string;     // search
+  pattern?: string;     // search (code grep)
+  query?: string;       // wiki_search (natural language)
   command?: string;     // run
 }
 
@@ -151,7 +153,7 @@ export function getWorkspaceStructure(dirPath: string): string {
 export function parseWorkspaceActions(responseText: string): WorkspaceAction[] {
   const ALL_TYPES = [
     'view', 'create', 'modify', 'write', 'delete', 'rename',
-    'list', 'search', 'run', 'copy', 'mkdir',
+    'list', 'search', 'wiki_search', 'run', 'copy', 'mkdir',
   ];
   try {
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);
@@ -268,7 +270,11 @@ export function executeSearchAction(action: WorkspaceAction, workspaceRoot: stri
 }
 
 /** Builds the system prompt for the do command (shared by extension + CLI). */
-export function buildDoSystemPrompt(workspaceStructure: string): string {
+export function buildDoSystemPrompt(workspaceStructure: string, wikiAvailable = false): string {
+  const wikiAction = wikiAvailable
+    ? `- {"type": "wiki_search", "query": "natural language question"} — search the documentation wiki and get relevant context back\n`
+    : '';
+
   return `You are ASKII, an AI agent that can create, modify, view, delete, rename, list, search, run commands, copy files, and make directories in a workspace.
 
 Current workspace structure:
@@ -284,7 +290,7 @@ READ ACTIONS (results returned to you, no confirmation needed):
 - {"type": "view", "paths": ["file1.ts", "file2.ts"]} — view multiple files at once
 - {"type": "list", "path": "src/"} — list folder contents (node_modules/dist excluded)
 - {"type": "search", "pattern": "TODO"} — grep workspace files for pattern (node_modules/dist excluded)
-
+${wikiAction}
 WRITE ACTIONS (require confirmation):
 - {"type": "create", "path": "path/to/file", "content": "full file content"} — create new file
 - {"type": "write", "path": "path/to/file", "content": "full file content"} — replace entire file

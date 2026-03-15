@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -49,6 +49,11 @@
       {
         "command": "askii.browseTask",
         "title": "ASKII Browse",
+        "category": "ASKII"
+      },
+      {
+        "command": "askii.reloadWiki",
+        "title": "ASKII: Reload Wiki",
         "category": "ASKII"
       }
     ],
@@ -111,7 +116,14 @@
           "enum": [
             "off",
             "helpful",
-            "funny"
+            "funny",
+            "wiki"
+          ],
+          "enumDescriptions": [
+            "Disable inline decorations",
+            "Show concise code explanations",
+            "Show humorous comments",
+            "Show relevant wiki documentation snippets (requires askii.wikiPath to be indexed)"
           ],
           "default": "off",
           "description": "Inline helper mode for code decorations"
@@ -141,6 +153,16 @@
           "type": "string",
           "default": "",
           "description": "Path to the Chrome/Chromium executable for ASKII Browse (e.g. C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe). Leave empty to use the system default."
+        },
+        "askii.wikiEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable wiki RAG context for Ask / Edit / Do commands. Requires askii.wikiPath to be set and the wiki to be indexed via ASKII: Reload Wiki."
+        },
+        "askii.wikiPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to folder containing .md documentation files used for wiki RAG context. Run 'ASKII: Reload Wiki' after changing this or updating the docs."
         }
       }
     }
@@ -179,6 +201,7 @@
     "@lmstudio/sdk": "^1.5.0",
     "jimp": "^0.22.12",
     "markdown-it": "^14.1.1",
+    "minisearch": "^7.2.0",
     "ollama": "^0.6.3",
     "openai": "^6.25.0",
     "puppeteer-core": "^24.37.5",

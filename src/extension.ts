@@ -12,6 +12,7 @@ import {
   askiiDoCommand,
   askiiControlCommand,
   askiiBrowseCommand,
+  askiiReloadWikiCommand,
   askiiDiffProvider,
 } from './commands';
 
@@ -54,6 +55,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.browseTask', askiiBrowseCommand),
   );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('askii.reloadWiki', askiiReloadWikiCommand),
+  );
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.text = '(⌐■_■)';
@@ -70,6 +74,7 @@ export function activate(context: vscode.ExtensionContext) {
         { label: '$(files) ASKII Do', command: 'askii.doTask' },
         { label: '$(screen-full) ASKII Control', command: 'askii.controlTask' },
         { label: '$(browser) ASKII Browse', command: 'askii.browseTask' },
+        { label: '$(book) Reload Wiki', command: 'askii.reloadWiki' },
         { label: '$(refresh) Clear Cache', command: 'askii.clearCache' },
       ]);
 

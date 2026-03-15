@@ -149,6 +149,44 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 
 ---
 
+### `wiki-reload` — Index wiki documentation
+
+Walks all `.md` files under `--wiki-path`, splits them into sections by heading, builds a [MiniSearch](https://github.com/lucaong/minisearch) BM25 index, and saves it as `.askii-wiki-index.json` inside the wiki folder. Run this once after pointing `--wiki-path` at your docs, and again whenever the docs change.
+
+**bash**
+
+```bash
+askii wiki-reload --wiki-path ./docs
+askii wiki-reload --wiki-path /home/user/my-project/docs
+```
+
+**PowerShell**
+
+```powershell
+askii wiki-reload --wiki-path .\docs
+askii wiki-reload --wiki-path C:\my-project\docs
+```
+
+After indexing, pass `--wiki-path` and `--use-wiki` to any `ask`, `edit`, or `do` command to inject the top matching documentation chunks as context:
+
+**bash**
+
+```bash
+askii ask --wiki-path ./docs --use-wiki "how do I configure the database?"
+cat src/db.ts | askii edit --wiki-path ./docs --use-wiki "add connection pooling"
+askii do --wiki-path ./docs --use-wiki "implement the auth flow described in the docs"
+```
+
+**PowerShell**
+
+```powershell
+askii ask --wiki-path .\docs --use-wiki "how do I configure the database?"
+Get-Content src\db.ts | askii edit --wiki-path .\docs --use-wiki "add connection pooling"
+askii do --wiki-path .\docs --use-wiki "implement the auth flow described in the docs"
+```
+
+---
+
 ### `browse` — Browser agent
 
 Launches a Puppeteer browser, takes a screenshot of the current page and its URL, sends both to the AI, and executes the returned action. Repeats until the AI returns `DONE` or `--max-rounds` is reached. Requires a **vision-capable model** (e.g. `llava`, `moondream2`).
@@ -212,6 +250,8 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 | `--yes`            | `-y`  | Auto-confirm all actions                             |                          |
 | `--headless`       |       | Run Puppeteer headlessly for `browse`                | `false` (visible)        |
 | `--chrome-path`    |       | Path to Chrome/Chromium executable for `browse`      |                          |
+| `--wiki-path`      |       | Path to folder with `.md` docs for wiki RAG (env: `ASKII_WIKI_PATH`) | |
+| `--use-wiki`       |       | Inject wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_WIKI=1`) | |
 
 ## Environment Variables
 
@@ -237,6 +277,10 @@ export ASKII_OPENAI_URL=   # leave empty for api.openai.com
 export ASKII_MODE=funny
 export ASKII_MAX_ROUNDS=5
 export ASKII_CHROME_PATH=/usr/bin/chromium
+
+# Wiki RAG
+export ASKII_WIKI_PATH=./docs
+export ASKII_USE_WIKI=1
 ```
 
 **PowerShell**
@@ -261,6 +305,10 @@ $env:ASKII_OPENAI_URL = ""   # leave empty for api.openai.com
 $env:ASKII_MODE = "funny"
 $env:ASKII_MAX_ROUNDS = "5"
 $env:ASKII_CHROME_PATH = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+
+# Wiki RAG
+$env:ASKII_WIKI_PATH = ".\docs"
+$env:ASKII_USE_WIKI = "1"
 ```
 
 ## Platforms

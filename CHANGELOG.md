@@ -4,6 +4,22 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.7] - 2026-03-15
+
+### Added
+
+- **Wiki RAG system** (`common/wiki.ts`): Index any folder of `.md` documentation files into a local vector database and inject the most relevant chunks as context into Ask, Edit, and Do commands
+- **`minisearch` vector database**: The wiki index uses [MiniSearch](https://github.com/lucaong/minisearch) — a pure JavaScript/TypeScript BM25 full-text search library with no native dependencies, fully bundled into the extension. Supports fuzzy matching, prefix search, and heading-boosted relevance scoring
+- **`askii.wikiPath` setting**: Path to a folder containing `.md` documentation files to index
+- **`askii.wikiEnabled` setting**: Toggle wiki RAG context on/off for Ask / Edit / Do commands (requires `askii.wikiPath` to be set and indexed)
+- **`ASKII: Reload Wiki` command** (`askii.reloadWiki`): Walks all `.md` files under `askii.wikiPath`, splits them into chunks by heading, builds the MiniSearch index, and saves it as `.askii-wiki-index.json` inside the wiki folder. Shows a progress notification spinner with step messages and a completion notification reporting chunk and file counts. Also available in the status-bar quick-pick menu
+- **Wiki context injection in Ask / Edit / Do**: When `askii.wikiEnabled` is true, ASKII searches the index for the top 3 most relevant chunks and prepends them as `Relevant documentation:` context before sending the prompt to the LLM
+- **`"wiki"` inline helper mode**: New `inlineHelperMode` option that searches the wiki index for the current line, injects the top 2 matching chunks as documentation context, then asks the LLM for a one-sentence explanation — combining wiki knowledge with LLM reasoning. `enumDescriptions` added to all four inline modes in the extension manifest
+- **In-memory wiki cache**: The raw `WikiIndexData` (disk read + JSON parse) and the deserialized `MiniSearch` instance are both cached at module level after the first load. Subsequent calls — including every inline decoration trigger — use the cache with zero disk I/O. `saveWikiIndex` warms both caches immediately so the first query after a reload is also fast
+- **CLI `wiki-reload` command**: Indexes `.md` files from `--wiki-path` and saves the index. Reports chunk and file counts on completion
+- **CLI `--wiki-path` flag / `ASKII_WIKI_PATH` env var**: Path to the wiki docs folder for the CLI
+- **CLI `--use-wiki` flag / `ASKII_USE_WIKI=1` env var**: Enable wiki context injection for CLI `ask`, `edit`, and `do` commands
+
 ## [0.2.6] - 2026-03-05
 
 ### Added

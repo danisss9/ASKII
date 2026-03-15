@@ -28,7 +28,6 @@ import {
   getExtensionResponseStreaming,
   getExtensionResponseWithImage,
   getExtensionChatStreaming,
-  getLLMExplanation,
 } from './providers';
 
 import {
@@ -69,6 +68,17 @@ import {
   executeBrowserAction,
   takePageScreenshot,
 } from '@common/browser';
+import { buildWikiIndex, saveWikiIndex, loadWikiIndex, searchWiki } from '@common/wiki';
+
+function getWikiContext(query: string): string {
+  const config = vscode.workspace.getConfiguration('askii');
+  if (!(config.get<boolean>('wikiEnabled') ?? false)) return '';
+  const wikiPath = config.get<string>('wikiPath') ?? '';
+  if (!wikiPath) return '';
+  const index = loadWikiIndex(wikiPath);
+  if (!index) return '';
+  return searchWiki(query, index);
+}
 
 export async function askAskiiCommand() {
   const editor = vscode.window.activeTextEditor;
@@ -237,8 +247,12 @@ export async function askAskiiCommand() {
     panelDisposed = true;
   });
 
+  // Wiki context is fetched once for the initial question
+  const wikiCtx = getWikiContext(question);
+  const wikiSection = wikiCtx ? `Relevant documentation:\n${wikiCtx}\n\n` : '';
+
   while (!panelDisposed) {
-    const fullPrompt = codeContext + history + `Question: ${currentQuestion}`;
+    const fullPrompt = wikiSection + codeContext + history + `Question: ${currentQuestion}`;
     let accumulated = '';
 
     try {
@@ -324,10 +338,14 @@ export async function askiiEditCommand() {
       .filter(Boolean)
       .join('\n');
 
+    const wikiCtxEdit = getWikiContext(question);
+    const wikiSectionEdit = wikiCtxEdit ? `Relevant documentation:\n${wikiCtxEdit}\n\n` : '';
+
     let prompt: string;
     if (hasSelection && selectedText !== null) {
       // Pass full file as context, but ask only for the selected portion back
       prompt =
+        wikiSectionEdit +
         `${metaLines ? metaLines + '\n' : ''}` +
         `Full file context:\n\`\`\`${languageId}\n${fullFileText}\n\`\`\`\n\n` +
         `Update only this selected section:\n\`\`\`${languageId}\n${selectedText}\n\`\`\`\n\n` +
@@ -336,6 +354,7 @@ export async function askiiEditCommand() {
     } else {
       // No selection — edit the entire file
       prompt =
+        wikiSectionEdit +
         `${metaLines ? metaLines + '\n' : ''}` +
         `Update this file:\n\`\`\`${languageId}\n${fullFileText}\n\`\`\`\n\n` +
         `Request: ${question}\n\n` +
@@ -433,9 +452,22 @@ export async function askiiDoCommand() {
   channel.show(true);
   channel.appendLine(`Task: ${question}`);
 
+  const abortController = new AbortController();
+
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'ASKII Do', cancellable: true },
+    async (_progress, token) => {
+      token.onCancellationRequested(() => {
+        abortController.abort();
+        channel.appendLine('\nStopped by user.');
+      });
+
   try {
     const workspaceStructure = getWorkspaceStructure(rootPath);
-    const systemPrompt = buildDoSystemPrompt(workspaceStructure);
+    const doConfig = vscode.workspace.getConfiguration('askii');
+    const wikiPath = doConfig.get<string>('wikiPath') ?? '';
+    const wikiAvailable = !!(wikiPath && loadWikiIndex(wikiPath));
+    const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable);
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -445,7 +477,7 @@ export async function askiiDoCommand() {
     let completedActions = 0;
     let roundCount = 0;
 
-    while (roundCount < maxRounds) {
+    while (roundCount < maxRounds && !abortController.signal.aborted) {
       channel.appendLine(`\n[Round ${roundCount + 1}/${maxRounds}]`);
 
       channel.append('AI: ');
@@ -465,10 +497,10 @@ export async function askiiDoCommand() {
       }
 
       const readActions = actions.filter(
-        (a) => a.type === 'view' || a.type === 'list' || a.type === 'search',
+        (a) => a.type === 'view' || a.type === 'list' || a.type === 'search' || a.type === 'wiki_search',
       );
       const writeActions = actions.filter(
-        (a) => a.type !== 'view' && a.type !== 'list' && a.type !== 'search',
+        (a) => a.type !== 'view' && a.type !== 'list' && a.type !== 'search' && a.type !== 'wiki_search',
       );
 
       const feedbackParts: string[] = [];
@@ -477,7 +509,14 @@ export async function askiiDoCommand() {
       const viewResults: Record<string, string> = {};
       for (const action of readActions) {
         try {
-          if (action.type === 'search') {
+          if (action.type === 'wiki_search') {
+            const q = action.query ?? '';
+            channel.appendLine(`Wiki search: "${q}"`);
+            const wikiData = wikiPath ? loadWikiIndex(wikiPath) : null;
+            viewResults[`wiki_search:${q}`] = wikiData
+              ? (searchWiki(q, wikiData) || 'No wiki results found')
+              : 'Wiki not available — set askii.wikiPath and run Reload Wiki';
+          } else if (action.type === 'search') {
             channel.appendLine(`Search: "${action.pattern}"`);
             viewResults[`search:${action.pattern}`] = executeSearchAction(action, rootPath);
           } else if (action.type === 'view' && action.paths) {
@@ -618,8 +657,12 @@ export async function askiiDoCommand() {
       roundCount++;
     }
 
-    if (roundCount >= maxRounds) channel.appendLine(`Max rounds (${maxRounds}) reached.`);
-    channel.appendLine(`\nCompleted ${completedActions} actions! (⌐■_■)`);
+    if (abortController.signal.aborted) {
+      channel.appendLine(`\nCompleted ${completedActions} actions before stopping. (⌐■_■)`);
+    } else {
+      if (roundCount >= maxRounds) channel.appendLine(`Max rounds (${maxRounds}) reached.`);
+      channel.appendLine(`\nCompleted ${completedActions} actions! (⌐■_■)`);
+    }
 
     if (hasBackups(rootPath)) {
       const choice = await vscode.window.showInformationMessage(
@@ -647,6 +690,9 @@ export async function askiiDoCommand() {
     channel.appendLine(`\nError: ${errorMsg}`);
     vscode.window.showErrorMessage(`ASKII Do failed: ${errorMsg}`);
   }
+
+    }, // end withProgress callback
+  );
 }
 
 export async function askiiBrowseCommand() {
@@ -904,6 +950,44 @@ function _doActionLabel(action: WorkspaceAction): string {
     default:
       return `${action.type}: ${action.path}`;
   }
+}
+
+export async function askiiReloadWikiCommand() {
+  const config = vscode.workspace.getConfiguration('askii');
+  const wikiPath = config.get<string>('wikiPath') ?? '';
+  if (!wikiPath) {
+    vscode.window.showErrorMessage('ASKII: Set askii.wikiPath in settings first.');
+    return;
+  }
+  if (!fs.existsSync(wikiPath)) {
+    vscode.window.showErrorMessage(`ASKII: Wiki path not found: ${wikiPath}`);
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'ASKII: Indexing wiki...',
+      cancellable: false,
+    },
+    async (progress) => {
+      try {
+        progress.report({ message: 'Reading .md files...' });
+        const data = buildWikiIndex(wikiPath);
+
+        progress.report({ message: `Saving index (${data.chunkCount} chunks)...` });
+        saveWikiIndex(data, wikiPath);
+
+        vscode.window.showInformationMessage(
+          `ASKII: Wiki ready — ${data.chunkCount} chunks from ${data.fileCount} file(s). (⌐■_■)`,
+        );
+      } catch (error) {
+        vscode.window.showErrorMessage(
+          `ASKII: Wiki reload failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        );
+      }
+    },
+  );
 }
 
 export async function askiiControlCommand() {
