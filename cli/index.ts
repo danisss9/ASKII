@@ -23,6 +23,8 @@ import {
   getLMStudioChatStreaming,
   getOpenAIResponse,
   getOpenAIChatStreaming,
+  getAnthropicResponse,
+  getAnthropicChatStreaming,
   retryLLMCall,
   type ChatMessage,
 } from '@common/providers';
@@ -52,11 +54,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 interface Config {
-  platform: 'ollama' | 'lmstudio' | 'openai';
+  platform: 'ollama' | 'lmstudio' | 'openai' | 'anthropic';
   url: string;
   model: string;
   openaiApiKey: string;
   openaiBaseURL: string | undefined;
+  anthropicApiKey: string;
   mode: 'helpful' | 'funny';
   maxRounds: number;
   yes: boolean;
@@ -82,7 +85,7 @@ function hasFlag(flags: string[], ...names: string[]): boolean {
 function getConfig(flags: string[]): Config {
   const platform = (getFlagValue(flags, '-p', '--platform') ||
     process.env.ASKII_PLATFORM ||
-    'ollama') as 'ollama' | 'lmstudio';
+    'ollama') as 'ollama' | 'lmstudio' | 'openai' | 'anthropic';
 
   const ollamaUrl =
     getFlagValue(flags, '--ollama-url') || process.env.ASKII_OLLAMA_URL || 'http://localhost:11434';
@@ -108,9 +111,18 @@ function getConfig(flags: string[]): Config {
   const openaiBaseURL =
     getFlagValue(flags, '--openai-url') || process.env.ASKII_OPENAI_URL || undefined;
 
+  const anthropicApiKey =
+    getFlagValue(flags, '--anthropic-key') || process.env.ASKII_ANTHROPIC_KEY || '';
+
+  const anthropicModel =
+    getFlagValue(flags, '--anthropic-model') ||
+    process.env.ASKII_ANTHROPIC_MODEL ||
+    'claude-opus-4-6';
+
   const modelMap: Record<string, string> = {
     lmstudio: lmStudioModel,
     openai: openaiModel,
+    anthropic: anthropicModel,
   };
 
   return {
@@ -119,6 +131,7 @@ function getConfig(flags: string[]): Config {
     model: modelMap[platform] ?? ollamaModel,
     openaiApiKey,
     openaiBaseURL,
+    anthropicApiKey,
     mode: (getFlagValue(flags, '--mode') || process.env.ASKII_MODE || 'funny') as
       | 'helpful'
       | 'funny',
@@ -149,7 +162,9 @@ async function getResponse(
   system?: string,
   imageBase64?: string,
 ): Promise<string> {
-  if (config.platform === 'lmstudio') {
+  if (config.platform === 'anthropic') {
+    return getAnthropicResponse(prompt, config.anthropicApiKey, config.model, system, imageBase64);
+  } else if (config.platform === 'lmstudio') {
     return getLMStudioResponse(prompt, config.url, config.model, system, imageBase64);
   } else if (config.platform === 'openai') {
     return getOpenAIResponse(
@@ -176,7 +191,9 @@ async function getChatResponseStreaming(
   messages: ChatMessage[],
   onChunk: (chunk: string) => void,
 ): Promise<string> {
-  if (config.platform === 'lmstudio') {
+  if (config.platform === 'anthropic') {
+    return getAnthropicChatStreaming(messages, config.anthropicApiKey, config.model, onChunk);
+  } else if (config.platform === 'lmstudio') {
     return getLMStudioChatStreaming(messages, config.url, config.model, onChunk);
   } else if (config.platform === 'openai') {
     return getOpenAIChatStreaming(

@@ -8,6 +8,11 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Added
 
+- **Anthropic platform support**: Added `anthropic` as a new LLM platform across the extension and CLI, powered by the official `@anthropic-ai/sdk` npm package
+- **`askii.anthropicApiKey` setting**: Your Anthropic API key (used when `llmPlatform` is `anthropic`)
+- **`askii.anthropicModel` setting**: Anthropic model to use (default: `claude-opus-4-6`; also supports `claude-sonnet-4-6`, `claude-haiku-4-5`, etc.)
+- **`getAnthropicResponse` / `getAnthropicChat` / `getAnthropicChatStreaming`** in `common/providers.ts`: Shared Anthropic provider functions supporting system prompts, vision (base64 images), streaming chat, and proper system-role extraction (Anthropic API takes `system` as a top-level parameter rather than a message role)
+- **CLI `--anthropic-key`, `--anthropic-model` flags**: CLI equivalents of the extension settings; also readable via `ASKII_ANTHROPIC_KEY`, `ASKII_ANTHROPIC_MODEL` environment variables
 - **Wiki RAG system** (`common/wiki.ts`): Index any folder of `.md` documentation files into a local vector database and inject the most relevant chunks as context into Ask, Edit, and Do commands
 - **`minisearch` vector database**: The wiki index uses [MiniSearch](https://github.com/lucaong/minisearch) — a pure JavaScript/TypeScript BM25 full-text search library with no native dependencies, fully bundled into the extension. Supports fuzzy matching, prefix search, and heading-boosted relevance scoring
 - **`askii.wikiPath` setting**: Path to a folder containing `.md` documentation files to index

@@ -1,6 +1,6 @@
 # ASKII CLI ( •\_•)>⌐■-■ (⌐■_■)
 
-AI code assistant for your terminal. Powered by Ollama, LM Studio, or OpenAI.
+AI code assistant for your terminal. Powered by Ollama, LM Studio, OpenAI, or Anthropic.
 
 ## Install
 
@@ -233,25 +233,27 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 
 ## Options
 
-| Flag               | Short | Description                                          | Default                  |
-| ------------------ | ----- | ---------------------------------------------------- | ------------------------ |
-| `--platform`       | `-p`  | LLM platform: `ollama`, `lmstudio`, `openai`         | `ollama`                 |
-| `--ollama-url`     |       | Ollama server URL                                    | `http://localhost:11434` |
-| `--lmstudio-url`   |       | LM Studio server URL                                 | `ws://localhost:1234`    |
-| `--ollama-model`   |       | Ollama model                                         | `gemma3:270m`            |
-| `--lmstudio-model` |       | LM Studio model                                      | `qwen/qwen3-coder-30b`   |
-| `--openai-key`     |       | OpenAI API key (env: `ASKII_OPENAI_KEY`)             |                          |
-| `--openai-model`   |       | OpenAI model                                         | `gpt-4o`                 |
-| `--openai-url`     |       | OpenAI-compatible base URL (env: `ASKII_OPENAI_URL`) |                          |
-| `--mode`           |       | Response style: `helpful`, `funny`                   | `funny`                  |
-| `--max-rounds`     |       | Max agent rounds for `do` / `control` / `browse`     | `5`                      |
-| `--dir`            |       | Working directory for `do`                           | cwd                      |
-| `--code`           | `-c`  | Code input (alternative to stdin)                    |                          |
-| `--yes`            | `-y`  | Auto-confirm all actions                             |                          |
-| `--headless`       |       | Run Puppeteer headlessly for `browse`                | `false` (visible)        |
-| `--chrome-path`    |       | Path to Chrome/Chromium executable for `browse`      |                          |
-| `--wiki-path`      |       | Path to folder with `.md` docs for wiki RAG (env: `ASKII_WIKI_PATH`) | |
-| `--use-wiki`       |       | Inject wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_WIKI=1`) | |
+| Flag                | Short | Description                                               | Default                  |
+| ------------------- | ----- | --------------------------------------------------------- | ------------------------ |
+| `--platform`        | `-p`  | LLM platform: `ollama`, `lmstudio`, `openai`, `anthropic` | `ollama`                 |
+| `--ollama-url`      |       | Ollama server URL                                         | `http://localhost:11434` |
+| `--lmstudio-url`    |       | LM Studio server URL                                      | `ws://localhost:1234`    |
+| `--ollama-model`    |       | Ollama model                                              | `gemma3:270m`            |
+| `--lmstudio-model`  |       | LM Studio model                                           | `qwen/qwen3-coder-30b`   |
+| `--openai-key`      |       | OpenAI API key (env: `ASKII_OPENAI_KEY`)                  |                          |
+| `--openai-model`    |       | OpenAI model                                              | `gpt-4o`                 |
+| `--openai-url`      |       | OpenAI-compatible base URL (env: `ASKII_OPENAI_URL`)      |                          |
+| `--anthropic-key`   |       | Anthropic API key (env: `ASKII_ANTHROPIC_KEY`)            |                          |
+| `--anthropic-model` |       | Anthropic model (env: `ASKII_ANTHROPIC_MODEL`)            | `claude-opus-4-6`        |
+| `--mode`            |       | Response style: `helpful`, `funny`                        | `funny`                  |
+| `--max-rounds`      |       | Max agent rounds for `do` / `control` / `browse`          | `5`                      |
+| `--dir`             |       | Working directory for `do`                                | cwd                      |
+| `--code`            | `-c`  | Code input (alternative to stdin)                         |                          |
+| `--yes`             | `-y`  | Auto-confirm all actions                                  |                          |
+| `--headless`        |       | Run Puppeteer headlessly for `browse`                     | `false` (visible)        |
+| `--chrome-path`     |       | Path to Chrome/Chromium executable for `browse`           |                          |
+| `--wiki-path`       |       | Path to folder with `.md` docs for wiki RAG (env: `ASKII_WIKI_PATH`) | |
+| `--use-wiki`        |       | Inject wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_WIKI=1`) | |
 
 ## Environment Variables
 
@@ -272,6 +274,10 @@ export ASKII_LMSTUDIO_MODEL=qwen/qwen3-coder-30b
 export ASKII_OPENAI_KEY=sk-...
 export ASKII_OPENAI_MODEL=gpt-4o
 export ASKII_OPENAI_URL=   # leave empty for api.openai.com
+
+# Anthropic
+export ASKII_ANTHROPIC_KEY=sk-ant-...
+export ASKII_ANTHROPIC_MODEL=claude-opus-4-6
 
 # Shared
 export ASKII_MODE=funny
@@ -300,6 +306,10 @@ $env:ASKII_LMSTUDIO_MODEL = "qwen/qwen3-coder-30b"
 $env:ASKII_OPENAI_KEY = "sk-..."
 $env:ASKII_OPENAI_MODEL = "gpt-4o"
 $env:ASKII_OPENAI_URL = ""   # leave empty for api.openai.com
+
+# Anthropic
+$env:ASKII_ANTHROPIC_KEY = "sk-ant-..."
+$env:ASKII_ANTHROPIC_MODEL = "claude-opus-4-6"
 
 # Shared
 $env:ASKII_MODE = "funny"
@@ -365,4 +375,22 @@ askii -p openai --openai-key sk-... ask "what does this do?"
 askii -p openai --openai-key sk-... --openai-model gpt-4-turbo do "add error handling"
 # Azure OpenAI or any compatible API:
 askii -p openai --openai-key sk-... --openai-url https://my-resource.openai.azure.com ask "explain"
+```
+
+### Anthropic
+
+**bash**
+
+```bash
+askii -p anthropic --anthropic-key sk-ant-... ask "what does this do?"
+askii -p anthropic --anthropic-key sk-ant-... --anthropic-model claude-sonnet-4-6 do "add error handling"
+askii -p anthropic --anthropic-key sk-ant-... --anthropic-model claude-haiku-4-5 explain "arr.reduce((a, b) => a + b, 0)"
+```
+
+**PowerShell**
+
+```powershell
+askii -p anthropic --anthropic-key sk-ant-... ask "what does this do?"
+askii -p anthropic --anthropic-key sk-ant-... --anthropic-model claude-sonnet-4-6 do "add error handling"
+askii -p anthropic --anthropic-key sk-ant-... --anthropic-model claude-haiku-4-5 explain "arr.reduce((a, b) => a + b, 0)"
 ```

@@ -1,14 +1,14 @@
 # ASKII
 
-A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-powered explanations to your code lines. Choose between Ollama, GitHub Copilot, LM Studio, or OpenAI as your AI provider, and toggle between humorous comments and helpful code advice!
+A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-powered explanations to your code lines. Choose between Ollama, GitHub Copilot, LM Studio, OpenAI, or Anthropic as your AI provider, and toggle between humorous comments and helpful code advice!
 
 ## Features
 
 - **Random Kaomoji**: Adds a random kaomoji emoticon after the current line
-- **AI Explanations**: Uses Ollama, GitHub Copilot, LM Studio, or OpenAI to generate concise explanations of your code
+- **AI Explanations**: Uses Ollama, GitHub Copilot, LM Studio, OpenAI, or Anthropic to generate concise explanations of your code
 - **Inline Helper Modes**: Choose between `off`, `helpful`, `funny`, or `wiki` modes
 - **Wiki RAG**: Index your own `.md` documentation files and inject relevant snippets as context into any command — or display them inline as you navigate code
-- **Multi-Platform AI**: Support for Ollama (local), GitHub Copilot (cloud), LM Studio (local with official SDK), and OpenAI (cloud, or any OpenAI-compatible API)
+- **Multi-Platform AI**: Support for Ollama (local), GitHub Copilot (cloud), LM Studio (local with official SDK), OpenAI (cloud, or any OpenAI-compatible API), and Anthropic (cloud, via official `@anthropic-ai/sdk`)
 - **Five Command Modes**:
   - **Ask ASKII**: Ask questions about your selected code
   - **ASKII Edit**: Have ASKII modify your selected code based on your request
@@ -36,12 +36,19 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 - Start LM Studio and load your preferred model
 - Select `lmstudio` in the `askii.llmPlatform` setting
 
-### Option 4: OpenAI (New!)
+### Option 4: OpenAI
 
 - An **OpenAI API key** (or any OpenAI-compatible API key)
 - Select `openai` in the `askii.llmPlatform` setting
 - Set your API key in `askii.openaiApiKey`
 - Optionally set a custom `askii.openaiUrl` for Azure OpenAI or other compatible APIs (leave empty for `api.openai.com`)
+
+### Option 5: Anthropic (New!)
+
+- An **Anthropic API key** from [console.anthropic.com](https://console.anthropic.com)
+- Select `anthropic` in the `askii.llmPlatform` setting
+- Set your API key in `askii.anthropicApiKey`
+- Optionally set a model in `askii.anthropicModel` (default: `claude-opus-4-6`)
 
 ## Usage
 
@@ -55,6 +62,7 @@ Open VS Code Settings (`Ctrl+,` or `Cmd+,`) and search for "ASKII LLM Platform" 
 - `copilot`
 - `lmstudio`
 - `openai`
+- `anthropic`
 
 ### Choose Your Inline Helper Mode
 
@@ -164,7 +172,7 @@ Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickl
 
 All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 
-- `askii.llmPlatform`: Choose LLM provider (`ollama` | `copilot` | `lmstudio` | `openai`)
+- `askii.llmPlatform`: Choose LLM provider (`ollama` | `copilot` | `lmstudio` | `openai` | `anthropic`)
 - `askii.ollamaUrl`: URL for Ollama API server (default: `http://localhost:11434`)
 - `askii.lmStudioUrl`: URL for LM Studio API server (default: `ws://localhost:1234`)
 - `askii.ollamaModel`: Ollama model name (default: `gemma3:270m`)
@@ -173,6 +181,8 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.openaiApiKey`: OpenAI API key (used when `llmPlatform` is `openai`)
 - `askii.openaiModel`: OpenAI model (default: `gpt-4o`)
 - `askii.openaiUrl`: OpenAI-compatible base URL — leave empty for `api.openai.com`, or use for Azure OpenAI / other compatible APIs
+- `askii.anthropicApiKey`: Anthropic API key (used when `llmPlatform` is `anthropic`)
+- `askii.anthropicModel`: Anthropic model (default: `claude-opus-4-6`; e.g. `claude-sonnet-4-6`, `claude-haiku-4-5`)
 - `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny` | `wiki`, default: `off`)
 - `askii.wikiEnabled`: Enable wiki RAG context for Ask / Edit / Do commands (default: `false`)
 - `askii.wikiPath`: Path to a folder containing `.md` documentation files to index for wiki RAG. Run **ASKII: Reload Wiki** after changing this or updating the docs

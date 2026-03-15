@@ -1,6 +1,7 @@
 import { Ollama } from 'ollama';
 import { type ChatMessageInput, LMStudioClient } from '@lmstudio/sdk';
 import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -186,6 +187,73 @@ export async function getLMStudioChatStreaming(
   const result = await getLMStudioChat(messages, url, model);
   onChunk(result);
   return result;
+}
+
+export async function getAnthropicResponse(
+  prompt: string,
+  apiKey: string,
+  model: string,
+  system?: string,
+  imageBase64?: string,
+): Promise<string> {
+  const client = new Anthropic({ apiKey });
+  const userContent: Anthropic.MessageParam['content'] = imageBase64
+    ? [
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imageBase64 } },
+        { type: 'text', text: prompt },
+      ]
+    : prompt;
+  const response = await client.messages.create({
+    model,
+    max_tokens: 4096,
+    ...(system ? { system } : {}),
+    messages: [{ role: 'user', content: userContent }],
+  });
+  const block = response.content.find((b) => b.type === 'text');
+  return block?.type === 'text' ? block.text : 'No response';
+}
+
+export async function getAnthropicChat(
+  messages: ChatMessage[],
+  apiKey: string,
+  model: string,
+): Promise<string> {
+  const client = new Anthropic({ apiKey });
+  const systemMsg = messages.find((m) => m.role === 'system');
+  const filtered = messages.filter((m) => m.role !== 'system');
+  const response = await client.messages.create({
+    model,
+    max_tokens: 4096,
+    ...(systemMsg ? { system: systemMsg.content } : {}),
+    messages: filtered.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+  });
+  const block = response.content.find((b) => b.type === 'text');
+  return block?.type === 'text' ? block.text : 'No response';
+}
+
+export async function getAnthropicChatStreaming(
+  messages: ChatMessage[],
+  apiKey: string,
+  model: string,
+  onChunk: (chunk: string) => void,
+): Promise<string> {
+  const client = new Anthropic({ apiKey });
+  const systemMsg = messages.find((m) => m.role === 'system');
+  const filtered = messages.filter((m) => m.role !== 'system');
+  const stream = client.messages.stream({
+    model,
+    max_tokens: 4096,
+    ...(systemMsg ? { system: systemMsg.content } : {}),
+    messages: filtered.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+  });
+  let full = '';
+  for await (const event of stream) {
+    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+      onChunk(event.delta.text);
+      full += event.delta.text;
+    }
+  }
+  return full;
 }
 
 export async function retryLLMCall<T>(

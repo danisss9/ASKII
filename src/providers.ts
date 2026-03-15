@@ -10,6 +10,9 @@ import {
   getOpenAIResponse,
   getOpenAIChat,
   getOpenAIChatStreaming,
+  getAnthropicResponse,
+  getAnthropicChat,
+  getAnthropicChatStreaming,
   type ChatMessage,
 } from '@common/providers';
 import { loadWikiIndex, searchWikiRaw } from '@common/wiki';
@@ -32,6 +35,10 @@ export async function getExtensionResponseWithImage(
     const model = config.get<string>('openaiModel') || 'gpt-4o';
     const baseURL = config.get<string>('openaiUrl') || undefined;
     return getOpenAIResponse(prompt, apiKey, model, baseURL, undefined, imageBase64);
+  } else if (platform === 'anthropic') {
+    const apiKey = config.get<string>('anthropicApiKey') || '';
+    const model = config.get<string>('anthropicModel') || 'claude-opus-4-6';
+    return getAnthropicResponse(prompt, apiKey, model, undefined, imageBase64);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -108,6 +115,11 @@ export async function getExtensionResponseStreaming(
     const baseURL = config.get<string>('openaiUrl') || undefined;
     const result = await getOpenAIResponse(prompt, apiKey, model, baseURL, system);
     onChunk(result);
+  } else if (platform === 'anthropic') {
+    const apiKey = config.get<string>('anthropicApiKey') || '';
+    const model = config.get<string>('anthropicModel') || 'claude-opus-4-6';
+    const result = await getAnthropicResponse(prompt, apiKey, model, system);
+    onChunk(result);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -149,6 +161,10 @@ export async function getExtensionResponse(prompt: string, system?: string): Pro
     const model = config.get<string>('openaiModel') || 'gpt-4o';
     const baseURL = config.get<string>('openaiUrl') || undefined;
     return getOpenAIResponse(prompt, apiKey, model, baseURL, system);
+  } else if (platform === 'anthropic') {
+    const apiKey = config.get<string>('anthropicApiKey') || '';
+    const model = config.get<string>('anthropicModel') || 'claude-opus-4-6';
+    return getAnthropicResponse(prompt, apiKey, model, system);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -190,6 +206,10 @@ export async function getExtensionChat(messages: ChatMessage[]): Promise<string>
     const mdl = config.get<string>('openaiModel') || 'gpt-4o';
     const baseURL = config.get<string>('openaiUrl') || undefined;
     return getOpenAIChat(messages, apiKey, mdl, baseURL);
+  } else if (platform === 'anthropic') {
+    const apiKey = config.get<string>('anthropicApiKey') || '';
+    const mdl = config.get<string>('anthropicModel') || 'claude-opus-4-6';
+    return getAnthropicChat(messages, apiKey, mdl);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const mdl = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -228,6 +248,10 @@ export async function getExtensionChatStreaming(
     const mdl = config.get<string>('openaiModel') || 'gpt-4o';
     const baseURL = config.get<string>('openaiUrl') || undefined;
     return getOpenAIChatStreaming(messages, apiKey, mdl, onChunk, baseURL);
+  } else if (platform === 'anthropic') {
+    const apiKey = config.get<string>('anthropicApiKey') || '';
+    const mdl = config.get<string>('anthropicModel') || 'claude-opus-4-6';
+    return getAnthropicChatStreaming(messages, apiKey, mdl, onChunk);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const mdl = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -308,6 +332,13 @@ export async function getLLMExplanation(
       const baseURL = config.get<string>('openaiUrl') || undefined;
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getOpenAIResponse(userPrompt, apiKey, model, baseURL, systemPrompt);
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      return result || 'No explanation available.';
+    } else if (platform === 'anthropic') {
+      const apiKey = config.get<string>('anthropicApiKey') || '';
+      const model = config.get<string>('anthropicModel') || 'claude-opus-4-6';
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      const result = await getAnthropicResponse(userPrompt, apiKey, model, systemPrompt);
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       return result || 'No explanation available.';
     } else {
