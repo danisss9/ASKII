@@ -151,6 +151,7 @@ Point ASKII at a folder of `.md` files and it will index them into a local vecto
 2. Run **ASKII: Reload Wiki** from the command palette (or status-bar menu) to build the index — a progress spinner shows while indexing and a notification confirms when done
 3. Enable `askii.wikiEnabled` to inject wiki context into Ask / Edit / Do commands
 4. Optionally set `askii.inlineHelperMode` to `wiki` for inline decorations that show LLM explanations enriched by your docs
+5. Optionally enable `askii.wikiAutoReload` to have the index rebuilt automatically each time VS Code starts
 
 The index is cached in memory after the first load — no disk reads on subsequent queries.
 
@@ -186,6 +187,7 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny` | `wiki`, default: `off`)
 - `askii.wikiEnabled`: Enable wiki RAG context for Ask / Edit / Do commands (default: `false`)
 - `askii.wikiPath`: Path to a folder containing `.md` documentation files to index for wiki RAG. Run **ASKII: Reload Wiki** after changing this or updating the docs
+- `askii.wikiAutoReload`: Automatically rebuild and reload the wiki index on extension startup (default: `false`). Requires `askii.wikiEnabled` and `askii.wikiPath` to be configured
 - `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control / Browse commands (default: 5)
 - `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control / Browse (default: `false`)
 - `askii.formatAfterEdit`: Auto-format files after ASKII Edit or Do (default: `false`)

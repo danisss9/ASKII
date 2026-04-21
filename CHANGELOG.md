@@ -4,6 +4,17 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.8] - 2026-04-21
+
+### Added
+
+- **`askii.wikiAutoReload` setting**: Boolean option (default: `false`) — when enabled alongside `askii.wikiEnabled`, the wiki index is automatically rebuilt and reloaded every time the extension starts, so your docs are always fresh without running **Reload Wiki** manually
+
+### Fixed
+
+- **Wiki context stale on follow-up questions**: In Ask ASKII, wiki context was fetched once for the initial question and reused for all follow-ups. It is now re-queried with each follow-up question so the injected documentation matches what was actually asked
+- **`wikiEnabled` ignored in ASKII Do**: The Do command was loading the wiki index regardless of the `askii.wikiEnabled` setting. It now correctly checks `wikiEnabled` before loading or injecting wiki context
+
 ## [0.2.7] - 2026-03-15
 
 ### Added

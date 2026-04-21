@@ -265,11 +265,9 @@ export async function askAskiiCommand() {
     panelDisposed = true;
   });
 
-  // Wiki context is fetched once for the initial question
-  const wikiCtx = getWikiContext(question);
-  const wikiSection = wikiCtx ? `Relevant documentation:\n${wikiCtx}\n\n` : '';
-
   while (!panelDisposed) {
+    const wikiCtx = getWikiContext(currentQuestion);
+    const wikiSection = wikiCtx ? `Relevant documentation:\n${wikiCtx}\n\n` : '';
     const fullPrompt = wikiSection + codeContext + history + `Question: ${currentQuestion}`;
     let accumulated = '';
 
@@ -498,7 +496,8 @@ export async function askiiDoCommand() {
         const workspaceStructure = getWorkspaceStructure(rootPath);
         const doConfig = vscode.workspace.getConfiguration('askii');
         const wikiPath = doConfig.get<string>('wikiPath') ?? '';
-        const wikiAvailable = !!(wikiPath && loadWikiIndex(wikiPath));
+        const wikiEnabled = doConfig.get<boolean>('wikiEnabled') ?? false;
+        const wikiAvailable = !!(wikiEnabled && wikiPath && loadWikiIndex(wikiPath));
         const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable);
 
         const messages: ChatMessage[] = [

@@ -1,6 +1,6 @@
 {
   "name": "askii-cli",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "ASKII CLI - AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
   "bin": {
     "askii": "./dist/index.js"
