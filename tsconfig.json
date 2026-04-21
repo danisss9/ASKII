@@ -7,7 +7,6 @@
     "rootDir": "",
     "strict": true /* enable all strict type-checking options */,
     "forceConsistentCasingInFileNames": true,
-    "ignoreDeprecations": "6.0",
     "baseUrl": "./",
     /* Additional Checks */
     "noImplicitReturns": true,

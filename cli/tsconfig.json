@@ -6,7 +6,6 @@
     "sourceMap": true,
     "strict": true,
     "forceConsistentCasingInFileNames": true,
-    "ignoreDeprecations": "6.0",
     "baseUrl": "./",
     "paths": {
       "@common/*": ["../common/*"]
