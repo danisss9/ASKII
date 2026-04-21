@@ -9,6 +9,18 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Added
 
 - **`askii.wikiAutoReload` setting**: Boolean option (default: `false`) — when enabled alongside `askii.wikiEnabled`, the wiki index is automatically rebuilt and reloaded every time the extension starts, so your docs are always fresh without running **Reload Wiki** manually
+- **Early Provider Validation**: Verifies LLM configurations (missing API keys, unavailable Copilot, dead local endpoints from Ollama/LM Studio) as soon as the extension activates or settings change. Actionable warning notifications direct users straight to the settings pane.
+
+### Changed
+
+- **Hardened Ask Panel**: 
+  - Injected `nonce`-based CSP constraints and disabled `localResourceRoots` to prevent executing arbitrary code or loading unrelated disk assets in the response webview window.
+  - Added stricter `typeof` and failure guards when processing host-webview messages.
+  - Made the response copy button show visual `Copy failed` feedback instead of failing silently when clipboard writing throws. 
+  - Included a safe Markdown render fallback.
+- **Tightened Typings and Lint Coverage**:
+  - Activated the `eslint` script on `common/` files to establish identical lint constraints as `src/`.
+  - Enabled rigorous compiler checks across `tsconfig.json` configurations including `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noUnusedParameters`, and OS-agnostic path constraints (`forceConsistentCasingInFileNames`).
 
 ### Fixed
 
