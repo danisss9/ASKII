@@ -52,7 +52,7 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 
 ## Usage
 
-The extension automatically shows inline comments as you move your cursor through your code.
+Inline decorations are disabled by default. Enable them by setting `askii.inlineHelperMode` to `helpful`, `funny`, or `wiki`.
 
 ### Choose Your LLM Platform
 
@@ -70,7 +70,7 @@ Search for "ASKII Inline Helper Mode" and select:
 
 - `off` — No inline decorations
 - `helpful` — Practical coding advice
-- `funny` — Humorous comments (default)
+- `funny` — Humorous comments
 - `wiki` — Shows a one-sentence explanation informed by your indexed wiki docs. Searches the wiki index for the current line and passes the top matching chunks as context to the LLM. Requires `askii.wikiPath` to be set and indexed
 
 ### Commands
@@ -194,7 +194,7 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 
 ## Default Mode Examples
 
-### Funny Mode (Default)
+### Funny Mode
 
 ```javascript
 const sum = a + b; (◕‿◕) The age-old tradition of making numbers hang out together!
