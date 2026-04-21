@@ -198,11 +198,13 @@ export async function askAskiiCommand() {
     }
     window.addEventListener('message', event => {
       const msg = event.data;
+      if (typeof msg !== 'object' || msg === null) return;
+      const safeHtml = typeof msg.html === 'string' ? msg.html : '';
       if (msg.type === 'update') {
-        document.getElementById('content').innerHTML = msg.html;
+        document.getElementById('content').innerHTML = safeHtml;
       } else if (msg.type === 'done') {
-        rawText = msg.text;
-        document.getElementById('content').innerHTML = msg.html;
+        rawText = typeof msg.text === 'string' ? msg.text : '';
+        document.getElementById('content').innerHTML = safeHtml;
         document.getElementById('title').textContent = 'ASKII Says: (⌐■_■)';
         showBtns(true);
       } else if (msg.type === 'thinking') {
@@ -211,7 +213,7 @@ export async function askAskiiCommand() {
         document.getElementById('content').innerHTML = '<p class="thinking">Waiting for response...</p>';
       } else if (msg.type === 'error') {
         document.getElementById('title').textContent = 'Error';
-        document.getElementById('content').innerHTML = msg.html;
+        document.getElementById('content').innerHTML = safeHtml;
         showBtns(false);
       }
     });
@@ -228,6 +230,16 @@ export async function askAskiiCommand() {
           btn.classList.remove('copied');
           btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
         }, 1500);
+      }).catch(() => {
+        const btn = document.getElementById('copyBtn');
+        btn.title = 'Copy failed';
+        btn.style.color = 'var(--vscode-errorForeground, #f48771)';
+        btn.style.opacity = '1';
+        setTimeout(() => {
+          btn.title = 'Copy response';
+          btn.style.color = '';
+          btn.style.opacity = '';
+        }, 2000);
       });
     }
   </script>
@@ -265,14 +277,27 @@ export async function askAskiiCommand() {
       await getExtensionResponseStreaming(
         fullPrompt,
         (chunk) => {
+          if (panelDisposed) return;
           accumulated += chunk;
-          panel.webview.postMessage({ type: 'update', html: md.render(accumulated) });
+          let renderedHtml: string;
+          try {
+            renderedHtml = md.render(accumulated);
+          } catch {
+            renderedHtml = `<pre>${escapeHtml(accumulated)}</pre>`;
+          }
+          panel.webview.postMessage({ type: 'update', html: renderedHtml });
         },
         'You are ASKII, a precise coding assistant. Answer concisely.',
       );
 
       history += `Question: ${currentQuestion}\n\nAnswer: ${accumulated}\n\n`;
-      panel.webview.postMessage({ type: 'done', html: md.render(accumulated), text: accumulated });
+      let doneHtml: string;
+      try {
+        doneHtml = md.render(accumulated);
+      } catch {
+        doneHtml = `<pre>${escapeHtml(accumulated)}</pre>`;
+      }
+      panel.webview.postMessage({ type: 'done', html: doneHtml, text: accumulated });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       panel.webview.postMessage({ type: 'error', html: `<p>${escapeHtml(errorMsg)}</p>` });
