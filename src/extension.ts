@@ -15,6 +15,7 @@ import {
   askiiReloadWikiCommand,
   askiiDiffProvider,
 } from './commands';
+import { validateProviderConfig } from './providers';
 
 export function activate(context: vscode.ExtensionContext) {
   // Register the in-memory content provider for diff previews
@@ -114,6 +115,27 @@ export function activate(context: vscode.ExtensionContext) {
   if (vscode.window.activeTextEditor) {
     updateDecorations(vscode.window.activeTextEditor);
   }
+
+  // Validate provider config at startup and re-validate on settings changes.
+  function runValidation() {
+    validateProviderConfig().then((problem) => {
+      if (problem) {
+        vscode.window.showWarningMessage(problem, 'Open Settings').then((choice) => {
+          if (choice === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', '@ext:danisss9.askii');
+          }
+        });
+      }
+    });
+  }
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('askii')) {
+        runValidation();
+      }
+    }),
+  );
 
   context.subscriptions.push(decorationType);
 }

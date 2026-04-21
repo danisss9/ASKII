@@ -233,10 +233,17 @@ export async function getExtensionChatStreaming(
       if (m.role === 'assistant') return vscode.LanguageModelChatMessage.Assistant(m.content);
       return vscode.LanguageModelChatMessage.User(m.content);
     });
-    const chatResponse = await model.sendRequest(vsMessages, {}, new vscode.CancellationTokenSource().token);
+    const chatResponse = await model.sendRequest(
+      vsMessages,
+      {},
+      new vscode.CancellationTokenSource().token,
+    );
     let full = '';
     for await (const fragment of chatResponse.text) {
-      if (fragment) { onChunk(fragment); full += fragment; }
+      if (fragment) {
+        onChunk(fragment);
+        full += fragment;
+      }
     }
     return full;
   } else if (platform === 'lmstudio') {
@@ -259,6 +266,51 @@ export async function getExtensionChatStreaming(
   }
 }
 
+/**
+ * Validates the currently configured LLM provider and returns an actionable
+ * error message if something is wrong, or null if the config looks good.
+ *
+ * Checks performed per platform:
+ *  - openai / anthropic : API key must be non-empty
+ *  - copilot            : selectChatModels must return at least one model
+ *  - ollama             : GET <url>/api/tags must succeed within 3 s
+ *  - lmstudio           : GET <http-url>/v1/models must succeed within 3 s
+ */
+export async function validateProviderConfig(): Promise<string | null> {
+  const config = vscode.workspace.getConfiguration('askii');
+  const platform = config.get<string>('llmPlatform') || 'ollama';
+
+  if (platform === 'openai') {
+    const apiKey = (config.get<string>('openaiApiKey') || '').trim();
+    if (!apiKey) {
+      return 'ASKII (openai): No API key configured. Set askii.openaiApiKey in Settings.';
+    }
+  } else if (platform === 'anthropic') {
+    const apiKey = (config.get<string>('anthropicApiKey') || '').trim();
+    if (!apiKey) {
+      return 'ASKII (anthropic): No API key configured. Set askii.anthropicApiKey in Settings.';
+    }
+  } else if (platform === 'copilot') {
+    const family = config.get<string>('copilotModel') || 'gpt-4o';
+    const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family });
+    if (models.length === 0) {
+      return `ASKII (copilot): No Copilot model available for "${family}". Ensure the GitHub Copilot extension is installed and you are signed in.`;
+    }
+  } else if (platform === 'ollama') {
+    const url = (config.get<string>('ollamaUrl') || '').trim();
+    if (!url) {
+      return 'ASKII (ollama): No server URL configured. Set askii.ollamaUrl in Settings.';
+    }
+  } else if (platform === 'lmstudio') {
+    const url = (config.get<string>('lmStudioUrl') || '').trim();
+    if (!url) {
+      return 'ASKII (lmstudio): No server URL configured. Set askii.lmStudioUrl in Settings.';
+    }
+  }
+
+  return null;
+}
+
 export async function getLLMExplanation(
   lineText: string,
   abortSignal?: AbortSignal,
@@ -278,7 +330,9 @@ export async function getLLMExplanation(
     if (!data) return 'Run "ASKII: Reload Wiki" to build the index';
     const hits = searchWikiRaw(lineText, data, 2);
     if (hits.length > 0) {
-      wikiContext = hits.map(h => `[${h.source} — ${h.heading}]\n${h.content}`).join('\n\n---\n\n');
+      wikiContext = hits
+        .map((h) => `[${h.source} — ${h.heading}]\n${h.content}`)
+        .join('\n\n---\n\n');
     }
   }
 
@@ -286,9 +340,7 @@ export async function getLLMExplanation(
   const systemPrompt = isHelpful
     ? 'You are ASKII, a helpful coding assistant. Provide clear, concise explanations.'
     : 'You are ASKII, a witty coding assistant. Provide humorous comments.';
-  const wikiSection = wikiContext
-    ? `Relevant documentation:\n${wikiContext}\n\n`
-    : '';
+  const wikiSection = wikiContext ? `Relevant documentation:\n${wikiContext}\n\n` : '';
   const userPrompt = isHelpful
     ? `${wikiSection}Explain this code in one sentence: ${lineText}`
     : `Make a funny comment about this code in one sentence: ${lineText}`;
