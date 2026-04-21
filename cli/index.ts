@@ -76,6 +76,7 @@ function getFlagValue(flags: string[], ...names: string[]): string | undefined {
       return flags[i + 1];
     }
   }
+  return undefined;
 }
 
 function hasFlag(flags: string[], ...names: string[]): boolean {
@@ -404,7 +405,8 @@ async function main() {
   const config = getConfig(flags);
 
   if (command === 'wiki-reload') {
-    const wikiPath = config.wikiPath || getFlagValue(flags, '--wiki-path') || process.env.ASKII_WIKI_PATH;
+    const wikiPath =
+      config.wikiPath || getFlagValue(flags, '--wiki-path') || process.env.ASKII_WIKI_PATH;
     if (!wikiPath) {
       console.error('Error: provide --wiki-path <path> or set ASKII_WIKI_PATH');
       process.exit(1);
@@ -417,7 +419,9 @@ async function main() {
       console.error(`Indexing wiki files in: ${wikiPath}`);
       const index = buildWikiIndex(wikiPath);
       saveWikiIndex(index, wikiPath);
-      console.error(`Wiki indexed: ${index.chunkCount} chunks from ${index.fileCount} file(s). ${getRandomKaomoji()}`);
+      console.error(
+        `Wiki indexed: ${index.chunkCount} chunks from ${index.fileCount} file(s). ${getRandomKaomoji()}`,
+      );
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);
@@ -580,10 +584,18 @@ async function main() {
         }
 
         const readActions = actions.filter(
-          (a) => a.type === 'view' || a.type === 'list' || a.type === 'search' || a.type === 'wiki_search',
+          (a) =>
+            a.type === 'view' ||
+            a.type === 'list' ||
+            a.type === 'search' ||
+            a.type === 'wiki_search',
         );
         const writeActions = actions.filter(
-          (a) => a.type !== 'view' && a.type !== 'list' && a.type !== 'search' && a.type !== 'wiki_search',
+          (a) =>
+            a.type !== 'view' &&
+            a.type !== 'list' &&
+            a.type !== 'search' &&
+            a.type !== 'wiki_search',
         );
 
         const feedbackParts: string[] = [];
@@ -597,7 +609,7 @@ async function main() {
               console.error(`  → Wiki search: "${q}"`);
               const wikiData = config.wikiPath ? loadWikiIndex(config.wikiPath) : null;
               viewResults[`wiki_search:${q}`] = wikiData
-                ? (searchWiki(q, wikiData) || 'No wiki results found')
+                ? searchWiki(q, wikiData) || 'No wiki results found'
                 : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
             } else if (action.type === 'search') {
               console.error(`  → Search: "${action.pattern}"`);
