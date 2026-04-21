@@ -5,6 +5,8 @@
     "lib": ["ES2022", "DOM"],
     "sourceMap": true,
     "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "ignoreDeprecations": "6.0",
     "baseUrl": "./",
     "paths": {
       "@common/*": ["../common/*"]
