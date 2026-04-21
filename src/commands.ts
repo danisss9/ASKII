@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomBytes } from 'crypto';
 import MarkdownIt from 'markdown-it';
 
 // ── Diff content provider ────────────────────────────────────────────────────
@@ -81,6 +82,7 @@ function getWikiContext(query: string): string {
 }
 
 export async function askAskiiCommand() {
+  const nonce = randomBytes(16).toString('base64');
   const editor = vscode.window.activeTextEditor;
   const selectedText = editor ? editor.document.getText(editor.selection) : '';
   const languageId = editor?.document.languageId ?? '';
@@ -163,7 +165,11 @@ export async function askAskiiCommand() {
 
   const panelHtml = `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><style>${css}</style></head>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'">
+  <style>${css}</style>
+</head>
 <body>
   <div class="header-row">
     <h2 id="title">ASKII is thinking... (๑•﹏•)</h2>
@@ -182,7 +188,7 @@ export async function askAskiiCommand() {
     </div>
   </div>
   <div id="content"><p class="thinking">Waiting for response...</p></div>
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     let rawText = '';
     function showBtns(visible) {
@@ -232,7 +238,7 @@ export async function askAskiiCommand() {
     'askiiOutput',
     'ASKII Response',
     vscode.ViewColumn.Beside,
-    { enableScripts: true },
+    { enableScripts: true, localResourceRoots: [] },
   );
 
   panel.webview.html = panelHtml;
@@ -276,6 +282,7 @@ export async function askAskiiCommand() {
     // Wait for a follow-up request or panel close
     const nextQuestion = await new Promise<string | null>((resolve) => {
       const msgDisp = panel.webview.onDidReceiveMessage(async (msg) => {
+        if (typeof msg !== 'object' || msg === null) return;
         if (msg.type === 'followup') {
           msgDisp.dispose();
           dispDisp.dispose();
@@ -462,235 +469,248 @@ export async function askiiDoCommand() {
         channel.appendLine('\nStopped by user.');
       });
 
-  try {
-    const workspaceStructure = getWorkspaceStructure(rootPath);
-    const doConfig = vscode.workspace.getConfiguration('askii');
-    const wikiPath = doConfig.get<string>('wikiPath') ?? '';
-    const wikiAvailable = !!(wikiPath && loadWikiIndex(wikiPath));
-    const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable);
+      try {
+        const workspaceStructure = getWorkspaceStructure(rootPath);
+        const doConfig = vscode.workspace.getConfiguration('askii');
+        const wikiPath = doConfig.get<string>('wikiPath') ?? '';
+        const wikiAvailable = !!(wikiPath && loadWikiIndex(wikiPath));
+        const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable);
 
-    const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: question },
-    ];
+        const messages: ChatMessage[] = [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: question },
+        ];
 
-    let completedActions = 0;
-    let roundCount = 0;
+        let completedActions = 0;
+        let roundCount = 0;
 
-    while (roundCount < maxRounds && !abortController.signal.aborted) {
-      channel.appendLine(`\n[Round ${roundCount + 1}/${maxRounds}]`);
+        while (roundCount < maxRounds && !abortController.signal.aborted) {
+          channel.appendLine(`\n[Round ${roundCount + 1}/${maxRounds}]`);
 
-      channel.append('AI: ');
-      const responseText = await getExtensionChatStreaming(messages, (chunk) =>
-        channel.append(chunk),
-      );
-      channel.appendLine('');
-      messages.push({ role: 'assistant', content: responseText });
+          channel.append('AI: ');
+          const responseText = await getExtensionChatStreaming(messages, (chunk) =>
+            channel.append(chunk),
+          );
+          channel.appendLine('');
+          messages.push({ role: 'assistant', content: responseText });
 
-      const actions = parseWorkspaceActions(responseText);
-      if (actions.length === 0) {
-        channel.appendLine('No actions returned. Done.');
-        if (responseText.trim()) {
-          channel.appendLine(`Raw (first 500): ${responseText.substring(0, 500)}`);
-        }
-        break;
-      }
-
-      const readActions = actions.filter(
-        (a) => a.type === 'view' || a.type === 'list' || a.type === 'search' || a.type === 'wiki_search',
-      );
-      const writeActions = actions.filter(
-        (a) => a.type !== 'view' && a.type !== 'list' && a.type !== 'search' && a.type !== 'wiki_search',
-      );
-
-      const feedbackParts: string[] = [];
-
-      // ── Read actions (no confirmation) ──────────────────────────────────────
-      const viewResults: Record<string, string> = {};
-      for (const action of readActions) {
-        try {
-          if (action.type === 'wiki_search') {
-            const q = action.query ?? '';
-            channel.appendLine(`Wiki search: "${q}"`);
-            const wikiData = wikiPath ? loadWikiIndex(wikiPath) : null;
-            viewResults[`wiki_search:${q}`] = wikiData
-              ? (searchWiki(q, wikiData) || 'No wiki results found')
-              : 'Wiki not available — set askii.wikiPath and run Reload Wiki';
-          } else if (action.type === 'search') {
-            channel.appendLine(`Search: "${action.pattern}"`);
-            viewResults[`search:${action.pattern}`] = executeSearchAction(action, rootPath);
-          } else if (action.type === 'view' && action.paths) {
-            for (const p of action.paths) {
-              channel.appendLine(`Viewing: ${p}`);
-              try {
-                viewResults[p] = executeViewAction(
-                  { ...action, path: p, paths: undefined },
-                  rootPath,
-                );
-              } catch (e) {
-                viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
-              }
+          const actions = parseWorkspaceActions(responseText);
+          if (actions.length === 0) {
+            channel.appendLine('No actions returned. Done.');
+            if (responseText.trim()) {
+              channel.appendLine(`Raw (first 500): ${responseText.substring(0, 500)}`);
             }
-          } else {
-            channel.appendLine(`${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`);
-            viewResults[action.path!] = executeViewAction(action, rootPath);
+            break;
           }
-        } catch (e) {
-          viewResults[action.path ?? 'unknown'] =
-            `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
-        }
-      }
 
-      if (Object.keys(viewResults).length > 0) {
-        feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
-      }
-
-      // ── Write actions (with confirmation) ───────────────────────────────────
-      const actionResults: ActionResult[] = [];
-
-      for (const action of writeActions) {
-        // Sandbox check
-        let filePath: string;
-        try {
-          filePath = sandboxPath(rootPath, action.path!);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : 'Path error';
-          channel.appendLine(`BLOCKED: ${msg}`);
-          actionResults.push({
-            action: `${action.type}:${action.path}`,
-            status: 'error',
-            detail: msg,
-          });
-          continue;
-        }
-
-        if (action.type === 'run') {
-          channel.appendLine(`Run: ${action.command}`);
-          const choice = await vscode.window.showInformationMessage(
-            `ASKII Do — run command?\n${action.command}`,
-            { modal: true },
-            'Run',
-            'Skip',
+          const readActions = actions.filter(
+            (a) =>
+              a.type === 'view' ||
+              a.type === 'list' ||
+              a.type === 'search' ||
+              a.type === 'wiki_search',
           );
-          if (choice !== 'Run') {
-            actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
-            continue;
+          const writeActions = actions.filter(
+            (a) =>
+              a.type !== 'view' &&
+              a.type !== 'list' &&
+              a.type !== 'search' &&
+              a.type !== 'wiki_search',
+          );
+
+          const feedbackParts: string[] = [];
+
+          // ── Read actions (no confirmation) ──────────────────────────────────────
+          const viewResults: Record<string, string> = {};
+          for (const action of readActions) {
+            try {
+              if (action.type === 'wiki_search') {
+                const q = action.query ?? '';
+                channel.appendLine(`Wiki search: "${q}"`);
+                const wikiData = wikiPath ? loadWikiIndex(wikiPath) : null;
+                viewResults[`wiki_search:${q}`] = wikiData
+                  ? searchWiki(q, wikiData) || 'No wiki results found'
+                  : 'Wiki not available — set askii.wikiPath and run Reload Wiki';
+              } else if (action.type === 'search') {
+                channel.appendLine(`Search: "${action.pattern}"`);
+                viewResults[`search:${action.pattern}`] = executeSearchAction(action, rootPath);
+              } else if (action.type === 'view' && action.paths) {
+                for (const p of action.paths) {
+                  channel.appendLine(`Viewing: ${p}`);
+                  try {
+                    viewResults[p] = executeViewAction(
+                      { ...action, path: p, paths: undefined },
+                      rootPath,
+                    );
+                  } catch (e) {
+                    viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
+                  }
+                }
+              } else {
+                channel.appendLine(
+                  `${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`,
+                );
+                viewResults[action.path!] = executeViewAction(action, rootPath);
+              }
+            } catch (e) {
+              viewResults[action.path ?? 'unknown'] =
+                `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
+            }
           }
-          try {
-            const { execSync } = await import('child_process');
-            const output = execSync(action.command!, {
-              cwd: rootPath,
-              encoding: 'utf-8',
-              timeout: 30000,
-            });
-            channel.appendLine(`Run output: ${output.substring(0, 200)}`);
-            actionResults.push({
-              action: `run:${action.command}`,
-              status: 'ok',
-              detail: output.substring(0, 500),
-            });
-          } catch (e: unknown) {
-            const err = e as { stdout?: string; stderr?: string; message?: string };
-            const detail =
-              `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
-            channel.appendLine(`Run failed: ${detail.substring(0, 200)}`);
-            actionResults.push({
-              action: `run:${action.command}`,
-              status: 'error',
-              detail: detail.substring(0, 500),
-            });
+
+          if (Object.keys(viewResults).length > 0) {
+            feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
           }
-          continue;
+
+          // ── Write actions (with confirmation) ───────────────────────────────────
+          const actionResults: ActionResult[] = [];
+
+          for (const action of writeActions) {
+            // Sandbox check
+            let filePath: string;
+            try {
+              filePath = sandboxPath(rootPath, action.path!);
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : 'Path error';
+              channel.appendLine(`BLOCKED: ${msg}`);
+              actionResults.push({
+                action: `${action.type}:${action.path}`,
+                status: 'error',
+                detail: msg,
+              });
+              continue;
+            }
+
+            if (action.type === 'run') {
+              channel.appendLine(`Run: ${action.command}`);
+              const choice = await vscode.window.showInformationMessage(
+                `ASKII Do — run command?\n${action.command}`,
+                { modal: true },
+                'Run',
+                'Skip',
+              );
+              if (choice !== 'Run') {
+                actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
+                continue;
+              }
+              try {
+                const { execSync } = await import('child_process');
+                const output = execSync(action.command!, {
+                  cwd: rootPath,
+                  encoding: 'utf-8',
+                  timeout: 30000,
+                });
+                channel.appendLine(`Run output: ${output.substring(0, 200)}`);
+                actionResults.push({
+                  action: `run:${action.command}`,
+                  status: 'ok',
+                  detail: output.substring(0, 500),
+                });
+              } catch (e: unknown) {
+                const err = e as { stdout?: string; stderr?: string; message?: string };
+                const detail =
+                  `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
+                channel.appendLine(`Run failed: ${detail.substring(0, 200)}`);
+                actionResults.push({
+                  action: `run:${action.command}`,
+                  status: 'error',
+                  detail: detail.substring(0, 500),
+                });
+              }
+              continue;
+            }
+
+            // Confirmation for all other write actions
+            const confirmMsg = _doConfirmMessage(action);
+            let confirmed = autoConfirm;
+            if (!confirmed) {
+              const choice = await vscode.window.showInformationMessage(
+                `ASKII Do — ${confirmMsg}`,
+                { modal: true },
+                'Confirm',
+                'Skip',
+              );
+              confirmed = choice === 'Confirm';
+            }
+
+            if (!confirmed) {
+              actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
+              continue;
+            }
+
+            try {
+              const result = await _executeWriteAction(action, filePath, rootPath, formatAfterEdit);
+              if (result === 'ok') completedActions++;
+              actionResults.push({
+                action: `${action.type}:${action.path}`,
+                status: result === 'ok' ? 'ok' : 'error',
+                detail: result === 'ok' ? undefined : result,
+              });
+              if (result === 'ok') {
+                channel.appendLine(`✓ ${_doActionLabel(action)}`);
+              } else {
+                channel.appendLine(`✗ Failed: ${result}`);
+              }
+            } catch (e) {
+              const detail = e instanceof Error ? e.message : 'Unknown error';
+              channel.appendLine(`✗ Failed: ${detail}`);
+              actionResults.push({
+                action: `${action.type}:${action.path}`,
+                status: 'error',
+                detail,
+              });
+            }
+          }
+
+          if (actionResults.length > 0) {
+            feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
+          }
+
+          if (feedbackParts.length === 0) break;
+
+          messages.push({
+            role: 'user',
+            content:
+              feedbackParts.join('\n\n') +
+              '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
+          });
+
+          roundCount++;
         }
 
-        // Confirmation for all other write actions
-        const confirmMsg = _doConfirmMessage(action);
-        let confirmed = autoConfirm;
-        if (!confirmed) {
+        if (abortController.signal.aborted) {
+          channel.appendLine(`\nCompleted ${completedActions} actions before stopping. (⌐■_■)`);
+        } else {
+          if (roundCount >= maxRounds) channel.appendLine(`Max rounds (${maxRounds}) reached.`);
+          channel.appendLine(`\nCompleted ${completedActions} actions! (⌐■_■)`);
+        }
+
+        if (hasBackups(rootPath)) {
           const choice = await vscode.window.showInformationMessage(
-            `ASKII Do — ${confirmMsg}`,
-            { modal: true },
+            `ASKII Do: ${completedActions} actions completed.`,
             'Confirm',
-            'Skip',
+            'Undo',
           );
-          confirmed = choice === 'Confirm';
-        }
-
-        if (!confirmed) {
-          actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
-          continue;
-        }
-
-        try {
-          const result = await _executeWriteAction(action, filePath, rootPath, formatAfterEdit);
-          if (result === 'ok') completedActions++;
-          actionResults.push({
-            action: `${action.type}:${action.path}`,
-            status: result === 'ok' ? 'ok' : 'error',
-            detail: result === 'ok' ? undefined : result,
-          });
-          if (result === 'ok') {
-            channel.appendLine(`✓ ${_doActionLabel(action)}`);
-          } else {
-            channel.appendLine(`✗ Failed: ${result}`);
+          if (choice === 'Undo') {
+            const { restored, deleted } = restoreAllBackups(rootPath);
+            deleteAllBackups(rootPath);
+            channel.appendLine(
+              `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
+            );
+            vscode.window.showInformationMessage(
+              `ASKII Do: Restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
+            );
+          } else if (choice === 'Confirm') {
+            deleteAllBackups(rootPath);
           }
-        } catch (e) {
-          const detail = e instanceof Error ? e.message : 'Unknown error';
-          channel.appendLine(`✗ Failed: ${detail}`);
-          actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail });
+        } else {
+          vscode.window.showInformationMessage(`ASKII Do: ${completedActions} actions completed.`);
         }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        channel.appendLine(`\nError: ${errorMsg}`);
+        vscode.window.showErrorMessage(`ASKII Do failed: ${errorMsg}`);
       }
-
-      if (actionResults.length > 0) {
-        feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
-      }
-
-      if (feedbackParts.length === 0) break;
-
-      messages.push({
-        role: 'user',
-        content:
-          feedbackParts.join('\n\n') +
-          '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
-      });
-
-      roundCount++;
-    }
-
-    if (abortController.signal.aborted) {
-      channel.appendLine(`\nCompleted ${completedActions} actions before stopping. (⌐■_■)`);
-    } else {
-      if (roundCount >= maxRounds) channel.appendLine(`Max rounds (${maxRounds}) reached.`);
-      channel.appendLine(`\nCompleted ${completedActions} actions! (⌐■_■)`);
-    }
-
-    if (hasBackups(rootPath)) {
-      const choice = await vscode.window.showInformationMessage(
-        `ASKII Do: ${completedActions} actions completed.`,
-        'Confirm',
-        'Undo',
-      );
-      if (choice === 'Undo') {
-        const { restored, deleted } = restoreAllBackups(rootPath);
-        deleteAllBackups(rootPath);
-        channel.appendLine(
-          `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
-        );
-        vscode.window.showInformationMessage(
-          `ASKII Do: Restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
-        );
-      } else if (choice === 'Confirm') {
-        deleteAllBackups(rootPath);
-      }
-    } else {
-      vscode.window.showInformationMessage(`ASKII Do: ${completedActions} actions completed.`);
-    }
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    channel.appendLine(`\nError: ${errorMsg}`);
-    vscode.window.showErrorMessage(`ASKII Do failed: ${errorMsg}`);
-  }
-
     }, // end withProgress callback
   );
 }
