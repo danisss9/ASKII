@@ -25,7 +25,10 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Auto-reload wiki on startup if configured
   const wikiConfig = vscode.workspace.getConfiguration('askii');
-  if ((wikiConfig.get<boolean>('wikiEnabled') ?? false) && (wikiConfig.get<boolean>('wikiAutoReload') ?? false)) {
+  if (
+    (wikiConfig.get<boolean>('wikiEnabled') ?? false) &&
+    (wikiConfig.get<boolean>('wikiAutoReload') ?? false)
+  ) {
     askiiReloadWikiCommand();
   }
   const decorationType = vscode.window.createTextEditorDecorationType({
