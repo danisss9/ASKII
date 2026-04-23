@@ -43,9 +43,7 @@ export function showDecoration(
   };
 
   if (isTruncated && !isThinking) {
-    (decoration as any).hoverMessage = new vscode.MarkdownString(
-      `${kaomoji} **ASKII Says:**\n\n${text}`,
-    );
+    decoration.hoverMessage = new vscode.MarkdownString(`${kaomoji} **ASKII Says:**\n\n${text}`);
   }
 
   editor.setDecorations(decorationType, [decoration]);
@@ -75,8 +73,8 @@ export async function updateDecorations(editor: vscode.TextEditor | undefined) {
 
   const cacheKey = `${editor.document.uri.toString()}:${position.line}:${lineText}`;
 
-  if (explanationCache.has(cacheKey)) {
-    const cached = explanationCache.get(cacheKey)!;
+  const cached = explanationCache.get(cacheKey);
+  if (cached) {
     showDecoration(editor, position.line, cached.kaomoji, cached.explanation);
     return;
   }
@@ -131,8 +129,8 @@ export class AskiiHoverProvider implements vscode.HoverProvider {
     }
 
     const cacheKey = `${document.uri.toString()}:${line}:${lineText}`;
-    if (explanationCache.has(cacheKey)) {
-      const cached = explanationCache.get(cacheKey)!;
+    const cached = explanationCache.get(cacheKey);
+    if (cached) {
       const maxLength = 100;
 
       if (cached.explanation.length > maxLength && cached.explanation !== 'thinking...') {

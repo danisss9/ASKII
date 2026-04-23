@@ -4,6 +4,12 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.9] - 2026-04-23
+
+### Added
+
+- **Keybindings**: Added default chorded keybindings starting with `Ctrl+Shift+K` (Mac: `Cmd+Shift+K`) followed by an intuitive letter for each command (e.g., `A` for Ask, `E` for Edit, `D` for Do).
+
 ## [0.2.8] - 2026-04-21
 
 ### Added
@@ -13,10 +19,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Changed
 
-- **Hardened Ask Panel**: 
+- **Hardened Ask Panel**:
   - Injected `nonce`-based CSP constraints and disabled `localResourceRoots` to prevent executing arbitrary code or loading unrelated disk assets in the response webview window.
   - Added stricter `typeof` and failure guards when processing host-webview messages.
-  - Made the response copy button show visual `Copy failed` feedback instead of failing silently when clipboard writing throws. 
+  - Made the response copy button show visual `Copy failed` feedback instead of failing silently when clipboard writing throws.
   - Included a safe Markdown render fallback.
 - **Tightened Typings and Lint Coverage**:
   - Activated the `eslint` script on `common/` files to establish identical lint constraints as `src/`.

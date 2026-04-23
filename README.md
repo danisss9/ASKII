@@ -194,6 +194,18 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.browserHeadless`: Run the Puppeteer browser headlessly for ASKII Browse (default: `false` — browser window is visible)
 - `askii.chromePath`: Path to the Chrome/Chromium executable for ASKII Browse (e.g. `C:\Program Files\Google\Chrome\Application\chrome.exe`). Leave empty to use the system default
 
+## Keybindings
+
+You can invoke ASKII commands using the following default keybindings:
+
+- **Ask ASKII**: `Ctrl+Shift+K A` (Mac: `Cmd+Shift+K A`)
+- **ASKII Edit**: `Ctrl+Shift+K E` (Mac: `Cmd+Shift+K E`)
+- **ASKII Do**: `Ctrl+Shift+K D` (Mac: `Cmd+Shift+K D`)
+- **ASKII Control**: `Ctrl+Shift+K C` (Mac: `Cmd+Shift+K C`)
+- **ASKII Browse**: `Ctrl+Shift+K B` (Mac: `Cmd+Shift+K B`)
+- **ASKII: Reload Wiki**: `Ctrl+Shift+K R` (Mac: `Cmd+Shift+K R`)
+- **ASKII: Clear Cache**: `Ctrl+Shift+K X` (Mac: `Cmd+Shift+K X`)
+
 ## Default Mode Examples
 
 ### Funny Mode

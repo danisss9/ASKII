@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -20,6 +20,45 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "keybindings": [
+      {
+        "command": "askii.askQuestion",
+        "key": "ctrl+shift+k a",
+        "mac": "cmd+shift+k a",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "askii.editCode",
+        "key": "ctrl+shift+k e",
+        "mac": "cmd+shift+k e",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "askii.doTask",
+        "key": "ctrl+shift+k d",
+        "mac": "cmd+shift+k d"
+      },
+      {
+        "command": "askii.controlTask",
+        "key": "ctrl+shift+k c",
+        "mac": "cmd+shift+k c"
+      },
+      {
+        "command": "askii.browseTask",
+        "key": "ctrl+shift+k b",
+        "mac": "cmd+shift+k b"
+      },
+      {
+        "command": "askii.reloadWiki",
+        "key": "ctrl+shift+k r",
+        "mac": "cmd+shift+k r"
+      },
+      {
+        "command": "askii.clearCache",
+        "key": "ctrl+shift+k x",
+        "mac": "cmd+shift+k x"
+      }
+    ],
     "commands": [
       {
         "command": "askii.clearCache",
