@@ -4,6 +4,14 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.10] - 2026-04-28
+
+### Added
+
+- **Terminal and Chat Prompts Auto-completion**: Added inline ghost text completions in VS Code terminal and GitHub Copilot/Claude chat input boxes.
+- **`askii.inlineCompletionEnabled` setting**: Boolean option (default: `false`) — enables ASKII inline auto-completion for terminal and chat prompts.
+- **`askii.inlineCompletionScreenshot` setting**: Boolean option (default: `false`) — when enabled, incorporates a low-res screen capture as visual context to improve the inline completions.
+
 ## [0.2.9] - 2026-04-23
 
 ### Added

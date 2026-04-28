@@ -15,6 +15,7 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
   - **ASKII Do**: Agentic workspace agent — view, list, create, modify, rename, and delete files across multiple rounds until the task is complete
   - **ASKII Control**: Give ASKII a screen instruction — it takes screenshots and drives your mouse and keyboard until the task is done
   - **ASKII Browse**: Give ASKII a browser task — it launches a Puppeteer browser, takes page screenshots, and navigates the web until the task is done
+- **Terminal & Chat Auto-completion**: Ghost-text code suggestions inside your VS Code terminal and GitHub Copilot/Claude chat boxes.
 
 ## Requirements
 
@@ -169,6 +170,12 @@ Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickl
 - Reload Wiki
 - Clear Cache
 
+### Terminal & Chat Auto-completion
+
+ASKII can act as an auto-complete assistant directly inside your VS Code integrated terminal and the GitHub Copilot / Claude chat input boxes. 
+- Enable `askii.inlineCompletionEnabled` to show ghost text completions as you type. Accept word-by-word with `Tab` or dismiss with `Esc`.
+- Enable `askii.inlineCompletionScreenshot` to automatically include a low-resolution snapshot of your screen as context for the AI, giving it better cues of terminal output or dialogs.
+
 ## Configuration
 
 All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
@@ -188,6 +195,8 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.wikiEnabled`: Enable wiki RAG context for Ask / Edit / Do commands (default: `false`)
 - `askii.wikiPath`: Path to a folder containing `.md` documentation files to index for wiki RAG. Run **ASKII: Reload Wiki** after changing this or updating the docs
 - `askii.wikiAutoReload`: Automatically rebuild and reload the wiki index on extension startup (default: `false`). Requires `askii.wikiEnabled` and `askii.wikiPath` to be configured
+- `askii.inlineCompletionEnabled`: Enable ASKII inline auto-completion for terminal and chat prompts (default: `false`)
+- `askii.inlineCompletionScreenshot`: Include a low-res screenshot as context for inline completion to improve accuracy (default: `false`)
 - `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control / Browse commands (default: 5)
 - `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control / Browse (default: `false`)
 - `askii.formatAfterEdit`: Auto-format files after ASKII Edit or Do (default: `false`)

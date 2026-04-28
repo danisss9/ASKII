@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -218,6 +218,16 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically rebuild and reload the wiki index when the extension starts. Requires askii.wikiEnabled and askii.wikiPath to be configured."
+        },
+        "askii.inlineCompletionEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable ASKII inline auto-completion for terminal and chat prompts."
+        },
+        "askii.inlineCompletionScreenshot": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include a low-res screenshot as context for inline completion to improve accuracy."
         }
       }
     }

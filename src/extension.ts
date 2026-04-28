@@ -16,6 +16,7 @@ import {
   askiiDiffProvider,
 } from './commands';
 import { validateProviderConfig } from './providers';
+import { AskiiInlineCompletionProvider } from './inlineCompletion';
 
 export function activate(context: vscode.ExtensionContext) {
   // Register the in-memory content provider for diff previews
@@ -144,6 +145,18 @@ export function activate(context: vscode.ExtensionContext) {
         runValidation();
       }
     }),
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerInlineCompletionItemProvider(
+      [
+        { scheme: 'vscode-terminal' },
+        { scheme: 'vscode-chatCodeBlock' },
+        { scheme: 'chat' },
+        { scheme: 'vscode-interactive' }
+      ],
+      new AskiiInlineCompletionProvider()
+    )
   );
 
   context.subscriptions.push(decorationType);
