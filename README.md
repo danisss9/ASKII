@@ -15,7 +15,8 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
   - **ASKII Do**: Agentic workspace agent — view, list, create, modify, rename, and delete files across multiple rounds until the task is complete
   - **ASKII Control**: Give ASKII a screen instruction — it takes screenshots and drives your mouse and keyboard until the task is done
   - **ASKII Browse**: Give ASKII a browser task — it launches a Puppeteer browser, takes page screenshots, and navigates the web until the task is done
-- **Terminal & Chat Auto-completion**: Ghost-text code suggestions inside your VS Code terminal and GitHub Copilot/Claude chat boxes.
+- **Code Auto-completion**: Copilot-style ghost-text code suggestions inside any open code file — Tab to accept, Esc to dismiss.
+- **Codebase Wiki RAG**: Index your own workspace code files and inject relevant chunks as context into inline completion, Ask, Edit, and Do commands.
 
 ## Requirements
 
@@ -158,6 +159,19 @@ The index is cached in memory after the first load — no disk reads on subseque
 
 ---
 
+### Codebase Wiki RAG (Code Context)
+
+Index your workspace code files (TypeScript, Python, Go, Rust, and more) into a BM25 search index and inject the most relevant chunks as context into inline completion, Ask, Edit, and Do commands.
+
+1. Run **ASKII: Reload Code Wiki** from the command palette (or status-bar menu) — ASKII walks the workspace root, splits files into 60-line overlapping chunks, and saves the index as `.askii-code-wiki-index.json`. A progress notification confirms when done.
+2. Enable `askii.codeWikiEnabled` to inject code context into Ask / Edit / Do commands.
+3. Optionally enable `askii.codeWikiAutoReload` to rebuild the index automatically on each VS Code startup.
+4. When enabled, the inline completer also uses the code wiki — querying it with recent lines near the cursor to retrieve relevant context before requesting a completion.
+
+Skipped by default: `node_modules`, `dist`, `out`, `build`, `target`, and files over 200 KB. Add `.askii-code-wiki-index.json` to your `.gitignore`.
+
+---
+
 ### Quick Access with Status Bar Button
 
 Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickly access:
@@ -168,13 +182,20 @@ Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickl
 - ASKII Control
 - ASKII Browse
 - Reload Wiki
+- Reload Code Wiki
 - Clear Cache
 
-### Terminal & Chat Auto-completion
+### Code Auto-completion
 
-ASKII can act as an auto-complete assistant directly inside your VS Code integrated terminal and the GitHub Copilot / Claude chat input boxes. 
-- Enable `askii.inlineCompletionEnabled` to show ghost text completions as you type. Accept word-by-word with `Tab` or dismiss with `Esc`.
-- Enable `askii.inlineCompletionScreenshot` to automatically include a low-resolution snapshot of your screen as context for the AI, giving it better cues of terminal output or dialogs.
+ASKII provides Copilot-style ghost-text completions inside any code file open in the editor.
+
+1. Enable `askii.inlineCompletionEnabled` — ghost text appears after a short delay as you type.
+2. Press **Tab** to accept the suggestion or **Esc** to dismiss it (standard VS Code inline-suggest behaviour, no custom keybindings needed).
+3. Set `askii.inlineCompletionEagerness` to control responsiveness:
+   - `low` — triggers after 1 200 ms with a wide code context window
+   - `medium` — 500 ms (default)
+   - `high` — 200 ms with a narrower context window for speed
+4. Enable `askii.codeWikiEnabled` (after running **ASKII: Reload Code Wiki**) to include relevant chunks from your indexed codebase as additional context for each completion.
 
 ## Configuration
 
@@ -184,7 +205,6 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.ollamaUrl`: URL for Ollama API server (default: `http://localhost:11434`)
 - `askii.lmStudioUrl`: URL for LM Studio API server (default: `ws://localhost:1234`)
 - `askii.ollamaModel`: Ollama model name (default: `gemma3:270m`)
-- `askii.copilotModel`: GitHub Copilot model (default: `gpt-4o`)
 - `askii.lmStudioModel`: LM Studio model (default: `qwen/qwen3-coder-30b`)
 - `askii.openaiApiKey`: OpenAI API key (used when `llmPlatform` is `openai`)
 - `askii.openaiModel`: OpenAI model (default: `gpt-4o`)
@@ -195,8 +215,10 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.wikiEnabled`: Enable wiki RAG context for Ask / Edit / Do commands (default: `false`)
 - `askii.wikiPath`: Path to a folder containing `.md` documentation files to index for wiki RAG. Run **ASKII: Reload Wiki** after changing this or updating the docs
 - `askii.wikiAutoReload`: Automatically rebuild and reload the wiki index on extension startup (default: `false`). Requires `askii.wikiEnabled` and `askii.wikiPath` to be configured
-- `askii.inlineCompletionEnabled`: Enable ASKII inline auto-completion for terminal and chat prompts (default: `false`)
-- `askii.inlineCompletionScreenshot`: Include a low-res screenshot as context for inline completion to improve accuracy (default: `false`)
+- `askii.inlineCompletionEnabled`: Enable ASKII inline code completion — ghost text in code files, Tab to accept, Esc to dismiss (default: `false`)
+- `askii.inlineCompletionEagerness`: Completion trigger speed — `low` (1 200 ms), `medium` (500 ms, default), `high` (200 ms)
+- `askii.codeWikiEnabled`: Enable codebase wiki RAG context for inline completion, Ask, Edit, and Do (default: `false`). Run **ASKII: Reload Code Wiki** first
+- `askii.codeWikiAutoReload`: Automatically rebuild the codebase wiki index on extension startup (default: `false`)
 - `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control / Browse commands (default: 5)
 - `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control / Browse (default: `false`)
 - `askii.formatAfterEdit`: Auto-format files after ASKII Edit or Do (default: `false`)

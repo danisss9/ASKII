@@ -13,10 +13,11 @@ import {
   askiiControlCommand,
   askiiBrowseCommand,
   askiiReloadWikiCommand,
+  askiiReloadCodeWikiCommand,
   askiiDiffProvider,
 } from './commands';
 import { validateProviderConfig } from './providers';
-import { AskiiInlineCompletionProvider } from './inlineCompletion';
+import { AskiiInlineCompletionProvider, INLINE_ACCEPT_COMMAND } from './inlineCompletion';
 
 export function activate(context: vscode.ExtensionContext) {
   // Register the in-memory content provider for diff previews
@@ -31,6 +32,12 @@ export function activate(context: vscode.ExtensionContext) {
     (wikiConfig.get<boolean>('wikiAutoReload') ?? false)
   ) {
     askiiReloadWikiCommand();
+  }
+  if (
+    (wikiConfig.get<boolean>('codeWikiEnabled') ?? false) &&
+    (wikiConfig.get<boolean>('codeWikiAutoReload') ?? false)
+  ) {
+    askiiReloadCodeWikiCommand();
   }
   const decorationType = vscode.window.createTextEditorDecorationType({
     rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
@@ -69,6 +76,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.reloadWiki', askiiReloadWikiCommand),
   );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('askii.reloadCodeWiki', askiiReloadCodeWikiCommand),
+  );
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.text = '(⌐■_■)';
@@ -86,6 +96,7 @@ export function activate(context: vscode.ExtensionContext) {
         { label: '$(screen-full) ASKII Control', command: 'askii.controlTask' },
         { label: '$(browser) ASKII Browse', command: 'askii.browseTask' },
         { label: '$(book) Reload Wiki', command: 'askii.reloadWiki' },
+        { label: '$(code) Reload Code Wiki', command: 'askii.reloadCodeWiki' },
         { label: '$(refresh) Clear Cache', command: 'askii.clearCache' },
       ]);
 
@@ -147,16 +158,17 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  const inlineProvider = new AskiiInlineCompletionProvider();
+  context.subscriptions.push(
+    vscode.commands.registerCommand(INLINE_ACCEPT_COMMAND, (id: number) => {
+      inlineProvider.notifyAccepted(id);
+    }),
+  );
   context.subscriptions.push(
     vscode.languages.registerInlineCompletionItemProvider(
-      [
-        { scheme: 'vscode-terminal' },
-        { scheme: 'vscode-chatCodeBlock' },
-        { scheme: 'chat' },
-        { scheme: 'vscode-interactive' }
-      ],
-      new AskiiInlineCompletionProvider()
-    )
+      [{ scheme: 'file' }, { scheme: 'untitled' }],
+      inlineProvider,
+    ),
   );
 
   context.subscriptions.push(decorationType);

@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -93,6 +93,11 @@
       {
         "command": "askii.reloadWiki",
         "title": "ASKII: Reload Wiki",
+        "category": "ASKII"
+      },
+      {
+        "command": "askii.reloadCodeWiki",
+        "title": "ASKII: Reload Code Wiki",
         "category": "ASKII"
       }
     ],
@@ -222,12 +227,28 @@
         "askii.inlineCompletionEnabled": {
           "type": "boolean",
           "default": false,
-          "description": "Enable ASKII inline auto-completion for terminal and chat prompts."
+          "description": "Enable ASKII inline code completion (Copilot-style ghost text in the editor; Tab to accept, Esc to dismiss)."
         },
-        "askii.inlineCompletionScreenshot": {
+        "askii.inlineCompletionEagerness": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "enumDescriptions": [
+            "Trigger after 1200ms — fewer, more deliberate suggestions",
+            "Trigger after 500ms — balanced (default)",
+            "Trigger after 200ms — frequent, fast suggestions"
+          ],
+          "default": "medium",
+          "description": "How eagerly ASKII requests inline completions. Controls the debounce delay and context window size."
+        },
+        "askii.codeWikiEnabled": {
           "type": "boolean",
           "default": false,
-          "description": "Include a low-res screenshot as context for inline completion to improve accuracy."
+          "description": "Enable codebase wiki RAG context for inline completion, Ask, Edit, and Do commands. Run 'ASKII: Reload Code Wiki' to build the index."
+        },
+        "askii.codeWikiAutoReload": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically rebuild and reload the code wiki index when the extension starts. Requires askii.codeWikiEnabled to be true."
         }
       }
     }

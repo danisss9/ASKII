@@ -100,14 +100,18 @@ askii do --dir .\my-project "refactor index.ts"
 
 The agent can use the following actions each round:
 
-| Action   | Description                                           | Requires confirmation |
-| -------- | ----------------------------------------------------- | --------------------- |
-| `list`   | List files in a folder (`[file]` / `[folder]` labels) | No                    |
-| `view`   | Read a file's contents                                | No                    |
-| `create` | Create a new file                                     | Yes                   |
-| `modify` | Replace text in an existing file                      | Yes                   |
-| `rename` | Rename or move a file                                 | Yes                   |
-| `delete` | Delete a file                                         | Yes                   |
+| Action        | Description                                           | Requires confirmation |
+| ------------- | ----------------------------------------------------- | --------------------- |
+| `list`        | List files in a folder (`[file]` / `[folder]` labels) | No                    |
+| `view`        | Read a file's contents                                | No                    |
+| `search`      | Grep workspace files for a pattern                    | No                    |
+| `wiki_search` | BM25 search over indexed `.md` docs (requires `--use-wiki`) | No              |
+| `code_search` | BM25 search over indexed code files (requires `--use-code-wiki`) | No         |
+| `create`      | Create a new file                                     | Yes                   |
+| `modify`      | Replace text in an existing file                      | Yes                   |
+| `rename`      | Rename or move a file                                 | Yes                   |
+| `delete`      | Delete a file                                         | Yes                   |
+| `run`         | Run a shell command                                   | Yes (always)          |
 
 The loop continues after every round — not only after reads — until the AI returns `[]` or the round limit is hit.
 
@@ -187,6 +191,47 @@ askii do --wiki-path .\docs --use-wiki "implement the auth flow described in the
 
 ---
 
+### `code-wiki-reload` — Index workspace code files
+
+Walks all supported code files in a directory (TypeScript, Python, Go, Rust, C/C++, and more), splits them into 60-line overlapping chunks, builds a [MiniSearch](https://github.com/lucaong/minisearch) BM25 index, and saves it as `.askii-code-wiki-index.json` in the target directory. Run this once against your codebase and again whenever the code changes significantly.
+
+Skips: `node_modules`, `dist`, `out`, `build`, `target`, `bin`, `obj`, `coverage`, `__pycache__`, `venv`, and files over 200 KB.
+
+**bash**
+
+```bash
+askii code-wiki-reload                          # indexes current directory
+askii code-wiki-reload --code-wiki-path ./src  # indexes a specific directory
+```
+
+**PowerShell**
+
+```powershell
+askii code-wiki-reload
+askii code-wiki-reload --code-wiki-path .\src
+```
+
+After indexing, pass `--code-wiki-path` and `--use-code-wiki` to any `ask`, `edit`, or `do` command to inject the top matching code chunks as context:
+
+**bash**
+
+```bash
+askii ask --use-code-wiki "where is the wiki index built?"
+askii ask --use-code-wiki "how does the debounce work in the inline completer?"
+cat src/commands.ts | askii edit --use-code-wiki "add code wiki context to the ask command"
+askii do --use-code-wiki "refactor the provider functions to share a common helper"
+```
+
+**PowerShell**
+
+```powershell
+askii ask --use-code-wiki "where is the wiki index built?"
+Get-Content src\commands.ts | askii edit --use-code-wiki "add code wiki context to the ask command"
+askii do --use-code-wiki "refactor the provider functions to share a common helper"
+```
+
+---
+
 ### `browse` — Browser agent
 
 Launches a Puppeteer browser, takes a screenshot of the current page and its URL, sends both to the AI, and executes the returned action. Repeats until the AI returns `DONE` or `--max-rounds` is reached. Requires a **vision-capable model** (e.g. `llava`, `moondream2`).
@@ -254,6 +299,8 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 | `--chrome-path`     |       | Path to Chrome/Chromium executable for `browse`           |                          |
 | `--wiki-path`       |       | Path to folder with `.md` docs for wiki RAG (env: `ASKII_WIKI_PATH`) | |
 | `--use-wiki`        |       | Inject wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_WIKI=1`) | |
+| `--code-wiki-path`  |       | Path to codebase root to index / search (env: `ASKII_CODE_WIKI_PATH`) | cwd |
+| `--use-code-wiki`   |       | Inject code wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_CODE_WIKI=1`) | |
 
 ## Environment Variables
 
@@ -284,9 +331,13 @@ export ASKII_MODE=funny
 export ASKII_MAX_ROUNDS=5
 export ASKII_CHROME_PATH=/usr/bin/chromium
 
-# Wiki RAG
+# Docs wiki RAG
 export ASKII_WIKI_PATH=./docs
 export ASKII_USE_WIKI=1
+
+# Code wiki RAG
+export ASKII_CODE_WIKI_PATH=./src   # defaults to cwd
+export ASKII_USE_CODE_WIKI=1
 ```
 
 **PowerShell**
@@ -316,9 +367,13 @@ $env:ASKII_MODE = "funny"
 $env:ASKII_MAX_ROUNDS = "5"
 $env:ASKII_CHROME_PATH = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 
-# Wiki RAG
+# Docs wiki RAG
 $env:ASKII_WIKI_PATH = ".\docs"
 $env:ASKII_USE_WIKI = "1"
+
+# Code wiki RAG
+$env:ASKII_CODE_WIKI_PATH = ".\src"   # defaults to cwd
+$env:ASKII_USE_CODE_WIKI = "1"
 ```
 
 ## Platforms

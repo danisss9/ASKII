@@ -4,6 +4,31 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.2.11] - 2026-06-11
+
+### Added
+
+- **Code Auto-completion**: Replaced terminal/chat inline completion with a code completion engine for all code files. Ghost text appears after a configurable delay; press Tab to accept, Esc to dismiss — VS Code's native `editor.inlineSuggest` handles it with no custom keybindings required.
+- **`askii.inlineCompletionEagerness` setting**: `low` (1 200 ms debounce, wide context), `medium` (500 ms, default), or `high` (200 ms, narrow context) — controls how frequently completions are requested and how much surrounding code is sent.
+- **Accept/reject tracking**: Each suggestion carries an ID; accepting via Tab records it, and the next prompt tells the model whether the previous suggestion was accepted or rejected so it can self-correct.
+- **Codebase wiki** (`common/codewiki.ts`): Index workspace code files into a BM25 full-text search index (powered by MiniSearch, same engine as the docs wiki). Chunks in 60-line overlapping windows; skips `node_modules`, `dist`, `out`, `build`, and files over 200 KB. Stored as `.askii-code-wiki-index.json` in the workspace root.
+- **`ASKII: Reload Code Wiki` command** (`askii.reloadCodeWiki`): Walks all supported code files in the workspace, builds the MiniSearch index, and saves it with a progress notification and chunk/file count summary. Also available in the status-bar quick-pick menu.
+- **`askii.codeWikiEnabled` setting**: Enable codebase wiki context injection for inline completion, Ask, Edit, and Do commands (default: `false`). Run **ASKII: Reload Code Wiki** first.
+- **`askii.codeWikiAutoReload` setting**: Automatically rebuild the codebase wiki index on extension startup (default: `false`). Requires `askii.codeWikiEnabled`.
+- **`code_search` Do action**: The Do agent can issue `{"type": "code_search", "query": "..."}` to retrieve relevant code chunks from the indexed codebase, analogous to `wiki_search`.
+- **Codebase wiki context in Ask / Edit**: When `askii.codeWikiEnabled` is true, the top matching code chunks are prepended as `Relevant code from the codebase:` context alongside any docs wiki context.
+- **CLI `code-wiki-reload` command**: Build the codebase wiki index from `--code-wiki-path` (default: cwd).
+- **CLI `--use-code-wiki` / `--code-wiki-path` flags**: Enable codebase wiki context for `ask`, `edit`, and `do`. Also readable via `ASKII_USE_CODE_WIKI=1` / `ASKII_CODE_WIKI_PATH` environment variables.
+
+### Changed
+
+- **Inline completion targets code files**: The provider is now registered for `{ scheme: 'file' }` and `{ scheme: 'untitled' }` instead of terminal and chat schemes.
+- **Debounce + cancellation hardened**: A `latestRequestId` guard ensures stale LLM responses from superseded requests never produce ghost text.
+
+### Removed
+
+- **`askii.inlineCompletionScreenshot` setting**: Screenshot capture is no longer part of inline completion. Screenshots are still used by ASKII Control and ASKII Browse.
+
 ## [0.2.10] - 2026-04-28
 
 ### Added

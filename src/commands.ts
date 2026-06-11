@@ -70,6 +70,7 @@ import {
   takePageScreenshot,
 } from '@common/browser';
 import { buildWikiIndex, saveWikiIndex, loadWikiIndex, searchWiki } from '@common/wiki';
+import { buildCodeWikiIndex, saveCodeWikiIndex, loadCodeWikiIndex, searchCodeWiki } from '@common/codewiki';
 
 function getWikiContext(query: string): string {
   const config = vscode.workspace.getConfiguration('askii');
@@ -79,6 +80,16 @@ function getWikiContext(query: string): string {
   const index = loadWikiIndex(wikiPath);
   if (!index) return '';
   return searchWiki(query, index);
+}
+
+function getCodeWikiContext(query: string): string {
+  const config = vscode.workspace.getConfiguration('askii');
+  if (!(config.get<boolean>('codeWikiEnabled') ?? false)) return '';
+  const rootPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!rootPath) return '';
+  const index = loadCodeWikiIndex(rootPath);
+  if (!index) return '';
+  return searchCodeWiki(query, index);
 }
 
 export async function askAskiiCommand() {
@@ -268,7 +279,9 @@ export async function askAskiiCommand() {
   while (!panelDisposed) {
     const wikiCtx = getWikiContext(currentQuestion);
     const wikiSection = wikiCtx ? `Relevant documentation:\n${wikiCtx}\n\n` : '';
-    const fullPrompt = wikiSection + codeContext + history + `Question: ${currentQuestion}`;
+    const codeWikiCtx = getCodeWikiContext(currentQuestion);
+    const codeWikiSection = codeWikiCtx ? `Relevant code from the codebase:\n${codeWikiCtx}\n\n` : '';
+    const fullPrompt = wikiSection + codeWikiSection + codeContext + history + `Question: ${currentQuestion}`;
     let accumulated = '';
 
     try {
@@ -370,12 +383,15 @@ export async function askiiEditCommand() {
 
     const wikiCtxEdit = getWikiContext(question);
     const wikiSectionEdit = wikiCtxEdit ? `Relevant documentation:\n${wikiCtxEdit}\n\n` : '';
+    const codeWikiCtxEdit = getCodeWikiContext(question);
+    const codeWikiSectionEdit = codeWikiCtxEdit ? `Relevant code from the codebase:\n${codeWikiCtxEdit}\n\n` : '';
 
     let prompt: string;
     if (hasSelection && selectedText !== null) {
       // Pass full file as context, but ask only for the selected portion back
       prompt =
         wikiSectionEdit +
+        codeWikiSectionEdit +
         `${metaLines ? metaLines + '\n' : ''}` +
         `Full file context:\n\`\`\`${languageId}\n${fullFileText}\n\`\`\`\n\n` +
         `Update only this selected section:\n\`\`\`${languageId}\n${selectedText}\n\`\`\`\n\n` +
@@ -385,6 +401,7 @@ export async function askiiEditCommand() {
       // No selection — edit the entire file
       prompt =
         wikiSectionEdit +
+        codeWikiSectionEdit +
         `${metaLines ? metaLines + '\n' : ''}` +
         `Update this file:\n\`\`\`${languageId}\n${fullFileText}\n\`\`\`\n\n` +
         `Request: ${question}\n\n` +
@@ -498,7 +515,9 @@ export async function askiiDoCommand() {
         const wikiPath = doConfig.get<string>('wikiPath') ?? '';
         const wikiEnabled = doConfig.get<boolean>('wikiEnabled') ?? false;
         const wikiAvailable = !!(wikiEnabled && wikiPath && loadWikiIndex(wikiPath));
-        const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable);
+        const codeWikiEnabled = doConfig.get<boolean>('codeWikiEnabled') ?? false;
+        const codeWikiAvailable = !!(codeWikiEnabled && rootPath && loadCodeWikiIndex(rootPath));
+        const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable, codeWikiAvailable);
 
         const messages: ChatMessage[] = [
           { role: 'system', content: systemPrompt },
@@ -532,14 +551,16 @@ export async function askiiDoCommand() {
               a.type === 'view' ||
               a.type === 'list' ||
               a.type === 'search' ||
-              a.type === 'wiki_search',
+              a.type === 'wiki_search' ||
+              a.type === 'code_search',
           );
           const writeActions = actions.filter(
             (a) =>
               a.type !== 'view' &&
               a.type !== 'list' &&
               a.type !== 'search' &&
-              a.type !== 'wiki_search',
+              a.type !== 'wiki_search' &&
+              a.type !== 'code_search',
           );
 
           const feedbackParts: string[] = [];
@@ -555,6 +576,13 @@ export async function askiiDoCommand() {
                 viewResults[`wiki_search:${q}`] = wikiData
                   ? searchWiki(q, wikiData) || 'No wiki results found'
                   : 'Wiki not available — set askii.wikiPath and run Reload Wiki';
+              } else if (action.type === 'code_search') {
+                const q = action.query ?? '';
+                channel.appendLine(`Code search: "${q}"`);
+                const codeWikiData = rootPath ? loadCodeWikiIndex(rootPath) : null;
+                viewResults[`code_search:${q}`] = codeWikiData
+                  ? searchCodeWiki(q, codeWikiData) || 'No code results found'
+                  : 'Code wiki not available — run ASKII: Reload Code Wiki';
               } else if (action.type === 'search') {
                 channel.appendLine(`Search: "${action.pattern}"`);
                 viewResults[`search:${action.pattern}`] = executeSearchAction(action, rootPath);
@@ -1028,6 +1056,39 @@ export async function askiiReloadWikiCommand() {
       } catch (error) {
         vscode.window.showErrorMessage(
           `ASKII: Wiki reload failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        );
+      }
+    },
+  );
+}
+
+export async function askiiReloadCodeWikiCommand() {
+  const rootPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!rootPath) {
+    vscode.window.showErrorMessage('ASKII: No workspace folder open.');
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'ASKII: Indexing code wiki...',
+      cancellable: false,
+    },
+    async (progress) => {
+      try {
+        progress.report({ message: 'Walking code files...' });
+        const data = buildCodeWikiIndex(rootPath);
+
+        progress.report({ message: `Saving index (${data.chunkCount} chunks)...` });
+        saveCodeWikiIndex(data, rootPath);
+
+        vscode.window.showInformationMessage(
+          `ASKII: Code wiki ready — ${data.chunkCount} chunks from ${data.fileCount} file(s). (⌐■_■)`,
+        );
+      } catch (error) {
+        vscode.window.showErrorMessage(
+          `ASKII: Code wiki reload failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
         );
       }
     },
