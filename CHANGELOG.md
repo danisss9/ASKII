@@ -4,7 +4,7 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
-## [0.2.11] - 2026-06-11
+## [0.2.12] - 2026-06-11
 
 ### Added
 

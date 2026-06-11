@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -231,7 +231,11 @@
         },
         "askii.inlineCompletionEagerness": {
           "type": "string",
-          "enum": ["low", "medium", "high"],
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
           "enumDescriptions": [
             "Trigger after 1200ms — fewer, more deliberate suggestions",
             "Trigger after 500ms — balanced (default)",
