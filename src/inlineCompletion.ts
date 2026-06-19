@@ -159,7 +159,12 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
       `The cursor is at the end of this line: ${linePrefix}\n` +
       `Output the completion text now:`;
 
-    const completionText = await getExtensionResponse(prompt, SYSTEM_PROMPT);
+    const completionText = await getExtensionResponse(
+      prompt,
+      SYSTEM_PROMPT,
+      config.get<string>('inlinePlatform'),
+      config.get<string>('inlineModel'),
+    );
 
     if (token.isCancellationRequested || id !== this.latestRequestId || !completionText) {
       return [];

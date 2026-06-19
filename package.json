@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.2.12",
+  "version": "0.3.0",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -111,10 +111,11 @@
             "copilot",
             "lmstudio",
             "openai",
-            "anthropic"
+            "anthropic",
+            "opencodego"
           ],
           "default": "ollama",
-          "description": "LLM platform to use (ollama, copilot, lmstudio, openai, or anthropic)"
+          "description": "LLM platform to use (ollama, copilot, lmstudio, openai, anthropic, or opencodego)"
         },
         "askii.ollamaUrl": {
           "type": "string",
@@ -165,6 +166,21 @@
           "type": "string",
           "default": "claude-sonnet-4-6",
           "description": "Anthropic model to use (e.g. claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5)"
+        },
+        "askii.opencodegoApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "opencode Go API key (used when llmPlatform is opencodego). Get it from https://opencode.ai/go"
+        },
+        "askii.opencodegoModel": {
+          "type": "string",
+          "default": "glm-5.2",
+          "description": "opencode Go model id (e.g. glm-5.2, kimi-k2.7-code, deepseek-v4-pro, qwen3.7-max, minimax-m3). See https://opencode.ai/zen/go/v1/models"
+        },
+        "askii.opencodegoUrl": {
+          "type": "string",
+          "default": "https://opencode.ai/zen/go/v1",
+          "description": "opencode Go base URL (OpenAI-compatible). Override only if needed."
         },
         "askii.inlineHelperMode": {
           "type": "string",
@@ -228,6 +244,34 @@
           "type": "boolean",
           "default": false,
           "description": "Enable ASKII inline code completion (Copilot-style ghost text in the editor; Tab to accept, Esc to dismiss)."
+        },
+        "askii.inlinePlatform": {
+          "type": "string",
+          "enum": [
+            "default",
+            "ollama",
+            "copilot",
+            "lmstudio",
+            "openai",
+            "anthropic",
+            "opencodego"
+          ],
+          "enumDescriptions": [
+            "Use the platform configured in askii.llmPlatform",
+            "Ollama (local)",
+            "GitHub Copilot",
+            "LM Studio (local)",
+            "OpenAI / OpenAI-compatible",
+            "Anthropic Claude",
+            "opencode Go"
+          ],
+          "default": "default",
+          "description": "LLM platform to use for inline auto-complete and inline helper mode decorations. Set to \"default\" to follow askii.llmPlatform."
+        },
+        "askii.inlineModel": {
+          "type": "string",
+          "default": "default",
+          "description": "Model id to use for inline auto-complete and helper mode. Set to \"default\" to use the default model of the selected platform (askii.ollamaModel, askii.copilotModel, askii.openaiModel, etc.)."
         },
         "askii.inlineCompletionEagerness": {
           "type": "string",

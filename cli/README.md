@@ -1,6 +1,6 @@
 # ASKII CLI ( •\_•)>⌐■-■ (⌐■_■)
 
-AI code assistant for your terminal. Powered by Ollama, LM Studio, OpenAI, or Anthropic.
+AI code assistant for your terminal. Powered by Ollama, LM Studio, OpenAI, Anthropic, or opencode Go.
 
 ## Install
 
@@ -100,18 +100,18 @@ askii do --dir .\my-project "refactor index.ts"
 
 The agent can use the following actions each round:
 
-| Action        | Description                                           | Requires confirmation |
-| ------------- | ----------------------------------------------------- | --------------------- |
-| `list`        | List files in a folder (`[file]` / `[folder]` labels) | No                    |
-| `view`        | Read a file's contents                                | No                    |
-| `search`      | Grep workspace files for a pattern                    | No                    |
-| `wiki_search` | BM25 search over indexed `.md` docs (requires `--use-wiki`) | No              |
-| `code_search` | BM25 search over indexed code files (requires `--use-code-wiki`) | No         |
-| `create`      | Create a new file                                     | Yes                   |
-| `modify`      | Replace text in an existing file                      | Yes                   |
-| `rename`      | Rename or move a file                                 | Yes                   |
-| `delete`      | Delete a file                                         | Yes                   |
-| `run`         | Run a shell command                                   | Yes (always)          |
+| Action        | Description                                                      | Requires confirmation |
+| ------------- | ---------------------------------------------------------------- | --------------------- |
+| `list`        | List files in a folder (`[file]` / `[folder]` labels)            | No                    |
+| `view`        | Read a file's contents                                           | No                    |
+| `search`      | Grep workspace files for a pattern                               | No                    |
+| `wiki_search` | BM25 search over indexed `.md` docs (requires `--use-wiki`)      | No                    |
+| `code_search` | BM25 search over indexed code files (requires `--use-code-wiki`) | No                    |
+| `create`      | Create a new file                                                | Yes                   |
+| `modify`      | Replace text in an existing file                                 | Yes                   |
+| `rename`      | Rename or move a file                                            | Yes                   |
+| `delete`      | Delete a file                                                    | Yes                   |
+| `run`         | Run a shell command                                              | Yes (always)          |
 
 The loop continues after every round — not only after reads — until the AI returns `[]` or the round limit is hit.
 
@@ -278,29 +278,32 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 
 ## Options
 
-| Flag                | Short | Description                                               | Default                  |
-| ------------------- | ----- | --------------------------------------------------------- | ------------------------ |
-| `--platform`        | `-p`  | LLM platform: `ollama`, `lmstudio`, `openai`, `anthropic` | `ollama`                 |
-| `--ollama-url`      |       | Ollama server URL                                         | `http://localhost:11434` |
-| `--lmstudio-url`    |       | LM Studio server URL                                      | `ws://localhost:1234`    |
-| `--ollama-model`    |       | Ollama model                                              | `gemma3:270m`            |
-| `--lmstudio-model`  |       | LM Studio model                                           | `qwen/qwen3-coder-30b`   |
-| `--openai-key`      |       | OpenAI API key (env: `ASKII_OPENAI_KEY`)                  |                          |
-| `--openai-model`    |       | OpenAI model                                              | `gpt-4o`                 |
-| `--openai-url`      |       | OpenAI-compatible base URL (env: `ASKII_OPENAI_URL`)      |                          |
-| `--anthropic-key`   |       | Anthropic API key (env: `ASKII_ANTHROPIC_KEY`)            |                          |
-| `--anthropic-model` |       | Anthropic model (env: `ASKII_ANTHROPIC_MODEL`)            | `claude-opus-4-6`        |
-| `--mode`            |       | Response style: `helpful`, `funny`                        | `funny`                  |
-| `--max-rounds`      |       | Max agent rounds for `do` / `control` / `browse`          | `5`                      |
-| `--dir`             |       | Working directory for `do`                                | cwd                      |
-| `--code`            | `-c`  | Code input (alternative to stdin)                         |                          |
-| `--yes`             | `-y`  | Auto-confirm all actions                                  |                          |
-| `--headless`        |       | Run Puppeteer headlessly for `browse`                     | `false` (visible)        |
-| `--chrome-path`     |       | Path to Chrome/Chromium executable for `browse`           |                          |
-| `--wiki-path`       |       | Path to folder with `.md` docs for wiki RAG (env: `ASKII_WIKI_PATH`) | |
-| `--use-wiki`        |       | Inject wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_WIKI=1`) | |
-| `--code-wiki-path`  |       | Path to codebase root to index / search (env: `ASKII_CODE_WIKI_PATH`) | cwd |
-| `--use-code-wiki`   |       | Inject code wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_CODE_WIKI=1`) | |
+| Flag                | Short | Description                                                                        | Default                  |
+| ------------------- | ----- | ---------------------------------------------------------------------------------- | ------------------------ |
+| `--platform`        | `-p`  | LLM platform: `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`            | `ollama`                 |
+| `--ollama-url`      |       | Ollama server URL                                                                  | `http://localhost:11434` |
+| `--lmstudio-url`    |       | LM Studio server URL                                                               | `ws://localhost:1234`    |
+| `--ollama-model`    |       | Ollama model                                                                       | `gemma4:e4b`             |
+| `--lmstudio-model`  |       | LM Studio model                                                                    | `qwen/qwen3-coder-30b`   |
+| `--openai-key`      |       | OpenAI API key (env: `ASKII_OPENAI_KEY`)                                           |                          |
+| `--openai-model`    |       | OpenAI model                                                                       | `gpt-5-mini`             |
+| `--openai-url`      |       | OpenAI-compatible base URL (env: `ASKII_OPENAI_URL`)                               |                          |
+| `--anthropic-key`   |       | Anthropic API key (env: `ASKII_ANTHROPIC_KEY`)                                     |                          |
+| `--anthropic-model` |       | Anthropic model (env: `ASKII_ANTHROPIC_MODEL`)                                     | `claude-sonnet-4-6`      |
+| `--opencodego-key`  |       | opencode Go API key (env: `ASKII_OPENCODEGO_KEY`)                                  |                          |
+| `--opencodego-model`|       | opencode Go model (env: `ASKII_OPENCODEGO_MODEL`)                                  | `glm-5.2`                |
+| `--opencodego-url`  |       | opencode Go base URL (env: `ASKII_OPENCODEGO_URL`)                                 | `https://opencode.ai/zen/go/v1` |
+| `--mode`            |       | Response style: `helpful`, `funny`                                                 | `funny`                  |
+| `--max-rounds`      |       | Max agent rounds for `do` / `control` / `browse`                                   | `5`                      |
+| `--dir`             |       | Working directory for `do`                                                         | cwd                      |
+| `--code`            | `-c`  | Code input (alternative to stdin)                                                  |                          |
+| `--yes`             | `-y`  | Auto-confirm all actions                                                           |                          |
+| `--headless`        |       | Run Puppeteer headlessly for `browse`                                              | `false` (visible)        |
+| `--chrome-path`     |       | Path to Chrome/Chromium executable for `browse`                                    |                          |
+| `--wiki-path`       |       | Path to folder with `.md` docs for wiki RAG (env: `ASKII_WIKI_PATH`)               |                          |
+| `--use-wiki`        |       | Inject wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_WIKI=1`)           |                          |
+| `--code-wiki-path`  |       | Path to codebase root to index / search (env: `ASKII_CODE_WIKI_PATH`)              | cwd                      |
+| `--use-code-wiki`   |       | Inject code wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_CODE_WIKI=1`) |                          |
 
 ## Environment Variables
 
@@ -311,7 +314,7 @@ export ASKII_PLATFORM=ollama
 
 # Ollama
 export ASKII_OLLAMA_URL=http://localhost:11434
-export ASKII_OLLAMA_MODEL=gemma3:270m
+export ASKII_OLLAMA_MODEL=gemma4:e4b
 
 # LM Studio
 export ASKII_LMSTUDIO_URL=ws://localhost:1234
@@ -319,12 +322,17 @@ export ASKII_LMSTUDIO_MODEL=qwen/qwen3-coder-30b
 
 # OpenAI
 export ASKII_OPENAI_KEY=sk-...
-export ASKII_OPENAI_MODEL=gpt-4o
+export ASKII_OPENAI_MODEL=gpt-5-mini
 export ASKII_OPENAI_URL=   # leave empty for api.openai.com
 
 # Anthropic
 export ASKII_ANTHROPIC_KEY=sk-ant-...
-export ASKII_ANTHROPIC_MODEL=claude-opus-4-6
+export ASKII_ANTHROPIC_MODEL=claude-sonnet-4-6
+
+# opencode Go
+export ASKII_OPENCODEGO_KEY=...
+export ASKII_OPENCODEGO_MODEL=glm-5.2
+export ASKII_OPENCODEGO_URL=https://opencode.ai/zen/go/v1
 
 # Shared
 export ASKII_MODE=funny
@@ -347,7 +355,7 @@ $env:ASKII_PLATFORM = "ollama"
 
 # Ollama
 $env:ASKII_OLLAMA_URL = "http://localhost:11434"
-$env:ASKII_OLLAMA_MODEL = "gemma3:270m"
+$env:ASKII_OLLAMA_MODEL = "gemma4:e4b"
 
 # LM Studio
 $env:ASKII_LMSTUDIO_URL = "ws://localhost:1234"
@@ -355,12 +363,17 @@ $env:ASKII_LMSTUDIO_MODEL = "qwen/qwen3-coder-30b"
 
 # OpenAI
 $env:ASKII_OPENAI_KEY = "sk-..."
-$env:ASKII_OPENAI_MODEL = "gpt-4o"
+$env:ASKII_OPENAI_MODEL = "gpt-5-mini"
 $env:ASKII_OPENAI_URL = ""   # leave empty for api.openai.com
 
 # Anthropic
 $env:ASKII_ANTHROPIC_KEY = "sk-ant-..."
-$env:ASKII_ANTHROPIC_MODEL = "claude-opus-4-6"
+$env:ASKII_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+
+# opencode Go
+$env:ASKII_OPENCODEGO_KEY = "..."
+$env:ASKII_OPENCODEGO_MODEL = "glm-5.2"
+$env:ASKII_OPENCODEGO_URL = "https://opencode.ai/zen/go/v1"
 
 # Shared
 $env:ASKII_MODE = "funny"
@@ -383,14 +396,14 @@ $env:ASKII_USE_CODE_WIKI = "1"
 **bash**
 
 ```bash
-ollama pull gemma3:270m
+ollama pull gemma4:e4b
 askii ask "what is a closure?"
 ```
 
 **PowerShell**
 
 ```powershell
-ollama pull gemma3:270m
+ollama pull gemma4:e4b
 askii ask "what is a closure?"
 ```
 
@@ -448,4 +461,24 @@ askii -p anthropic --anthropic-key sk-ant-... --anthropic-model claude-haiku-4-5
 askii -p anthropic --anthropic-key sk-ant-... ask "what does this do?"
 askii -p anthropic --anthropic-key sk-ant-... --anthropic-model claude-sonnet-4-6 do "add error handling"
 askii -p anthropic --anthropic-key sk-ant-... --anthropic-model claude-haiku-4-5 explain "arr.reduce((a, b) => a + b, 0)"
+```
+
+### opencode Go
+
+A hosted, multi-model coding subscription ([opencode.ai/go](https://opencode.ai/go)). Most models use an OpenAI-compatible endpoint; Qwen and MiniMax models use an Anthropic-compatible one — ASKII routes automatically based on the model id. See the full model list at [opencode.ai/zen/go/v1/models](https://opencode.ai/zen/go/v1/models).
+
+**bash**
+
+```bash
+askii -p opencodego --opencodego-key ... ask "what does this do?"
+askii -p opencodego --opencodego-key ... --opencodego-model kimi-k2.7-code do "add error handling"
+askii -p opencodego --opencodego-key ... --opencodego-model qwen3.7-max explain "arr.reduce((a, b) => a + b, 0)"
+```
+
+**PowerShell**
+
+```powershell
+askii -p opencodego --opencodego-key ... ask "what does this do?"
+askii -p opencodego --opencodego-key ... --opencodego-model kimi-k2.7-code do "add error handling"
+askii -p opencodego --opencodego-key ... --opencodego-model qwen3.7-max explain "arr.reduce((a, b) => a + b, 0)"
 ```

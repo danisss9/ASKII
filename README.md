@@ -1,14 +1,14 @@
 # ASKII
 
-A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-powered explanations to your code lines. Choose between Ollama, GitHub Copilot, LM Studio, OpenAI, or Anthropic as your AI provider, and toggle between humorous comments and helpful code advice!
+A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-powered explanations to your code lines. Choose between Ollama, GitHub Copilot, LM Studio, OpenAI, Anthropic, or opencode Go as your AI provider, and toggle between humorous comments and helpful code advice!
 
 ## Features
 
 - **Random Kaomoji**: Adds a random kaomoji emoticon after the current line
-- **AI Explanations**: Uses Ollama, GitHub Copilot, LM Studio, OpenAI, or Anthropic to generate concise explanations of your code
+- **AI Explanations**: Uses Ollama, GitHub Copilot, LM Studio, OpenAI, Anthropic, or opencode Go to generate concise explanations of your code
 - **Inline Helper Modes**: Choose between `off`, `helpful`, `funny`, or `wiki` modes
 - **Wiki RAG**: Index your own `.md` documentation files and inject relevant snippets as context into any command — or display them inline as you navigate code
-- **Multi-Platform AI**: Support for Ollama (local), GitHub Copilot (cloud), LM Studio (local with official SDK), OpenAI (cloud, or any OpenAI-compatible API), and Anthropic (cloud, via official `@anthropic-ai/sdk`)
+- **Multi-Platform AI**: Support for Ollama (local), GitHub Copilot (cloud), LM Studio (local with official SDK), OpenAI (cloud, or any OpenAI-compatible API), Anthropic (cloud, via official `@anthropic-ai/sdk`), and opencode Go (cloud, hosted multi-model coding subscription)
 - **Five Command Modes**:
   - **Ask ASKII**: Ask questions about your selected code
   - **ASKII Edit**: Have ASKII modify your selected code based on your request
@@ -23,7 +23,7 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 ### Option 1: Ollama (Default)
 
 - **Ollama**: Download and install from [https://ollama.ai](https://ollama.ai)
-- Pull a model, e.g., `ollama pull gemma3:270m`
+- Pull a model, e.g., `ollama pull gemma4:e4b`
 - Make sure Ollama is running (default: `http://localhost:11434`)
 
 ### Option 2: GitHub Copilot
@@ -45,12 +45,19 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 - Set your API key in `askii.openaiApiKey`
 - Optionally set a custom `askii.openaiUrl` for Azure OpenAI or other compatible APIs (leave empty for `api.openai.com`)
 
-### Option 5: Anthropic (New!)
+### Option 5: Anthropic
 
 - An **Anthropic API key** from [console.anthropic.com](https://console.anthropic.com)
 - Select `anthropic` in the `askii.llmPlatform` setting
 - Set your API key in `askii.anthropicApiKey`
-- Optionally set a model in `askii.anthropicModel` (default: `claude-opus-4-6`)
+- Optionally set a model in `askii.anthropicModel` (default: `claude-sonnet-4-6`)
+
+### Option 6: opencode Go (New!)
+
+- An **opencode Go API key** from [https://opencode.ai/go](https://opencode.ai/go) (a hosted, multi-model coding subscription)
+- Select `opencodego` in the `askii.llmPlatform` setting
+- Set your API key in `askii.opencodegoApiKey`
+- Optionally set a model in `askii.opencodegoModel` (default: `glm-5.2`; e.g. `kimi-k2.7-code`, `deepseek-v4-pro`, `qwen3.7-max`, `minimax-m3`). See the full list at [opencode.ai/zen/go/v1/models](https://opencode.ai/zen/go/v1/models)
 
 ## Usage
 
@@ -65,6 +72,7 @@ Open VS Code Settings (`Ctrl+,` or `Cmd+,`) and search for "ASKII LLM Platform" 
 - `lmstudio`
 - `openai`
 - `anthropic`
+- `opencodego`
 
 ### Choose Your Inline Helper Mode
 
@@ -197,25 +205,38 @@ ASKII provides Copilot-style ghost-text completions inside any code file open in
    - `high` — 200 ms with a narrower context window for speed
 4. Enable `askii.codeWikiEnabled` (after running **ASKII: Reload Code Wiki**) to include relevant chunks from your indexed codebase as additional context for each completion.
 
+### Inline Platform & Model
+
+Inline auto-complete and inline helper mode decorations can use a **different LLM platform and model** than the main Ask / Edit / Do commands. This is handy when you want a fast local model for ghost-text completions but a stronger cloud model for chat.
+
+- `askii.inlinePlatform`: Platform for inline auto-complete **and** helper mode (`default` | `ollama` | `copilot` | `lmstudio` | `openai` | `anthropic` | `opencodego`, default: `default`). When set to `default`, the value of `askii.llmPlatform` is used.
+- `askii.inlineModel`: Model id for inline auto-complete **and** helper mode (default: `default`). When set to `default`, the selected platform's default model is used (`askii.ollamaModel`, `askii.copilotModel`, `askii.openaiModel`, `askii.anthropicModel`, `askii.lmStudioModel`, or `askii.opencodegoModel`). Set it to any model id supported by the chosen platform to override.
+
 ## Configuration
 
 All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 
-- `askii.llmPlatform`: Choose LLM provider (`ollama` | `copilot` | `lmstudio` | `openai` | `anthropic`)
+- `askii.llmPlatform`: Choose LLM provider (`ollama` | `copilot` | `lmstudio` | `openai` | `anthropic` | `opencodego`)
 - `askii.ollamaUrl`: URL for Ollama API server (default: `http://localhost:11434`)
 - `askii.lmStudioUrl`: URL for LM Studio API server (default: `ws://localhost:1234`)
-- `askii.ollamaModel`: Ollama model name (default: `gemma3:270m`)
+- `askii.ollamaModel`: Ollama model name (default: `gemma4:e4b`)
+- `askii.copilotModel`: GitHub Copilot model family (default: `gpt-5-mini`)
 - `askii.lmStudioModel`: LM Studio model (default: `qwen/qwen3-coder-30b`)
 - `askii.openaiApiKey`: OpenAI API key (used when `llmPlatform` is `openai`)
-- `askii.openaiModel`: OpenAI model (default: `gpt-4o`)
+- `askii.openaiModel`: OpenAI model (default: `gpt-5-mini`)
 - `askii.openaiUrl`: OpenAI-compatible base URL — leave empty for `api.openai.com`, or use for Azure OpenAI / other compatible APIs
 - `askii.anthropicApiKey`: Anthropic API key (used when `llmPlatform` is `anthropic`)
-- `askii.anthropicModel`: Anthropic model (default: `claude-opus-4-6`; e.g. `claude-sonnet-4-6`, `claude-haiku-4-5`)
+- `askii.anthropicModel`: Anthropic model (default: `claude-sonnet-4-6`; e.g. `claude-opus-4-6`, `claude-haiku-4-5`)
+- `askii.opencodegoApiKey`: opencode Go API key (used when `llmPlatform` is `opencodego`)
+- `askii.opencodegoModel`: opencode Go model (default: `glm-5.2`; e.g. `kimi-k2.7-code`, `deepseek-v4-pro`, `qwen3.7-max`, `minimax-m3`)
+- `askii.opencodegoUrl`: opencode Go base URL (default: `https://opencode.ai/zen/go/v1`) — override only if needed
 - `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny` | `wiki`, default: `off`)
 - `askii.wikiEnabled`: Enable wiki RAG context for Ask / Edit / Do commands (default: `false`)
 - `askii.wikiPath`: Path to a folder containing `.md` documentation files to index for wiki RAG. Run **ASKII: Reload Wiki** after changing this or updating the docs
 - `askii.wikiAutoReload`: Automatically rebuild and reload the wiki index on extension startup (default: `false`). Requires `askii.wikiEnabled` and `askii.wikiPath` to be configured
 - `askii.inlineCompletionEnabled`: Enable ASKII inline code completion — ghost text in code files, Tab to accept, Esc to dismiss (default: `false`)
+- `askii.inlinePlatform`: LLM platform for inline auto-complete **and** helper mode (`default` | `ollama` | `copilot` | `lmstudio` | `openai` | `anthropic` | `opencodego`, default: `default` — follows `askii.llmPlatform`)
+- `askii.inlineModel`: Model id for inline auto-complete **and** helper mode (default: `default` — uses the selected platform's default model). Set to any model id supported by the chosen platform to override
 - `askii.inlineCompletionEagerness`: Completion trigger speed — `low` (1 200 ms), `medium` (500 ms, default), `high` (200 ms)
 - `askii.codeWikiEnabled`: Enable codebase wiki RAG context for inline completion, Ask, Edit, and Do (default: `false`). Run **ASKII: Reload Code Wiki** first
 - `askii.codeWikiAutoReload`: Automatically rebuild the codebase wiki index on extension startup (default: `false`)

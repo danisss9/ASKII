@@ -4,6 +4,32 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.3.0] - 2026-06-19
+
+### Added
+
+- **opencode Go platform support**: Added `opencodego` as a new LLM platform across the extension and CLI, powered by [opencode Go](https://opencode.ai/go) — a hosted, multi-model coding subscription (GLM, Kimi, DeepSeek, Mimo, Qwen, MiniMax, and more)
+- **`askii.opencodegoApiKey` setting**: Your opencode Go API key (used when `llmPlatform` is `opencodego`). Get it from [https://opencode.ai/go](https://opencode.ai/go)
+- **`askii.opencodegoModel` setting**: opencode Go model id (default: `glm-5.2`; e.g. `kimi-k2.7-code`, `deepseek-v4-pro`, `qwen3.7-max`, `minimax-m3`). See the full list at [https://opencode.ai/zen/go/v1/models](https://opencode.ai/zen/go/v1/models)
+- **`askii.opencodegoUrl` setting**: opencode Go base URL (default: `https://opencode.ai/zen/go/v1`); override only if needed
+- **`getOpenCodeGoResponse` / `getOpenCodeGoChat` / `getOpenCodeGoChatStreaming`** in `common/providers.ts`: Shared opencode Go provider functions that route per model — Qwen and MiniMax over opencode Go's Anthropic-compatible `/messages` endpoint, all other models over its OpenAI-compatible `/chat/completions` endpoint (`isOpenCodeGoAnthropicModel()` + `OPENCODE_GO_URL`). Reuses the existing OpenAI and Anthropic clients; vision (base64 images) and streaming are supported
+- **Optional `baseURL` on the Anthropic provider functions**: `getAnthropicResponse` / `getAnthropicChat` / `getAnthropicChatStreaming` now accept an optional `baseURL`, enabling Anthropic-compatible endpoints such as opencode Go
+- **CLI `--opencodego-key`, `--opencodego-model`, `--opencodego-url` flags**: CLI equivalents of the extension settings; also readable via `ASKII_OPENCODEGO_KEY`, `ASKII_OPENCODEGO_MODEL`, `ASKII_OPENCODEGO_URL` environment variables
+- **`askii.inlinePlatform` setting**: Choose a separate LLM platform for inline auto-complete **and** inline helper mode decorations (`default` | `ollama` | `copilot` | `lmstudio` | `openai` | `anthropic` | `opencodego`, default: `default`). When set to `default`, the value of `askii.llmPlatform` is used, so inline features can run on a different provider than the main Ask / Edit / Do commands (e.g. a fast local model for ghost text, a stronger cloud model for chat).
+- **`askii.inlineModel` setting**: Model id for inline auto-complete **and** helper mode (default: `default`). When set to `default`, the selected platform's default model is used (`askii.ollamaModel`, `askii.copilotModel`, `askii.openaiModel`, `askii.anthropicModel`, `askii.lmStudioModel`, or `askii.opencodegoModel`). Set it to any model id supported by the chosen platform to override.
+
+### Changed
+
+- **Updated default LLM models for all providers**:
+  - `askii.ollamaModel`: `gemma3:270m` → `gemma4:e4b`
+  - `askii.copilotModel`: `gpt-4o` → `gpt-5-mini`
+  - `askii.openaiModel`: `gpt-4o` → `gpt-5-mini`
+  - `askii.anthropicModel`: `claude-opus-4-6` → `claude-sonnet-4-6`
+  - `askii.lmStudioModel`: unchanged (`qwen/qwen3-coder-30b`)
+- **`getExtensionResponse` signature**: Now accepts optional `platformOverride` and `modelOverride` parameters so callers (inline completion) can target a different platform/model than the global `askii.llmPlatform`.
+- **`getLLMExplanation`**: Now resolves its platform via `askii.inlinePlatform` and its model via `askii.inlineModel` instead of always using `askii.llmPlatform` and the platform's default model.
+- **README**: Refreshed the Configuration and Requirements sections to reflect the new default models, documented the `askii.copilotModel` setting, and added a new "Inline Platform & Model" section explaining how to run inline features on a different provider than the main commands.
+
 ## [0.2.12] - 2026-06-11
 
 ### Added

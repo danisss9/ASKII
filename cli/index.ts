@@ -15,7 +15,12 @@ import {
 } from '@common/workspace';
 import { unescapeJsonString, extractCode } from '@common/utils';
 import { buildWikiIndex, saveWikiIndex, loadWikiIndex, searchWiki } from '@common/wiki';
-import { buildCodeWikiIndex, saveCodeWikiIndex, loadCodeWikiIndex, searchCodeWiki } from '@common/codewiki';
+import {
+  buildCodeWikiIndex,
+  saveCodeWikiIndex,
+  loadCodeWikiIndex,
+  searchCodeWiki,
+} from '@common/codewiki';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import {
   getOllamaResponse,
@@ -26,6 +31,9 @@ import {
   getOpenAIChatStreaming,
   getAnthropicResponse,
   getAnthropicChatStreaming,
+  getOpenCodeGoResponse,
+  getOpenCodeGoChatStreaming,
+  OPENCODE_GO_URL,
   retryLLMCall,
   type ChatMessage,
 } from '@common/providers';
@@ -55,12 +63,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 interface Config {
-  platform: 'ollama' | 'lmstudio' | 'openai' | 'anthropic';
+  platform: 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego';
   url: string;
   model: string;
   openaiApiKey: string;
   openaiBaseURL: string | undefined;
   anthropicApiKey: string;
+  opencodegoApiKey: string;
+  opencodegoBaseURL: string;
   mode: 'helpful' | 'funny';
   maxRounds: number;
   yes: boolean;
@@ -89,7 +99,7 @@ function hasFlag(flags: string[], ...names: string[]): boolean {
 function getConfig(flags: string[]): Config {
   const platform = (getFlagValue(flags, '-p', '--platform') ||
     process.env.ASKII_PLATFORM ||
-    'ollama') as 'ollama' | 'lmstudio' | 'openai' | 'anthropic';
+    'ollama') as 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego';
 
   const ollamaUrl =
     getFlagValue(flags, '--ollama-url') || process.env.ASKII_OLLAMA_URL || 'http://localhost:11434';
@@ -100,7 +110,7 @@ function getConfig(flags: string[]): Config {
     'ws://localhost:1234';
 
   const ollamaModel =
-    getFlagValue(flags, '--ollama-model') || process.env.ASKII_OLLAMA_MODEL || 'gemma3:270m';
+    getFlagValue(flags, '--ollama-model') || process.env.ASKII_OLLAMA_MODEL || 'gemma4:e4b';
 
   const lmStudioModel =
     getFlagValue(flags, '--lmstudio-model') ||
@@ -108,7 +118,7 @@ function getConfig(flags: string[]): Config {
     'qwen/qwen3-coder-30b';
 
   const openaiModel =
-    getFlagValue(flags, '--openai-model') || process.env.ASKII_OPENAI_MODEL || 'gpt-4o';
+    getFlagValue(flags, '--openai-model') || process.env.ASKII_OPENAI_MODEL || 'gpt-5-mini';
 
   const openaiApiKey = getFlagValue(flags, '--openai-key') || process.env.ASKII_OPENAI_KEY || '';
 
@@ -121,12 +131,22 @@ function getConfig(flags: string[]): Config {
   const anthropicModel =
     getFlagValue(flags, '--anthropic-model') ||
     process.env.ASKII_ANTHROPIC_MODEL ||
-    'claude-opus-4-6';
+    'claude-sonnet-4-6';
+
+  const opencodegoApiKey =
+    getFlagValue(flags, '--opencodego-key') || process.env.ASKII_OPENCODEGO_KEY || '';
+
+  const opencodegoModel =
+    getFlagValue(flags, '--opencodego-model') || process.env.ASKII_OPENCODEGO_MODEL || 'glm-5.2';
+
+  const opencodegoBaseURL =
+    getFlagValue(flags, '--opencodego-url') || process.env.ASKII_OPENCODEGO_URL || OPENCODE_GO_URL;
 
   const modelMap: Record<string, string> = {
     lmstudio: lmStudioModel,
     openai: openaiModel,
     anthropic: anthropicModel,
+    opencodego: opencodegoModel,
   };
 
   return {
@@ -136,6 +156,8 @@ function getConfig(flags: string[]): Config {
     openaiApiKey,
     openaiBaseURL,
     anthropicApiKey,
+    opencodegoApiKey,
+    opencodegoBaseURL,
     mode: (getFlagValue(flags, '--mode') || process.env.ASKII_MODE || 'funny') as
       | 'helpful'
       | 'funny',
@@ -184,6 +206,15 @@ async function getResponse(
 ): Promise<string> {
   if (config.platform === 'anthropic') {
     return getAnthropicResponse(prompt, config.anthropicApiKey, config.model, system, imageBase64);
+  } else if (config.platform === 'opencodego') {
+    return getOpenCodeGoResponse(
+      prompt,
+      config.opencodegoApiKey,
+      config.model,
+      config.opencodegoBaseURL,
+      system,
+      imageBase64,
+    );
   } else if (config.platform === 'lmstudio') {
     return getLMStudioResponse(prompt, config.url, config.model, system, imageBase64);
   } else if (config.platform === 'openai') {
@@ -213,6 +244,14 @@ async function getChatResponseStreaming(
 ): Promise<string> {
   if (config.platform === 'anthropic') {
     return getAnthropicChatStreaming(messages, config.anthropicApiKey, config.model, onChunk);
+  } else if (config.platform === 'opencodego') {
+    return getOpenCodeGoChatStreaming(
+      messages,
+      config.opencodegoApiKey,
+      config.model,
+      onChunk,
+      config.opencodegoBaseURL,
+    );
   } else if (config.platform === 'lmstudio') {
     return getLMStudioChatStreaming(messages, config.url, config.model, onChunk);
   } else if (config.platform === 'openai') {
@@ -365,14 +404,19 @@ Commands:
   code-wiki-reload      Index code files in --code-wiki-path (default: cwd)
 
 Options:
-  -p, --platform <p>         LLM platform: ollama, lmstudio, openai (default: ollama)
+  -p, --platform <p>         LLM platform: ollama, lmstudio, openai, anthropic, opencodego (default: ollama)
       --ollama-url <url>     Ollama server URL (default: http://localhost:11434)
       --lmstudio-url <url>   LM Studio server URL (default: ws://localhost:1234)
-      --ollama-model <m>     Ollama model (default: gemma3:270m)
+      --ollama-model <m>     Ollama model (default: gemma4:e4b)
       --lmstudio-model <m>   LM Studio model (default: qwen/qwen3-coder-30b)
       --openai-key <key>     OpenAI API key (env: ASKII_OPENAI_KEY)
-      --openai-model <m>     OpenAI model (default: gpt-4o)
+      --openai-model <m>     OpenAI model (default: gpt-5-mini)
       --openai-url <url>     OpenAI-compatible base URL (env: ASKII_OPENAI_URL)
+      --anthropic-key <key>  Anthropic API key (env: ASKII_ANTHROPIC_KEY)
+      --anthropic-model <m>  Anthropic model (default: claude-sonnet-4-6)
+      --opencodego-key <key> opencode Go API key (env: ASKII_OPENCODEGO_KEY)
+      --opencodego-model <m> opencode Go model (default: glm-5.2)
+      --opencodego-url <url> opencode Go base URL (env: ASKII_OPENCODEGO_URL)
       --mode <mode>          Response mode: helpful, funny (default: funny)
       --max-rounds <n>       Max agent rounds for "do" / "control" / "browse" (default: 5)
       --dir <path>           Working directory for "do" (default: cwd)
@@ -393,6 +437,8 @@ Environment variables:
   ASKII_OLLAMA_URL      ASKII_LMSTUDIO_URL
   ASKII_OLLAMA_MODEL    ASKII_LMSTUDIO_MODEL
   ASKII_OPENAI_KEY      ASKII_OPENAI_MODEL    ASKII_OPENAI_URL
+  ASKII_ANTHROPIC_KEY   ASKII_ANTHROPIC_MODEL
+  ASKII_OPENCODEGO_KEY  ASKII_OPENCODEGO_MODEL  ASKII_OPENCODEGO_URL
   ASKII_MODE            ASKII_MAX_ROUNDS
   ASKII_WIKI_PATH       ASKII_USE_WIKI
   ASKII_CODE_WIKI_PATH  ASKII_USE_CODE_WIKI
@@ -481,7 +527,9 @@ async function main() {
     const wikiCtxAsk = getCliWikiContext(config, question);
     const wikiSectionAsk = wikiCtxAsk ? `Relevant documentation:\n${wikiCtxAsk}\n\n` : '';
     const codeWikiCtxAsk = getCliCodeWikiContext(config, question);
-    const codeWikiSectionAsk = codeWikiCtxAsk ? `Relevant code from the codebase:\n${codeWikiCtxAsk}\n\n` : '';
+    const codeWikiSectionAsk = codeWikiCtxAsk
+      ? `Relevant code from the codebase:\n${codeWikiCtxAsk}\n\n`
+      : '';
 
     let prompt: string;
     if (code) {
@@ -526,7 +574,9 @@ async function main() {
     const wikiCtxEdit = getCliWikiContext(config, instruction);
     const wikiSectionEdit = wikiCtxEdit ? `Relevant documentation:\n${wikiCtxEdit}\n\n` : '';
     const codeWikiCtxEdit = getCliCodeWikiContext(config, instruction);
-    const codeWikiSectionEdit = codeWikiCtxEdit ? `Relevant code from the codebase:\n${codeWikiCtxEdit}\n\n` : '';
+    const codeWikiSectionEdit = codeWikiCtxEdit
+      ? `Relevant code from the codebase:\n${codeWikiCtxEdit}\n\n`
+      : '';
     const prompt = `${wikiSectionEdit}${codeWikiSectionEdit}${metaLines ? metaLines + '\n' : ''}Update this code:\n\`\`\`${lang ?? ''}\n${code}\n\`\`\`\n\nRequest: ${instruction}\n\nReturn only the updated code without explanation.`;
 
     console.error(`ASKII is editing... (•_•)>⌐■-■`);
@@ -596,7 +646,11 @@ async function main() {
       const wikiAvailableDo = !!(config.wikiPath && loadWikiIndex(config.wikiPath));
       const codeWikiRootDo = config.codeWikiPath || workDir;
       const codeWikiAvailableDo = !!(config.useCodeWiki && loadCodeWikiIndex(codeWikiRootDo));
-      const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailableDo, codeWikiAvailableDo);
+      const systemPrompt = buildDoSystemPrompt(
+        workspaceStructure,
+        wikiAvailableDo,
+        codeWikiAvailableDo,
+      );
       const messages: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: task },

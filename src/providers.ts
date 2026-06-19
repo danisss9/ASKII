@@ -13,9 +13,71 @@ import {
   getAnthropicResponse,
   getAnthropicChat,
   getAnthropicChatStreaming,
+  getOpenCodeGoResponse,
+  getOpenCodeGoChat,
+  getOpenCodeGoChatStreaming,
+  OPENCODE_GO_URL,
   type ChatMessage,
 } from '@common/providers';
 import { loadWikiIndex, searchWikiRaw } from '@common/wiki';
+
+/**
+ * Resolves the effective LLM platform for a feature.
+ *
+ * Each feature (inline completion, helper mode, etc.) can override the global
+ * `askii.llmPlatform` via its own `askii.<feature>Platform` setting. When the
+ * override is unset or set to "default", the global `askii.llmPlatform` is used.
+ *
+ * @param config     The workspace configuration for "askii".
+ * @param overrideKey  The setting key that holds the per-feature override
+ *                     (e.g. "inlinePlatform").
+ * @returns The resolved platform id (ollama, copilot, lmstudio, openai,
+ *          anthropic, or opencodego).
+ */
+export function resolvePlatform(
+  config: vscode.WorkspaceConfiguration,
+  overrideKey?: string,
+): string {
+  const globalPlatform = config.get<string>('llmPlatform') || 'ollama';
+  if (!overrideKey) return globalPlatform;
+  const override = config.get<string>(overrideKey);
+  if (override && override !== 'default') return override;
+  return globalPlatform;
+}
+
+/**
+ * Resolves the model id to use for a given platform, honouring an optional
+ * per-feature model override.
+ *
+ * When `modelOverride` is unset, empty, or "default", the platform's default
+ * model setting (askii.ollamaModel, askii.copilotModel, askii.openaiModel,
+ * askii.anthropicModel, askii.lmStudioModel, askii.opencodegoModel) is used.
+ *
+ * @returns The resolved model id (never "default").
+ */
+export function resolveModel(
+  config: vscode.WorkspaceConfiguration,
+  platform: string,
+  modelOverride?: string,
+): string {
+  if (modelOverride && modelOverride.trim() !== '' && modelOverride !== 'default') {
+    return modelOverride;
+  }
+  switch (platform) {
+    case 'copilot':
+      return config.get<string>('copilotModel') || 'gpt-4o';
+    case 'lmstudio':
+      return config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
+    case 'openai':
+      return config.get<string>('openaiModel') || 'gpt-4o';
+    case 'anthropic':
+      return config.get<string>('anthropicModel') || 'claude-opus-4-6';
+    case 'opencodego':
+      return config.get<string>('opencodegoModel') || 'glm-5.2';
+    default:
+      return config.get<string>('ollamaModel') || 'gemma3:270m';
+  }
+}
 
 export async function getExtensionResponseWithImage(
   prompt: string,
@@ -39,6 +101,11 @@ export async function getExtensionResponseWithImage(
     const apiKey = config.get<string>('anthropicApiKey') || '';
     const model = config.get<string>('anthropicModel') || 'claude-opus-4-6';
     return getAnthropicResponse(prompt, apiKey, model, undefined, imageBase64);
+  } else if (platform === 'opencodego') {
+    const apiKey = config.get<string>('opencodegoApiKey') || '';
+    const model = config.get<string>('opencodegoModel') || 'glm-5.2';
+    const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
+    return getOpenCodeGoResponse(prompt, apiKey, model, baseURL, undefined, imageBase64);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -120,6 +187,12 @@ export async function getExtensionResponseStreaming(
     const model = config.get<string>('anthropicModel') || 'claude-opus-4-6';
     const result = await getAnthropicResponse(prompt, apiKey, model, system);
     onChunk(result);
+  } else if (platform === 'opencodego') {
+    const apiKey = config.get<string>('opencodegoApiKey') || '';
+    const model = config.get<string>('opencodegoModel') || 'glm-5.2';
+    const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
+    const result = await getOpenCodeGoResponse(prompt, apiKey, model, baseURL, system);
+    onChunk(result);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -127,47 +200,52 @@ export async function getExtensionResponseStreaming(
   }
 }
 
-export async function getExtensionResponse(prompt: string, system?: string): Promise<string> {
+export async function getExtensionResponse(
+  prompt: string,
+  system?: string,
+  platformOverride?: string,
+  modelOverride?: string,
+): Promise<string> {
   const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('llmPlatform') || 'ollama';
+  const platform =
+    platformOverride && platformOverride !== 'default'
+      ? platformOverride
+      : config.get<string>('llmPlatform') || 'ollama';
+  const model = resolveModel(config, platform, modelOverride);
 
   if (platform === 'copilot') {
-    if (system) {
-      const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
-      const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
-      if (models.length === 0) throw new Error('GitHub Copilot not available');
-      const model = models[0];
-      const chatResponse = await model.sendRequest(
-        [
-          vscode.LanguageModelChatMessage.User(system),
-          vscode.LanguageModelChatMessage.User(prompt),
-        ],
-        {},
-        new vscode.CancellationTokenSource().token,
-      );
-      let responseText = '';
-      for await (const fragment of chatResponse.text) {
-        responseText += fragment;
-      }
-      return responseText;
+    const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: model });
+    if (models.length === 0) throw new Error('GitHub Copilot not available');
+    const copilotModel = models[0];
+    const messages: vscode.LanguageModelChatMessage[] = [];
+    if (system) messages.push(vscode.LanguageModelChatMessage.User(system));
+    messages.push(vscode.LanguageModelChatMessage.User(prompt));
+    const chatResponse = await copilotModel.sendRequest(
+      messages,
+      {},
+      new vscode.CancellationTokenSource().token,
+    );
+    let responseText = '';
+    for await (const fragment of chatResponse.text) {
+      responseText += fragment;
     }
-    return getCopilotResponse(prompt);
+    return responseText;
   } else if (platform === 'lmstudio') {
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
-    const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
     return getLMStudioResponse(prompt, url, model, system);
   } else if (platform === 'openai') {
     const apiKey = config.get<string>('openaiApiKey') || '';
-    const model = config.get<string>('openaiModel') || 'gpt-4o';
     const baseURL = config.get<string>('openaiUrl') || undefined;
     return getOpenAIResponse(prompt, apiKey, model, baseURL, system);
   } else if (platform === 'anthropic') {
     const apiKey = config.get<string>('anthropicApiKey') || '';
-    const model = config.get<string>('anthropicModel') || 'claude-opus-4-6';
     return getAnthropicResponse(prompt, apiKey, model, system);
+  } else if (platform === 'opencodego') {
+    const apiKey = config.get<string>('opencodegoApiKey') || '';
+    const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
+    return getOpenCodeGoResponse(prompt, apiKey, model, baseURL, system);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
-    const model = config.get<string>('ollamaModel') || 'gemma3:270m';
     return getOllamaResponse(prompt, url, model, system);
   }
 }
@@ -210,6 +288,11 @@ export async function getExtensionChat(messages: ChatMessage[]): Promise<string>
     const apiKey = config.get<string>('anthropicApiKey') || '';
     const mdl = config.get<string>('anthropicModel') || 'claude-opus-4-6';
     return getAnthropicChat(messages, apiKey, mdl);
+  } else if (platform === 'opencodego') {
+    const apiKey = config.get<string>('opencodegoApiKey') || '';
+    const mdl = config.get<string>('opencodegoModel') || 'glm-5.2';
+    const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
+    return getOpenCodeGoChat(messages, apiKey, mdl, baseURL);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const mdl = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -259,6 +342,11 @@ export async function getExtensionChatStreaming(
     const apiKey = config.get<string>('anthropicApiKey') || '';
     const mdl = config.get<string>('anthropicModel') || 'claude-opus-4-6';
     return getAnthropicChatStreaming(messages, apiKey, mdl, onChunk);
+  } else if (platform === 'opencodego') {
+    const apiKey = config.get<string>('opencodegoApiKey') || '';
+    const mdl = config.get<string>('opencodegoModel') || 'glm-5.2';
+    const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
+    return getOpenCodeGoChatStreaming(messages, apiKey, mdl, onChunk, baseURL);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const mdl = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -290,6 +378,11 @@ export async function validateProviderConfig(): Promise<string | null> {
     if (!apiKey) {
       return 'ASKII (anthropic): No API key configured. Set askii.anthropicApiKey in Settings.';
     }
+  } else if (platform === 'opencodego') {
+    const apiKey = (config.get<string>('opencodegoApiKey') || '').trim();
+    if (!apiKey) {
+      return 'ASKII (opencodego): No API key configured. Set askii.opencodegoApiKey in Settings.';
+    }
   } else if (platform === 'copilot') {
     const family = config.get<string>('copilotModel') || 'gpt-4o';
     const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family });
@@ -316,7 +409,8 @@ export async function getLLMExplanation(
   abortSignal?: AbortSignal,
 ): Promise<string> {
   const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('llmPlatform') || 'ollama';
+  const platform = resolvePlatform(config, 'inlinePlatform');
+  const model = resolveModel(config, platform, config.get<string>('inlineModel'));
   const mode = config.get<string>('inlineHelperMode') || 'funny';
 
   if (mode === 'off') return '';
@@ -349,16 +443,15 @@ export async function getLLMExplanation(
     if (abortSignal?.aborted) throw new Error('Request cancelled');
 
     if (platform === 'copilot') {
-      const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
-      const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
+      const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: model });
       if (models.length === 0) return 'Error: GitHub Copilot not available';
 
-      const model = models[0];
+      const copilotModel = models[0];
       const messages = [
         vscode.LanguageModelChatMessage.User(systemPrompt),
         vscode.LanguageModelChatMessage.User(userPrompt),
       ];
-      const chatResponse = await model.sendRequest(
+      const chatResponse = await copilotModel.sendRequest(
         messages,
         {},
         new vscode.CancellationTokenSource().token,
@@ -373,14 +466,12 @@ export async function getLLMExplanation(
       return responseText || 'No explanation available.';
     } else if (platform === 'lmstudio') {
       const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
-      const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getLMStudioResponse(userPrompt, url, model, systemPrompt);
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       return result || 'No explanation available.';
     } else if (platform === 'openai') {
       const apiKey = config.get<string>('openaiApiKey') || '';
-      const model = config.get<string>('openaiModel') || 'gpt-4o';
       const baseURL = config.get<string>('openaiUrl') || undefined;
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getOpenAIResponse(userPrompt, apiKey, model, baseURL, systemPrompt);
@@ -388,14 +479,19 @@ export async function getLLMExplanation(
       return result || 'No explanation available.';
     } else if (platform === 'anthropic') {
       const apiKey = config.get<string>('anthropicApiKey') || '';
-      const model = config.get<string>('anthropicModel') || 'claude-opus-4-6';
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getAnthropicResponse(userPrompt, apiKey, model, systemPrompt);
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       return result || 'No explanation available.';
+    } else if (platform === 'opencodego') {
+      const apiKey = config.get<string>('opencodegoApiKey') || '';
+      const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      const result = await getOpenCodeGoResponse(userPrompt, apiKey, model, baseURL, systemPrompt);
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      return result || 'No explanation available.';
     } else {
       const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
-      const model = config.get<string>('ollamaModel') || 'gemma3:270m';
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getOllamaResponse(userPrompt, url, model, systemPrompt);
       if (abortSignal?.aborted) throw new Error('Request cancelled');

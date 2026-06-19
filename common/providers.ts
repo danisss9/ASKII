@@ -8,6 +8,15 @@ export interface ChatMessage {
   content: string;
 }
 
+// opencode Go (https://opencode.ai/go) — hosted, OpenAI-compatible inference service.
+export const OPENCODE_GO_URL = 'https://opencode.ai/zen/go/v1';
+
+// Qwen + MiniMax are served over opencode Go's Anthropic-compatible /messages endpoint;
+// every other model uses the OpenAI-compatible /chat/completions endpoint.
+export function isOpenCodeGoAnthropicModel(model: string): boolean {
+  return /^(qwen|minimax)/i.test((model || '').trim());
+}
+
 export async function getOllamaResponse(
   prompt: string,
   url: string,
@@ -195,8 +204,9 @@ export async function getAnthropicResponse(
   model: string,
   system?: string,
   imageBase64?: string,
+  baseURL?: string,
 ): Promise<string> {
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) });
   const userContent: Anthropic.MessageParam['content'] = imageBase64
     ? [
         { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imageBase64 } },
@@ -217,8 +227,9 @@ export async function getAnthropicChat(
   messages: ChatMessage[],
   apiKey: string,
   model: string,
+  baseURL?: string,
 ): Promise<string> {
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) });
   const systemMsg = messages.find((m) => m.role === 'system');
   const filtered = messages.filter((m) => m.role !== 'system');
   const response = await client.messages.create({
@@ -236,8 +247,9 @@ export async function getAnthropicChatStreaming(
   apiKey: string,
   model: string,
   onChunk: (chunk: string) => void,
+  baseURL?: string,
 ): Promise<string> {
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) });
   const systemMsg = messages.find((m) => m.role === 'system');
   const filtered = messages.filter((m) => m.role !== 'system');
   const stream = client.messages.stream({
@@ -254,6 +266,48 @@ export async function getAnthropicChatStreaming(
     }
   }
   return full;
+}
+
+// The Anthropic SDK appends `/v1/messages`, so its base must be the opencode Go URL with the
+// trailing `/v1` removed (e.g. https://opencode.ai/zen/go). The OpenAI SDK keeps the `/v1` base.
+function opencodeGoAnthropicBase(baseURL: string): string {
+  return baseURL.replace(/\/v1\/?$/, '');
+}
+
+export async function getOpenCodeGoResponse(
+  prompt: string,
+  apiKey: string,
+  model: string,
+  baseURL: string = OPENCODE_GO_URL,
+  system?: string,
+  imageBase64?: string,
+): Promise<string> {
+  return isOpenCodeGoAnthropicModel(model)
+    ? getAnthropicResponse(prompt, apiKey, model, system, imageBase64, opencodeGoAnthropicBase(baseURL))
+    : getOpenAIResponse(prompt, apiKey, model, baseURL, system, imageBase64);
+}
+
+export async function getOpenCodeGoChat(
+  messages: ChatMessage[],
+  apiKey: string,
+  model: string,
+  baseURL: string = OPENCODE_GO_URL,
+): Promise<string> {
+  return isOpenCodeGoAnthropicModel(model)
+    ? getAnthropicChat(messages, apiKey, model, opencodeGoAnthropicBase(baseURL))
+    : getOpenAIChat(messages, apiKey, model, baseURL);
+}
+
+export async function getOpenCodeGoChatStreaming(
+  messages: ChatMessage[],
+  apiKey: string,
+  model: string,
+  onChunk: (chunk: string) => void,
+  baseURL: string = OPENCODE_GO_URL,
+): Promise<string> {
+  return isOpenCodeGoAnthropicModel(model)
+    ? getAnthropicChatStreaming(messages, apiKey, model, onChunk, opencodeGoAnthropicBase(baseURL))
+    : getOpenAIChatStreaming(messages, apiKey, model, onChunk, baseURL);
 }
 
 export async function retryLLMCall<T>(
