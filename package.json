@@ -128,12 +128,12 @@
         },
         "askii.ollamaModel": {
           "type": "string",
-          "default": "gemma3:270m",
+          "default": "gemma4:e4b",
           "description": "Ollama model to use for explanations"
         },
         "askii.copilotModel": {
           "type": "string",
-          "default": "gpt-4o",
+          "default": "gpt-5-mini",
           "description": "GitHub Copilot model family to use for explanations"
         },
         "askii.lmStudioModel": {
@@ -148,8 +148,8 @@
         },
         "askii.openaiModel": {
           "type": "string",
-          "default": "gpt-4o",
-          "description": "OpenAI model to use (e.g. gpt-4o, gpt-4-turbo)"
+          "default": "gpt-5-mini",
+          "description": "OpenAI model to use (e.g. gpt-5-mini, gpt-4o, gpt-4-turbo)"
         },
         "askii.openaiUrl": {
           "type": "string",
@@ -163,7 +163,7 @@
         },
         "askii.anthropicModel": {
           "type": "string",
-          "default": "claude-opus-4-6",
+          "default": "claude-sonnet-4-6",
           "description": "Anthropic model to use (e.g. claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5)"
         },
         "askii.inlineHelperMode": {
