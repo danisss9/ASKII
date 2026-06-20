@@ -18,6 +18,7 @@ import {
 } from './commands';
 import { validateProviderConfig } from './providers';
 import { AskiiInlineCompletionProvider, INLINE_ACCEPT_COMMAND } from './inlineCompletion';
+import { generateCommitMessageCommand } from './commitMessage';
 
 export function activate(context: vscode.ExtensionContext) {
   // Register the in-memory content provider for diff previews
@@ -79,6 +80,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.reloadCodeWiki', askiiReloadCodeWikiCommand),
   );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('askii.generateCommitMessage', generateCommitMessageCommand),
+  );
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.text = '(⌐■_■)';
@@ -97,6 +101,7 @@ export function activate(context: vscode.ExtensionContext) {
         { label: '$(browser) ASKII Browse', command: 'askii.browseTask' },
         { label: '$(book) Reload Wiki', command: 'askii.reloadWiki' },
         { label: '$(code) Reload Code Wiki', command: 'askii.reloadCodeWiki' },
+        { label: '$(sparkle) Generate Commit Message', command: 'askii.generateCommitMessage' },
         { label: '$(refresh) Clear Cache', command: 'askii.clearCache' },
       ]);
 

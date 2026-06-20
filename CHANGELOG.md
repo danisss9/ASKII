@@ -4,7 +4,7 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
-## [0.3.0] - 2026-06-19
+## [0.3.0] - 2026-06-20
 
 ### Added
 
@@ -17,6 +17,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - **CLI `--opencodego-key`, `--opencodego-model`, `--opencodego-url` flags**: CLI equivalents of the extension settings; also readable via `ASKII_OPENCODEGO_KEY`, `ASKII_OPENCODEGO_MODEL`, `ASKII_OPENCODEGO_URL` environment variables
 - **`askii.inlinePlatform` setting**: Choose a separate LLM platform for inline auto-complete **and** inline helper mode decorations (`default` | `ollama` | `copilot` | `lmstudio` | `openai` | `anthropic` | `opencodego`, default: `default`). When set to `default`, the value of `askii.llmPlatform` is used, so inline features can run on a different provider than the main Ask / Edit / Do commands (e.g. a fast local model for ghost text, a stronger cloud model for chat).
 - **`askii.inlineModel` setting**: Model id for inline auto-complete **and** helper mode (default: `default`). When set to `default`, the selected platform's default model is used (`askii.ollamaModel`, `askii.copilotModel`, `askii.openaiModel`, `askii.anthropicModel`, `askii.lmStudioModel`, or `askii.opencodegoModel`). Set it to any model id supported by the chosen platform to override.
+- **Commit Message Generator** (`askii.generateCommitMessage` command): A new command that reads the staged diff (falling back to the working-tree diff when nothing is staged) from the built-in `vscode.git` extension and writes an AI-generated commit message straight into the Source Control commit-message input box. Uses the same LLM platform/model as inline completion (`askii.inlinePlatform` / `askii.inlineModel`), so it can run on a different provider than the main Ask / Edit / Do commands. A **sparkle (✦)** button is added to the Source Control view title toolbar via the `scm/title` menu (visible when a Git repository is open); also available from the command palette, the status-bar quick-pick menu, and the `Ctrl+Shift+K G` / `Cmd+Shift+K G` keybinding (active when a Git repository is open). The diff is capped at ~12 000 characters to keep latency and token usage reasonable.
+- **`askii.commitMessageInstructions` setting**: Path to a `.md` file with custom instructions for the commit message generator (e.g. "always use Conventional Commits and reference the Jira ticket in the body"). Its contents are appended to the built-in system prompt. May be absolute or relative to the workspace root; leave empty to use the built-in prompt (default: `""`).
 
 ### Changed
 

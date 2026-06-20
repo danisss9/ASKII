@@ -57,6 +57,12 @@
         "command": "askii.clearCache",
         "key": "ctrl+shift+k x",
         "mac": "cmd+shift+k x"
+      },
+      {
+        "command": "askii.generateCommitMessage",
+        "key": "ctrl+shift+k g",
+        "mac": "cmd+shift+k g",
+        "when": "scmRepository && scmProvider == git"
       }
     ],
     "commands": [
@@ -99,8 +105,23 @@
         "command": "askii.reloadCodeWiki",
         "title": "ASKII: Reload Code Wiki",
         "category": "ASKII"
+      },
+      {
+        "command": "askii.generateCommitMessage",
+        "title": "ASKII: Generate Commit Message",
+        "category": "ASKII",
+        "icon": "$(sparkle)"
       }
     ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "askii.generateCommitMessage",
+          "group": "navigation",
+          "when": "scmProvider == git"
+        }
+      ]
+    },
     "configuration": {
       "title": "ASKII",
       "properties": {
@@ -297,6 +318,11 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically rebuild and reload the code wiki index when the extension starts. Requires askii.codeWikiEnabled to be true."
+        },
+        "askii.commitMessageInstructions": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a .md file with custom instructions for the commit message generator (injected as the system prompt, appended to the built-in rules). May be absolute or relative to the workspace root. Leave empty to use the built-in prompt."
         }
       }
     }

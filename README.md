@@ -17,6 +17,7 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
   - **ASKII Browse**: Give ASKII a browser task — it launches a Puppeteer browser, takes page screenshots, and navigates the web until the task is done
 - **Code Auto-completion**: Copilot-style ghost-text code suggestions inside any open code file — Tab to accept, Esc to dismiss.
 - **Codebase Wiki RAG**: Index your own workspace code files and inject relevant chunks as context into inline completion, Ask, Edit, and Do commands.
+- **Commit Message Generator**: A one-click button in the Source Control view toolbar that reads your staged (or working-tree) diff and writes a generated commit message straight into the commit-message input box — powered by the same LLM platform/model used for inline completion.
 
 ## Requirements
 
@@ -205,6 +206,17 @@ ASKII provides Copilot-style ghost-text completions inside any code file open in
    - `high` — 200 ms with a narrower context window for speed
 4. Enable `askii.codeWikiEnabled` (after running **ASKII: Reload Code Wiki**) to include relevant chunks from your indexed codebase as additional context for each completion.
 
+### Commit Message Generator
+
+ASKII can write your Git commit messages for you. A **sparkle (✦)** button is added to the Source Control view title toolbar (the toolbar at the top of the Source Control view, visible when a Git repository is open).
+
+1. Make some changes in a Git repository (staged or unstaged).
+2. Open the **Source Control** view (`Ctrl+Shift+G` / `Cmd+Shift+G`).
+3. Click the **✦** button in the Source Control view toolbar (or run **ASKII: Generate Commit Message** from the command palette, or press `Ctrl+Shift+K G` / `Cmd+Shift+K G`).
+4. ASKII reads the staged diff (falling back to the working-tree diff when nothing is staged), sends it to the LLM, and writes the generated commit message straight into the input box — ready for you to review and commit.
+
+The generator uses the **inline** LLM platform and model (`askii.inlinePlatform` / `askii.inlineModel`), so it can run on a different provider than your main Ask / Edit / Do commands. Set `askii.commitMessageInstructions` to a `.md` file with your own style rules (e.g. "always use Conventional Commits with a `feat`/`fix`/`chore` prefix and reference the Jira ticket in the body") and its contents are appended to the built-in system prompt. The path may be absolute or relative to the workspace root.
+
 ### Inline Platform & Model
 
 Inline auto-complete and inline helper mode decorations can use a **different LLM platform and model** than the main Ask / Edit / Do commands. This is handy when you want a fast local model for ghost-text completions but a stronger cloud model for chat.
@@ -240,6 +252,7 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.inlineCompletionEagerness`: Completion trigger speed — `low` (1 200 ms), `medium` (500 ms, default), `high` (200 ms)
 - `askii.codeWikiEnabled`: Enable codebase wiki RAG context for inline completion, Ask, Edit, and Do (default: `false`). Run **ASKII: Reload Code Wiki** first
 - `askii.codeWikiAutoReload`: Automatically rebuild the codebase wiki index on extension startup (default: `false`)
+- `askii.commitMessageInstructions`: Path to a `.md` file with custom instructions for the commit message generator (appended to the built-in system prompt). Absolute or relative to the workspace root. Leave empty to use the built-in prompt (default: `""`)
 - `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control / Browse commands (default: 5)
 - `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control / Browse (default: `false`)
 - `askii.formatAfterEdit`: Auto-format files after ASKII Edit or Do (default: `false`)
@@ -257,6 +270,7 @@ You can invoke ASKII commands using the following default keybindings:
 - **ASKII Browse**: `Ctrl+Shift+K B` (Mac: `Cmd+Shift+K B`)
 - **ASKII: Reload Wiki**: `Ctrl+Shift+K R` (Mac: `Cmd+Shift+K R`)
 - **ASKII: Clear Cache**: `Ctrl+Shift+K X` (Mac: `Cmd+Shift+K X`)
+- **ASKII: Generate Commit Message**: `Ctrl+Shift+K G` (Mac: `Cmd+Shift+K G`) — available when a Git repository is open in the Source Control view
 
 ## Default Mode Examples
 
