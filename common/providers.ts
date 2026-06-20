@@ -23,8 +23,13 @@ export async function getOllamaResponse(
   model: string,
   system?: string,
   images?: string[],
+  signal?: AbortSignal,
 ): Promise<string> {
-  const ollama = new Ollama({ host: url });
+  // The ollama client's abort() only cancels *streamed* requests, so for this non-streaming call we
+  // inject a custom fetch that carries the AbortSignal — that actually tears down the in-flight request.
+  const fetchWithSignal: typeof fetch = (input, init) =>
+    fetch(input, { ...init, signal: init?.signal ?? signal });
+  const ollama = new Ollama({ host: url, ...(signal ? { fetch: fetchWithSignal } : {}) });
   const response = await ollama.generate({ model, system, prompt, stream: false, images });
   return response.response || 'No response';
 }
@@ -84,6 +89,9 @@ export async function getLMStudioResponse(
   model: string,
   system?: string,
   imageBase64?: string,
+  // Accepted for signature symmetry with the other providers. The LM Studio SDK has no clean
+  // per-request abort, so cancellation here is best-effort — callers still discard stale results.
+  _signal?: AbortSignal,
 ): Promise<string> {
   try {
     const client = new LMStudioClient({ baseUrl: url });
@@ -111,6 +119,7 @@ export async function getOpenAIResponse(
   baseURL?: string,
   system?: string,
   imageBase64?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
@@ -126,7 +135,7 @@ export async function getOpenAIResponse(
   } else {
     messages.push({ role: 'user', content: prompt });
   }
-  const response = await client.chat.completions.create({ model, messages });
+  const response = await client.chat.completions.create({ model, messages }, { signal });
   return response.choices[0]?.message?.content || 'No response';
 }
 
@@ -205,6 +214,7 @@ export async function getAnthropicResponse(
   system?: string,
   imageBase64?: string,
   baseURL?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) });
   const userContent: Anthropic.MessageParam['content'] = imageBase64
@@ -213,12 +223,15 @@ export async function getAnthropicResponse(
         { type: 'text', text: prompt },
       ]
     : prompt;
-  const response = await client.messages.create({
-    model,
-    max_tokens: 4096,
-    ...(system ? { system } : {}),
-    messages: [{ role: 'user', content: userContent }],
-  });
+  const response = await client.messages.create(
+    {
+      model,
+      max_tokens: 4096,
+      ...(system ? { system } : {}),
+      messages: [{ role: 'user', content: userContent }],
+    },
+    { signal },
+  );
   const block = response.content.find((b) => b.type === 'text');
   return block?.type === 'text' ? block.text : 'No response';
 }
@@ -281,10 +294,11 @@ export async function getOpenCodeGoResponse(
   baseURL: string = OPENCODE_GO_URL,
   system?: string,
   imageBase64?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   return isOpenCodeGoAnthropicModel(model)
-    ? getAnthropicResponse(prompt, apiKey, model, system, imageBase64, opencodeGoAnthropicBase(baseURL))
-    : getOpenAIResponse(prompt, apiKey, model, baseURL, system, imageBase64);
+    ? getAnthropicResponse(prompt, apiKey, model, system, imageBase64, opencodeGoAnthropicBase(baseURL), signal)
+    : getOpenAIResponse(prompt, apiKey, model, baseURL, system, imageBase64, signal);
 }
 
 export async function getOpenCodeGoChat(

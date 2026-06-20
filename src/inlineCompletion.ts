@@ -5,15 +5,13 @@ import { loadCodeWikiIndex, searchCodeWiki } from '@common/codewiki';
 
 export const INLINE_ACCEPT_COMMAND = 'askii.inlineCompletionAccepted';
 
-const SYSTEM_PROMPT = `You are an expert code-completion engine.
-Given code before and after a cursor, output ONLY the raw text to insert at the cursor.
-Rules:
-- Output code only: no markdown fences, no explanations, no quotes.
-- Never repeat text that already appears before the cursor.
-- Match the file's language, indentation and style.
-- Prefer completing the current statement/block; multi-line is fine when obvious.
-- If the user rejected your previous suggestion, try a different approach.
-- If no useful completion exists, output nothing.`;
+const SYSTEM_PROMPT = `You are a code-completion engine. Output ONLY the raw text to insert at the cursor.
+No markdown fences, no explanations, no quotes. Never repeat text already before the cursor.
+Match the file's language, indentation and style. Output nothing if no useful completion exists.`;
+
+// Hard cap on the most variable prompt sections to keep requests small and fast.
+const WIKI_CHAR_CAP = 600;
+const SELECTION_CHAR_CAP = 300;
 
 interface EagernessProfile {
   debounceMs: number;
@@ -23,22 +21,53 @@ interface EagernessProfile {
 }
 
 const EAGERNESS_PROFILES: Record<string, EagernessProfile> = {
-  low: { debounceMs: 1200, prefixChars: 4000, suffixChars: 1000, topK: 3 },
-  medium: { debounceMs: 500, prefixChars: 2500, suffixChars: 600, topK: 2 },
-  high: { debounceMs: 200, prefixChars: 1500, suffixChars: 400, topK: 1 },
+  low: { debounceMs: 1200, prefixChars: 2000, suffixChars: 500, topK: 2 },
+  medium: { debounceMs: 500, prefixChars: 1200, suffixChars: 300, topK: 1 },
+  high: { debounceMs: 200, prefixChars: 800, suffixChars: 200, topK: 1 },
 };
 
 interface LastSuggestion {
   id: number;
   text: string;
+  contextKey: string;
   accepted: boolean;
+}
+
+// Cheap context computed on every invocation (no RAG/LLM work) — also yields the cache key.
+interface BaseContext {
+  offset: number;
+  prefix: string;
+  suffix: string;
+  linePrefix: string;
+  fileName: string;
+  languageId: string;
+  selectionText: string;
+  contextKey: string;
+}
+
+// Fast, stable string hash (djb2) so the cache key stays short instead of embedding full prefix/suffix.
+function hashString(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 33) ^ s.charCodeAt(i);
+  }
+  return h >>> 0;
 }
 
 function delay(ms: number, token: vscode.CancellationToken): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    token.onCancellationRequested(() => {
+    if (token.isCancellationRequested) {
+      resolve();
+      return;
+    }
+    let sub: vscode.Disposable | undefined;
+    const timer = setTimeout(() => {
+      sub?.dispose();
+      resolve();
+    }, ms);
+    sub = token.onCancellationRequested(() => {
       clearTimeout(timer);
+      sub?.dispose();
       resolve();
     });
   });
@@ -47,6 +76,7 @@ function delay(ms: number, token: vscode.CancellationToken): Promise<void> {
 export class AskiiInlineCompletionProvider implements vscode.InlineCompletionItemProvider {
   private latestRequestId = 0;
   private lastSuggestion: LastSuggestion | null = null;
+  private pendingController: AbortController | null = null;
 
   public notifyAccepted(id: number): void {
     if (this.lastSuggestion?.id === id) {
@@ -68,6 +98,15 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
     const eagerness = config.get<string>('inlineCompletionEagerness') ?? 'medium';
     const profile = EAGERNESS_PROFILES[eagerness] ?? EAGERNESS_PROFILES['medium'];
 
+    const ctx = this.buildBaseContext(document, position, profile);
+
+    // Cache hit: VSCode re-triggers frequently (edits, cursor moves, re-renders). If the context is
+    // identical to the suggestion already on screen, return it as-is instead of starting a new request
+    // that would needlessly supersede/cancel the valid one.
+    if (this.lastSuggestion && this.lastSuggestion.contextKey === ctx.contextKey) {
+      return [this.makeItem(this.lastSuggestion.text, position, this.lastSuggestion.id)];
+    }
+
     const id = ++this.latestRequestId;
     await delay(profile.debounceMs, token);
 
@@ -75,49 +114,87 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
       return [];
     }
 
+    // Abort any still-running request — only the latest matters, and leaving stale LLM calls in flight
+    // (especially on a serial local backend) starves the one we actually want.
+    this.pendingController?.abort();
+    const controller = new AbortController();
+    this.pendingController = controller;
+    const cancelSub = token.onCancellationRequested(() => controller.abort());
+
     try {
-      return await this.fetchCompletions(document, position, token, config, profile, id);
+      return await this.fetchCompletions(position, token, config, profile, id, ctx, controller.signal);
     } catch (e) {
-      console.error('Error fetching inline completion:', e);
+      if (!controller.signal.aborted) {
+        console.error('Error fetching inline completion:', e);
+      }
       return [];
+    } finally {
+      cancelSub.dispose();
+      if (this.pendingController === controller) {
+        this.pendingController = null;
+      }
     }
   }
 
-  private async fetchCompletions(
+  private buildBaseContext(
     document: vscode.TextDocument,
     position: vscode.Position,
-    token: vscode.CancellationToken,
-    config: vscode.WorkspaceConfiguration,
     profile: EagernessProfile,
-    id: number,
-  ): Promise<vscode.InlineCompletionItem[]> {
+  ): BaseContext {
     const fullText = document.getText();
     const offset = document.offsetAt(position);
 
     const prefix = fullText.slice(Math.max(0, offset - profile.prefixChars), offset);
     const suffix = fullText.slice(offset, offset + profile.suffixChars);
 
-    const currentLine = document.lineAt(position.line);
-    const linePrefix = currentLine.text.slice(0, position.character);
+    const linePrefix = document.lineAt(position.line).text.slice(0, position.character);
 
-    const fileName = path.basename(document.fileName);
-    const languageId = document.languageId;
-
-    // Current selection (if any)
+    // Current selection (if any), capped to a short excerpt.
+    let selectionText = '';
     const activeEditor = vscode.window.activeTextEditor;
-    let selectionSection = '';
     if (
       activeEditor &&
       activeEditor.document.uri.toString() === document.uri.toString() &&
       !activeEditor.selection.isEmpty
     ) {
-      const selectedText = activeEditor.document.getText(activeEditor.selection);
-      if (selectedText.trim()) {
-        selectionSection = `Current selection:\n${selectedText}\n\n`;
-      }
+      const selected = activeEditor.document.getText(activeEditor.selection).trim();
+      if (selected) selectionText = selected.slice(0, SELECTION_CHAR_CAP);
     }
 
-    // Code wiki retrieval
+    const contextKey =
+      `${document.uri.toString()}:${offset}:${hashString(prefix)}:${hashString(suffix)}`;
+
+    return {
+      offset,
+      prefix,
+      suffix,
+      linePrefix,
+      fileName: path.basename(document.fileName),
+      languageId: document.languageId,
+      selectionText,
+      contextKey,
+    };
+  }
+
+  private makeItem(text: string, position: vscode.Position, id: number): vscode.InlineCompletionItem {
+    return new vscode.InlineCompletionItem(text, new vscode.Range(position, position), {
+      command: INLINE_ACCEPT_COMMAND,
+      title: '',
+      arguments: [id],
+    });
+  }
+
+  private async fetchCompletions(
+    position: vscode.Position,
+    token: vscode.CancellationToken,
+    config: vscode.WorkspaceConfiguration,
+    profile: EagernessProfile,
+    id: number,
+    ctx: BaseContext,
+    signal: AbortSignal,
+  ): Promise<vscode.InlineCompletionItem[]> {
+    // Code wiki retrieval (the heaviest, most variable section) — capped, and only run after the
+    // debounce survives so we don't search on every keystroke.
     let codeWikiSection = '';
     if (config.get<boolean>('codeWikiEnabled') ?? false) {
       const rootPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -125,15 +202,14 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
         try {
           const index = loadCodeWikiIndex(rootPath);
           if (index) {
-            // Query using the current line + last few non-empty prefix lines for relevance
-            const queryLines = prefix
+            const queryLines = ctx.prefix
               .split('\n')
               .filter((l) => l.trim().length > 0)
               .slice(-4)
               .join(' ');
             const wikiResults = searchCodeWiki(queryLines, index, profile.topK);
             if (wikiResults) {
-              codeWikiSection = `Relevant codebase context:\n${wikiResults}\n\n`;
+              codeWikiSection = `Relevant codebase context:\n${wikiResults.slice(0, WIKI_CHAR_CAP)}\n\n`;
             }
           }
         } catch {
@@ -142,21 +218,15 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
       }
     }
 
-    // Previous suggestion feedback
-    let prevSuggestionSection = '';
-    if (this.lastSuggestion) {
-      const status = this.lastSuggestion.accepted ? 'ACCEPTED' : 'REJECTED';
-      prevSuggestionSection = `Your previous suggestion was: "${this.lastSuggestion.text.substring(0, 120)}" — the user ${status} it.\n\n`;
-    }
+    const selectionSection = ctx.selectionText ? `Current selection:\n${ctx.selectionText}\n\n` : '';
 
     const prompt =
-      `File: ${fileName} (language: ${languageId})\n\n` +
+      `File: ${ctx.fileName} (language: ${ctx.languageId})\n\n` +
       codeWikiSection +
       selectionSection +
-      prevSuggestionSection +
-      `Code before cursor:\n${prefix}\n` +
-      `Code after cursor:\n${suffix}\n` +
-      `The cursor is at the end of this line: ${linePrefix}\n` +
+      `Code before cursor:\n${ctx.prefix}\n` +
+      `Code after cursor:\n${ctx.suffix}\n` +
+      `The cursor is at the end of this line: ${ctx.linePrefix}\n` +
       `Output the completion text now:`;
 
     const completionText = await getExtensionResponse(
@@ -164,25 +234,20 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
       SYSTEM_PROMPT,
       config.get<string>('inlinePlatform'),
       config.get<string>('inlineModel'),
+      signal,
     );
 
     if (token.isCancellationRequested || id !== this.latestRequestId || !completionText) {
       return [];
     }
 
-    const cleaned = this.cleanResponse(completionText, linePrefix);
+    const cleaned = this.cleanResponse(completionText, ctx.linePrefix);
     if (!cleaned) return [];
 
-    // Track this suggestion as shown-but-not-yet-accepted
-    this.lastSuggestion = { id, text: cleaned, accepted: false };
+    // Track this suggestion as shown-but-not-yet-accepted, keyed by the context that produced it.
+    this.lastSuggestion = { id, text: cleaned, contextKey: ctx.contextKey, accepted: false };
 
-    return [
-      new vscode.InlineCompletionItem(cleaned, new vscode.Range(position, position), {
-        command: INLINE_ACCEPT_COMMAND,
-        title: '',
-        arguments: [id],
-      }),
-    ];
+    return [this.makeItem(cleaned, position, id)];
   }
 
   private cleanResponse(raw: string, linePrefix: string): string {

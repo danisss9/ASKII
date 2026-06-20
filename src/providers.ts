@@ -205,6 +205,7 @@ export async function getExtensionResponse(
   system?: string,
   platformOverride?: string,
   modelOverride?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const config = vscode.workspace.getConfiguration('askii');
   const platform =
@@ -220,33 +221,39 @@ export async function getExtensionResponse(
     const messages: vscode.LanguageModelChatMessage[] = [];
     if (system) messages.push(vscode.LanguageModelChatMessage.User(system));
     messages.push(vscode.LanguageModelChatMessage.User(prompt));
-    const chatResponse = await copilotModel.sendRequest(
-      messages,
-      {},
-      new vscode.CancellationTokenSource().token,
-    );
-    let responseText = '';
-    for await (const fragment of chatResponse.text) {
-      responseText += fragment;
+    // Bridge the AbortSignal to a VSCode cancellation token so a superseded request stops streaming.
+    const cts = new vscode.CancellationTokenSource();
+    if (signal) {
+      if (signal.aborted) cts.cancel();
+      else signal.addEventListener('abort', () => cts.cancel(), { once: true });
     }
-    return responseText;
+    try {
+      const chatResponse = await copilotModel.sendRequest(messages, {}, cts.token);
+      let responseText = '';
+      for await (const fragment of chatResponse.text) {
+        responseText += fragment;
+      }
+      return responseText;
+    } finally {
+      cts.dispose();
+    }
   } else if (platform === 'lmstudio') {
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
-    return getLMStudioResponse(prompt, url, model, system);
+    return getLMStudioResponse(prompt, url, model, system, undefined, signal);
   } else if (platform === 'openai') {
     const apiKey = config.get<string>('openaiApiKey') || '';
     const baseURL = config.get<string>('openaiUrl') || undefined;
-    return getOpenAIResponse(prompt, apiKey, model, baseURL, system);
+    return getOpenAIResponse(prompt, apiKey, model, baseURL, system, undefined, signal);
   } else if (platform === 'anthropic') {
     const apiKey = config.get<string>('anthropicApiKey') || '';
-    return getAnthropicResponse(prompt, apiKey, model, system);
+    return getAnthropicResponse(prompt, apiKey, model, system, undefined, undefined, signal);
   } else if (platform === 'opencodego') {
     const apiKey = config.get<string>('opencodegoApiKey') || '';
     const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
-    return getOpenCodeGoResponse(prompt, apiKey, model, baseURL, system);
+    return getOpenCodeGoResponse(prompt, apiKey, model, baseURL, system, undefined, signal);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
-    return getOllamaResponse(prompt, url, model, system);
+    return getOllamaResponse(prompt, url, model, system, undefined, signal);
   }
 }
 
