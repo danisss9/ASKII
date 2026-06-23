@@ -14,6 +14,78 @@ Or run without installing:
 npx askii-cli <command>
 ```
 
+## Interactive Mode
+
+Run `askii` with no arguments to start an interactive REPL session:
+
+```bash
+askii
+askii --platform anthropic   # start with a specific platform
+```
+
+```
+ASKII ( •_•)>⌐■-■ (⌐■_■)  — interactive mode
+
+  Platform : ollama (gemma4:e4b)
+  Workspace: /your/project
+  Wiki     : off
+  Code wiki: off
+
+Type a message to chat, /help for commands, /exit to quit.
+
+> what does a closure do in JavaScript?
+
+ASKII: A closure is a function that retains access to variables
+from its enclosing scope even after that scope has finished...
+
+> can you give me an example?
+
+ASKII: Sure! Here's a classic counter example...
+
+> /platform anthropic
+Platform → anthropic (claude-sonnet-4-6)
+
+> /do add a .gitignore for a Node.js project
+[Round 1/5]
+...
+
+> /exit
+Bye! ( •_•)>⌐■-■ (⌐■_■)
+```
+
+Bare text input maintains a **persistent chat history** across turns — follow-up questions remember the full conversation. Use `/clear` to start fresh.
+
+### REPL slash-commands
+
+| Command | Description |
+| --- | --- |
+| `/help` | Show all available commands |
+| `/ask <question>` | Explicit ask (same as bare text) |
+| `/do <task> [flags]` | Run the Do agent (`--max-rounds N`, `--yes`) |
+| `/edit --file <path> <instr>` | Edit a file in place |
+| `/explain <text>` | Explain a line of code |
+| `/wiki-reload` | Rebuild the docs wiki index |
+| `/code-wiki-reload` | Rebuild the code wiki index |
+| `/platform <name>` | Switch platform for the session (also updates default model) |
+| `/model <name>` | Switch model for the session |
+| `/config` | Show current session config (keys redacted) |
+| `/clear` | Clear chat history and start a fresh conversation |
+| `/exit`, `/quit` | Exit interactive mode |
+
+Tab-complete any `/` command by pressing Tab. Up/down arrows cycle through input history.
+
+**Config overrides** — bare `--` flags at the prompt update session config without restarting:
+
+```
+> --platform openai --model gpt-4-turbo
+> --max-rounds 10
+> --mode helpful
+```
+
+Ctrl+C during `/do` or `/control` cancels only that agent and returns to the `>` prompt. Ctrl+C at the idle prompt exits.
+
+---
+
 ## Commands
 
 ### `ask` — Ask a question about code

@@ -387,13 +387,649 @@ async function confirm(
   });
 }
 
+function replCompleter(line: string): [string[], string] {
+  const COMMANDS = [
+    '/help',
+    '/ask ',
+    '/do ',
+    '/edit ',
+    '/explain ',
+    '/wiki-reload',
+    '/code-wiki-reload',
+    '/platform ',
+    '/model ',
+    '/config',
+    '/clear',
+    '/exit',
+    '/quit',
+  ];
+  if (line.startsWith('/')) {
+    const hits = COMMANDS.filter((c) => c.startsWith(line));
+    return [hits.length ? hits : COMMANDS, line];
+  }
+  return [[], line];
+}
+
+function printReplHelp(): void {
+  console.log(`
+REPL Commands:
+  <message>                      Chat with ASKII (persistent history)
+  /ask <question>                Explicit ask (same as bare text)
+  /do <task> [--max-rounds N]    Run the Do agent (--yes/-y to auto-confirm)
+  /edit --file <path> <instr>    Edit a file in place
+  /explain <text>                Explain a line of code
+  /wiki-reload                   Rebuild the docs wiki index
+  /code-wiki-reload              Rebuild the code wiki index
+  /platform <name>               Switch platform: ollama|lmstudio|openai|anthropic|opencodego
+  /model <name>                  Switch model for current session
+  /config                        Show current session config
+  /clear                         Clear chat history (start a fresh conversation)
+  /exit, /quit                   Exit interactive mode
+
+Config overrides (bare flags at the prompt update session config):
+  --platform <name>  --model <name>  --max-rounds <n>  --mode <mode>
+`);
+}
+
+function printWelcomeBanner(config: Config): void {
+  const wikiStatus = config.useWiki ? `on (${config.wikiPath ?? 'no path set'})` : 'off';
+  const codeWikiStatus = config.useCodeWiki ? 'on' : 'off';
+  console.error(`
+ASKII ( •_•)>⌐■-■ (⌐■_■)  — interactive mode
+
+  Platform : ${config.platform} (${config.model})
+  Workspace: ${process.cwd()}
+  Wiki     : ${wikiStatus}
+  Code wiki: ${codeWikiStatus}
+
+Type a message to chat, /help for commands, /exit to quit.
+`);
+}
+
+const PLATFORM_DEFAULT_MODELS: Record<string, string> = {
+  ollama: process.env.ASKII_OLLAMA_MODEL || 'gemma4:e4b',
+  lmstudio: process.env.ASKII_LMSTUDIO_MODEL || 'qwen/qwen3-coder-30b',
+  openai: process.env.ASKII_OPENAI_MODEL || 'gpt-5-mini',
+  anthropic: process.env.ASKII_ANTHROPIC_MODEL || 'claude-sonnet-4-6',
+  opencodego: process.env.ASKII_OPENCODEGO_MODEL || 'glm-5.2',
+};
+
+function mergeConfigOverride(base: Config, tokens: string[]): Config {
+  const result = { ...base };
+
+  const platform = getFlagValue(tokens, '-p', '--platform');
+  if (platform) {
+    result.platform = platform as Config['platform'];
+    // Switch to the platform's default model unless an explicit model flag is also present
+    result.model = PLATFORM_DEFAULT_MODELS[platform] ?? result.model;
+  }
+
+  const model =
+    getFlagValue(tokens, '--model') ??
+    getFlagValue(tokens, '--ollama-model') ??
+    getFlagValue(tokens, '--lmstudio-model') ??
+    getFlagValue(tokens, '--openai-model') ??
+    getFlagValue(tokens, '--anthropic-model') ??
+    getFlagValue(tokens, '--opencodego-model');
+  if (model) result.model = model;
+
+  const maxRoundsStr = getFlagValue(tokens, '--max-rounds');
+  if (maxRoundsStr) result.maxRounds = parseInt(maxRoundsStr, 10) || result.maxRounds;
+
+  const mode = getFlagValue(tokens, '--mode');
+  if (mode) result.mode = mode as Config['mode'];
+
+  if (hasFlag(tokens, '-y', '--yes')) result.yes = true;
+
+  return result;
+}
+
+async function runReplAsk(
+  question: string,
+  config: Config,
+  history: ChatMessage[],
+): Promise<void> {
+  if (history.length === 0) {
+    const system =
+      config.mode === 'helpful'
+        ? 'You are ASKII, a helpful coding assistant. Provide clear, concise answers.'
+        : 'You are ASKII, a witty coding assistant who sprinkles in humor and kaomoji.';
+    history.push({ role: 'system', content: system });
+  }
+
+  const wikiCtx = getCliWikiContext(config, question);
+  const codeWikiCtx = getCliCodeWikiContext(config, question);
+  const wikiSection = wikiCtx ? `Relevant documentation:\n${wikiCtx}\n\n` : '';
+  const codeSection = codeWikiCtx ? `Relevant code:\n${codeWikiCtx}\n\n` : '';
+
+  history.push({ role: 'user', content: `${wikiSection}${codeSection}${question}` });
+
+  process.stderr.write(`\nASKII: `);
+  let response = '';
+  try {
+    response = await getChatResponseStreaming(config, history, (chunk) =>
+      process.stdout.write(chunk),
+    );
+  } catch (err) {
+    console.error(`\nError: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    history.pop();
+    return;
+  }
+  process.stdout.write('\n');
+  history.push({ role: 'assistant', content: response });
+}
+
+async function runReplDo(
+  task: string,
+  config: Config,
+  rl: readline.Interface,
+  abortController: AbortController,
+): Promise<void> {
+  const workDir = path.resolve(process.cwd());
+
+  deleteAllBackups(workDir);
+  console.error(`ASKII is working... ${getRandomThinkingKaomoji()}`);
+  console.error('Press Ctrl+C to cancel.\n');
+
+  try {
+    const workspaceStructure = getWorkspaceStructure(workDir);
+    console.error(`Workspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
+
+    const wikiAvailable = !!(config.wikiPath && loadWikiIndex(config.wikiPath));
+    const codeWikiRoot = config.codeWikiPath || workDir;
+    const codeWikiAvailable = !!(config.useCodeWiki && loadCodeWikiIndex(codeWikiRoot));
+    const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable, codeWikiAvailable);
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: task },
+    ];
+
+    let completedActions = 0;
+    let roundCount = 0;
+
+    while (roundCount < config.maxRounds && !abortController.signal.aborted) {
+      console.error(`\n[Round ${roundCount + 1}/${config.maxRounds}]`);
+
+      process.stderr.write('AI: ');
+      const responseText = await retryLLMCall(
+        () => getChatResponseStreaming(config, messages, (chunk) => process.stderr.write(chunk)),
+        2,
+        (attempt, err) =>
+          console.error(`\nLLM call failed (attempt ${attempt}): ${err.message}. Retrying...`),
+      );
+      process.stderr.write('\n');
+
+      if (abortController.signal.aborted) break;
+      messages.push({ role: 'assistant', content: responseText });
+
+      const actions = parseWorkspaceActions(responseText);
+      if (actions.length === 0) {
+        console.error('No actions returned. Done.');
+        if (responseText.trim()) {
+          console.error(`Raw (first 500): ${responseText.substring(0, 500)}`);
+        }
+        break;
+      }
+
+      const readActions = actions.filter(
+        (a) =>
+          a.type === 'view' ||
+          a.type === 'list' ||
+          a.type === 'search' ||
+          a.type === 'wiki_search' ||
+          a.type === 'code_search',
+      );
+      const writeActions = actions.filter(
+        (a) =>
+          a.type !== 'view' &&
+          a.type !== 'list' &&
+          a.type !== 'search' &&
+          a.type !== 'wiki_search' &&
+          a.type !== 'code_search',
+      );
+
+      const feedbackParts: string[] = [];
+
+      const viewResults: Record<string, string> = {};
+      for (const action of readActions) {
+        try {
+          if (action.type === 'wiki_search') {
+            const q = action.query ?? '';
+            console.error(`  → Wiki search: "${q}"`);
+            const wikiData = config.wikiPath ? loadWikiIndex(config.wikiPath) : null;
+            viewResults[`wiki_search:${q}`] = wikiData
+              ? searchWiki(q, wikiData) || 'No wiki results found'
+              : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
+          } else if (action.type === 'code_search') {
+            const q = action.query ?? '';
+            console.error(`  → Code search: "${q}"`);
+            const codeWikiData = loadCodeWikiIndex(codeWikiRoot);
+            viewResults[`code_search:${q}`] = codeWikiData
+              ? searchCodeWiki(q, codeWikiData) || 'No code results found'
+              : 'Code wiki not available — run: askii code-wiki-reload';
+          } else if (action.type === 'search') {
+            console.error(`  → Search: "${action.pattern}"`);
+            viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);
+          } else if (action.type === 'view' && action.paths) {
+            for (const p of action.paths) {
+              console.error(`  → Viewing: ${p}`);
+              try {
+                viewResults[p] = executeViewAction({ ...action, path: p, paths: undefined }, workDir);
+              } catch (e) {
+                viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
+              }
+            }
+          } else {
+            console.error(
+              `  → ${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`,
+            );
+            viewResults[action.path!] = executeViewAction(action, workDir);
+          }
+        } catch (e) {
+          viewResults[action.path ?? 'unknown'] =
+            `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
+        }
+      }
+
+      if (Object.keys(viewResults).length > 0) {
+        feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
+      }
+
+      const actionResults: ActionResult[] = [];
+
+      for (const action of writeActions) {
+        let filePath: string;
+        try {
+          filePath = sandboxPath(workDir, action.path!);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'Path error';
+          console.error(`  ✗ BLOCKED: ${msg}`);
+          actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail: msg });
+          continue;
+        }
+
+        if (action.type === 'run') {
+          console.error(`  → Run: ${action.command}`);
+          const ok = await confirm(
+            rl,
+            `Run command: "${action.command}"? (executes shell code)`,
+            false,
+          );
+          if (!ok) {
+            actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
+            continue;
+          }
+          try {
+            const { execSync } = await import('child_process');
+            const output = execSync(action.command!, {
+              cwd: workDir,
+              encoding: 'utf-8',
+              timeout: 30000,
+            });
+            console.error(`  ✓ Run output:\n${output}`);
+            actionResults.push({
+              action: `run:${action.command}`,
+              status: 'ok',
+              detail: output.substring(0, 500),
+            });
+          } catch (e: unknown) {
+            const err = e as { stdout?: string; stderr?: string; message?: string };
+            const detail =
+              `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
+            console.error(`  ✗ Run failed:\n${detail}`);
+            actionResults.push({
+              action: `run:${action.command}`,
+              status: 'error',
+              detail: detail.substring(0, 500),
+            });
+          }
+          continue;
+        }
+
+        const promptMsg = buildCliConfirmMessage(action);
+        const ok = await confirm(rl, promptMsg, config.yes);
+        if (!ok) {
+          actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
+          continue;
+        }
+
+        try {
+          const result = executeCliWriteAction(action, filePath, workDir);
+          if (result === 'ok') completedActions++;
+          actionResults.push({
+            action: `${action.type}:${action.path}`,
+            status: result === 'ok' ? 'ok' : 'error',
+            detail: result === 'ok' ? undefined : result,
+          });
+        } catch (e) {
+          const detail = e instanceof Error ? e.message : 'Unknown error';
+          console.error(`  ✗ Failed: ${detail}`);
+          actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail });
+        }
+      }
+
+      if (actionResults.length > 0) {
+        feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
+      }
+
+      if (feedbackParts.length === 0) break;
+
+      messages.push({
+        role: 'user',
+        content:
+          feedbackParts.join('\n\n') +
+          '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
+      });
+
+      roundCount++;
+    }
+
+    if (roundCount >= config.maxRounds) {
+      console.error(`\nMax rounds (${config.maxRounds}) reached.`);
+    }
+    console.error(`\nCompleted ${completedActions} actions! ${getRandomKaomoji()}`);
+
+    if (hasBackups(workDir)) {
+      const doUndo = await confirm(
+        rl,
+        'Undo all changes? (y = restore backups, n = keep changes and delete backups)',
+        false,
+      );
+      if (doUndo) {
+        const { restored, deleted } = restoreAllBackups(workDir);
+        deleteAllBackups(workDir);
+        console.error(
+          `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
+        );
+      } else {
+        deleteAllBackups(workDir);
+      }
+    }
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+async function handleReplInput(
+  line: string,
+  config: Config,
+  setConfig: (c: Config) => void,
+  askHistory: ChatMessage[],
+  rl: readline.Interface,
+  replSigintHandler: () => void,
+): Promise<boolean> {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+
+  // ── Config flag overrides (bare --flags update session) ───────────────────
+  if (trimmed.startsWith('--')) {
+    const tokens = trimmed.split(/\s+/);
+    const updated = mergeConfigOverride(config, tokens);
+    setConfig(updated);
+    console.error(
+      `Updated — platform: ${updated.platform}, model: ${updated.model}, maxRounds: ${updated.maxRounds}`,
+    );
+    return false;
+  }
+
+  // ── Slash commands ────────────────────────────────────────────────────────
+  if (trimmed.startsWith('/')) {
+    const spaceIdx = trimmed.indexOf(' ');
+    const cmd = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
+    const rest = spaceIdx === -1 ? '' : trimmed.slice(spaceIdx + 1).trim();
+
+    switch (cmd) {
+      case '/help':
+        printReplHelp();
+        return false;
+
+      case '/exit':
+      case '/quit':
+        return true;
+
+      case '/clear':
+        askHistory.length = 0;
+        console.error('Chat history cleared. Starting a fresh conversation.');
+        return false;
+
+      case '/config': {
+        const display = { ...config } as Record<string, unknown>;
+        if (display.openaiApiKey) display.openaiApiKey = '***';
+        if (display.anthropicApiKey) display.anthropicApiKey = '***';
+        if (display.opencodegoApiKey) display.opencodegoApiKey = '***';
+        console.error(JSON.stringify(display, null, 2));
+        return false;
+      }
+
+      case '/platform': {
+        if (!rest) {
+          console.error('Usage: /platform <ollama|lmstudio|openai|anthropic|opencodego>');
+          return false;
+        }
+        const updated = mergeConfigOverride(config, ['--platform', rest]);
+        setConfig(updated);
+        console.error(`Platform → ${updated.platform} (${updated.model})`);
+        return false;
+      }
+
+      case '/model': {
+        if (!rest) {
+          console.error('Usage: /model <model-name>');
+          return false;
+        }
+        setConfig({ ...config, model: rest });
+        console.error(`Model → ${rest}`);
+        return false;
+      }
+
+      case '/wiki-reload': {
+        const wikiPath = config.wikiPath;
+        if (!wikiPath) {
+          console.error('Error: set --wiki-path first or use env ASKII_WIKI_PATH');
+          return false;
+        }
+        if (!fs.existsSync(wikiPath)) {
+          console.error(`Error: wiki path not found: ${wikiPath}`);
+          return false;
+        }
+        try {
+          console.error(`Indexing wiki: ${wikiPath}`);
+          const index = buildWikiIndex(wikiPath);
+          saveWikiIndex(index, wikiPath);
+          console.error(
+            `Wiki indexed: ${index.chunkCount} chunks from ${index.fileCount} file(s). ${getRandomKaomoji()}`,
+          );
+        } catch (e) {
+          console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        }
+        return false;
+      }
+
+      case '/code-wiki-reload': {
+        const rootPath = path.resolve(config.codeWikiPath || process.cwd());
+        try {
+          console.error(`Indexing code: ${rootPath}`);
+          const index = buildCodeWikiIndex(rootPath);
+          saveCodeWikiIndex(index, rootPath);
+          console.error(
+            `Code wiki indexed: ${index.chunkCount} chunks from ${index.fileCount} file(s). ${getRandomKaomoji()}`,
+          );
+        } catch (e) {
+          console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        }
+        return false;
+      }
+
+      case '/explain': {
+        if (!rest) {
+          console.error('Usage: /explain <line of code>');
+          return false;
+        }
+        const isHelpful = config.mode === 'helpful';
+        const system = isHelpful
+          ? 'You are ASKII, a helpful coding assistant. Provide clear, concise explanations.'
+          : 'You are ASKII, a witty coding assistant. Provide humorous comments.';
+        const prompt = isHelpful
+          ? `Explain this code in one sentence: ${rest}`
+          : `Make a funny comment about this code in one sentence: ${rest}`;
+        console.error(`ASKII is thinking... ${getRandomThinkingKaomoji()}`);
+        try {
+          const response = await getResponse(config, prompt, system);
+          console.log(response);
+        } catch (e) {
+          console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        }
+        return false;
+      }
+
+      case '/edit': {
+        const editTokens = rest.split(/\s+/).filter(Boolean);
+        const fileFlag = getFlagValue(editTokens, '--file', '-f');
+        if (!fileFlag) {
+          console.error('Usage: /edit --file <path> "<instruction>"');
+          return false;
+        }
+        const fileIdx = editTokens.findIndex((t) => t === '--file' || t === '-f');
+        const instructionTokens = editTokens.filter((_, i) => i !== fileIdx && i !== fileIdx + 1);
+        const instruction = instructionTokens.join(' ').trim();
+        if (!instruction) {
+          console.error('Usage: /edit --file <path> "<instruction>"');
+          return false;
+        }
+        if (!fs.existsSync(fileFlag)) {
+          console.error(`Error: file not found: ${fileFlag}`);
+          return false;
+        }
+        const code = fs.readFileSync(fileFlag, 'utf-8');
+        const ext = path.extname(fileFlag).slice(1);
+        const prompt = `Update this code:\n\`\`\`${ext}\n${code}\n\`\`\`\n\nRequest: ${instruction}\n\nReturn only the updated code without explanation.`;
+        console.error(`ASKII is editing... (•_•)>⌐■-■`);
+        try {
+          const response = await getResponse(config, prompt);
+          const edited = extractCode(response);
+          fs.writeFileSync(fileFlag, edited);
+          console.error(`  ✓ Wrote: ${fileFlag}`);
+        } catch (e) {
+          console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        }
+        return false;
+      }
+
+      case '/do': {
+        const doTokens = rest.split(/\s+/).filter(Boolean);
+        const localFlags = doTokens.filter((t) => t.startsWith('-'));
+        const taskWords = doTokens.filter((t) => !t.startsWith('-'));
+        const task = taskWords.join(' ');
+        if (!task) {
+          console.error('Usage: /do <task> [--max-rounds N] [--yes]');
+          return false;
+        }
+        const doConfig = mergeConfigOverride(config, localFlags);
+
+        const abortController = new AbortController();
+        process.removeAllListeners('SIGINT');
+        process.once('SIGINT', () => {
+          abortController.abort();
+          console.error('\n\nCancelled (Ctrl+C). Returning to prompt...');
+        });
+
+        await runReplDo(task, doConfig, rl, abortController);
+
+        process.removeAllListeners('SIGINT');
+        process.on('SIGINT', replSigintHandler);
+        return false;
+      }
+
+      case '/ask': {
+        if (!rest) {
+          console.error('Usage: /ask <question>');
+          return false;
+        }
+        await runReplAsk(rest, config, askHistory);
+        return false;
+      }
+
+      default:
+        console.error(`Unknown command: ${cmd}. Type /help for available commands.`);
+        return false;
+    }
+  }
+
+  // ── Default: persistent chat ──────────────────────────────────────────────
+  await runReplAsk(trimmed, config, askHistory);
+  return false;
+}
+
+async function startRepl(initialConfig: Config): Promise<void> {
+  let config = { ...initialConfig };
+  const setConfig = (c: Config) => {
+    config = c;
+  };
+  const askHistory: ChatMessage[] = [];
+
+  printWelcomeBanner(config);
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    completer: replCompleter as readline.Completer,
+    terminal: true,
+  });
+
+  let exiting = false;
+
+  const replSigintHandler = () => {
+    console.error('\n\nBye! ( •_•)>⌐■-■ (⌐■_■)');
+    rl.close();
+    process.exit(0);
+  };
+  process.on('SIGINT', replSigintHandler);
+
+  rl.setPrompt('> ');
+  rl.prompt();
+
+  rl.on('line', async (rawLine: string) => {
+    if (exiting) return;
+    rl.pause();
+
+    const shouldExit = await handleReplInput(
+      rawLine,
+      config,
+      setConfig,
+      askHistory,
+      rl,
+      replSigintHandler,
+    );
+
+    if (shouldExit) {
+      exiting = true;
+      console.error('\nBye! ( •_•)>⌐■-■ (⌐■_■)');
+      rl.close();
+      process.exit(0);
+    } else {
+      rl.resume();
+      rl.prompt();
+    }
+  });
+
+  rl.on('close', () => {
+    if (!exiting) {
+      console.error('\nBye! ( •_•)>⌐■-■ (⌐■_■)');
+    }
+    process.exit(0);
+  });
+}
+
 function printHelp() {
   console.log(`ASKII CLI ( •_•)>⌐■-■ (⌐■_■)
 AI code assistant for your terminal
 
 Usage: askii <command> [options]
+       askii              (no args) — start interactive mode
 
 Commands:
+  (no args)             Start interactive REPL mode
   ask <question>        Ask a question about code
   edit <instruction>    Edit code and print the result to stdout
   explain <line>        Explain a single line of code
@@ -464,9 +1100,9 @@ Examples:
 
 async function main() {
   const argv = process.argv.slice(2);
-  const command = argv[0] || 'help';
   const flags = argv;
   const positional = argv.filter((a) => !a.startsWith('-'));
+  const command = positional[0] ?? '';
 
   if (hasFlag(flags, '-h', '--help') || command === 'help') {
     printHelp();
@@ -474,6 +1110,12 @@ async function main() {
   }
 
   const config = getConfig(flags);
+
+  // No command given → interactive REPL mode
+  if (!command) {
+    await startRepl(config);
+    return;
+  }
 
   if (command === 'wiki-reload') {
     const wikiPath =

@@ -16,7 +16,7 @@ async function main() {
     outfile: 'dist/index.js',
     external: [],
     banner: {
-      js: '#!/usr/bin/env node',
+      js: '#!/usr/bin/env node\nconst __origEmit = process.emit; process.emit = function(e, ...a) { if (e === "warning" && a[0] && a[0].code === "DEP0040") return false; return __origEmit.call(this, e, ...a); };',
     },
     alias: {
       '@common': path.resolve(__dirname, '..', 'common'),

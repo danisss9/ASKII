@@ -18,6 +18,7 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 - **Code Auto-completion**: Copilot-style ghost-text code suggestions inside any open code file — Tab to accept, Esc to dismiss.
 - **Codebase Wiki RAG**: Index your own workspace code files and inject relevant chunks as context into inline completion, Ask, Edit, and Do commands.
 - **Commit Message Generator**: A one-click button in the Source Control view toolbar that reads your staged (or working-tree) diff and writes a generated commit message straight into the commit-message input box — powered by the same LLM platform/model used for inline completion.
+- **CLI Interactive Mode**: The `askii` CLI now starts a persistent REPL session when run with no arguments — chat with persistent history, run Do/Edit/Explain agents, and switch platforms/models live, all with Tab-autocomplete slash-commands (`/do`, `/edit`, `/platform`, `/clear`, …).
 
 ## Requirements
 

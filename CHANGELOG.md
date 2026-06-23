@@ -4,6 +4,20 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.3.1] - 2026-06-23
+
+### Added
+
+- **CLI interactive mode**: Running `askii` with no arguments now starts a persistent REPL instead of showing help and exiting. Inspired by Claude Code, OpenCode, and Copilot CLI
+  - Bare text input sends a message to the LLM with **persistent chat history** across turns (same conversation until `/clear`)
+  - `/command` slash-commands with **Tab autocomplete**: `/ask`, `/do`, `/edit`, `/explain`, `/wiki-reload`, `/code-wiki-reload`, `/platform`, `/model`, `/config`, `/clear`, `/exit`, `/quit`
+  - `/do <task> [--max-rounds N] [--yes]` runs the Do agent inside the REPL and returns to the `>` prompt when done; Ctrl+C during `/do` cancels only the agent
+  - `/edit --file <path> "<instruction>"` edits a file in place without needing stdin
+  - `/platform <name>` and `/model <name>` switch the LLM platform/model for the current session (platform switch also updates the default model)
+  - Bare `--flag` overrides at the prompt (e.g. `--max-rounds 10`) update session config without restarting
+  - Welcome banner showing current platform, model, workspace, and wiki status
+  - Ctrl+C at the idle prompt exits cleanly
+
 ## [0.3.0] - 2026-06-20
 
 ### Added
