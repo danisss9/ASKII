@@ -1,6 +1,6 @@
 # ASKII CLI ( •\_•)>⌐■-■ (⌐■_■)
 
-AI code assistant for your terminal. Powered by Ollama, LM Studio, OpenAI, Anthropic, or opencode Go.
+AI code assistant for your terminal. Powered by Ollama, LM Studio, OpenAI, Anthropic, opencode Go, or ASKII Cloud.
 
 ## Install
 
@@ -352,7 +352,7 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 
 | Flag                | Short | Description                                                                        | Default                  |
 | ------------------- | ----- | ---------------------------------------------------------------------------------- | ------------------------ |
-| `--platform`        | `-p`  | LLM platform: `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`            | `ollama`                 |
+| `--platform`        | `-p`  | LLM platform: `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`, `askiicloud` | `ollama`              |
 | `--ollama-url`      |       | Ollama server URL                                                                  | `http://localhost:11434` |
 | `--lmstudio-url`    |       | LM Studio server URL                                                               | `ws://localhost:1234`    |
 | `--ollama-model`    |       | Ollama model                                                                       | `gemma4:e4b`             |
@@ -365,6 +365,9 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 | `--opencodego-key`  |       | opencode Go API key (env: `ASKII_OPENCODEGO_KEY`)                                  |                          |
 | `--opencodego-model`|       | opencode Go model (env: `ASKII_OPENCODEGO_MODEL`)                                  | `glm-5.2`                |
 | `--opencodego-url`  |       | opencode Go base URL (env: `ASKII_OPENCODEGO_URL`)                                 | `https://opencode.ai/zen/go/v1` |
+| `--askiicloud-key`  |       | ASKII Cloud API key (env: `ASKII_CLOUD_KEY`)                                       |                          |
+| `--askiicloud-model`|       | ASKII Cloud model (env: `ASKII_CLOUD_MODEL`)                                       | `askii-default`          |
+| `--askiicloud-url`  |       | ASKII Cloud base URL (env: `ASKII_CLOUD_URL`)                                      | `https://api.askii.dev/v1` |
 | `--mode`            |       | Response style: `helpful`, `funny`                                                 | `funny`                  |
 | `--max-rounds`      |       | Max agent rounds for `do` / `control` / `browse`                                   | `5`                      |
 | `--dir`             |       | Working directory for `do`                                                         | cwd                      |
@@ -406,6 +409,11 @@ export ASKII_OPENCODEGO_KEY=...
 export ASKII_OPENCODEGO_MODEL=glm-5.2
 export ASKII_OPENCODEGO_URL=https://opencode.ai/zen/go/v1
 
+# ASKII Cloud
+export ASKII_CLOUD_KEY=...
+export ASKII_CLOUD_MODEL=askii-default
+export ASKII_CLOUD_URL=https://api.askii.dev/v1
+
 # Shared
 export ASKII_MODE=funny
 export ASKII_MAX_ROUNDS=5
@@ -446,6 +454,11 @@ $env:ASKII_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 $env:ASKII_OPENCODEGO_KEY = "..."
 $env:ASKII_OPENCODEGO_MODEL = "glm-5.2"
 $env:ASKII_OPENCODEGO_URL = "https://opencode.ai/zen/go/v1"
+
+# ASKII Cloud
+$env:ASKII_CLOUD_KEY = "..."
+$env:ASKII_CLOUD_MODEL = "askii-default"
+$env:ASKII_CLOUD_URL = "https://api.askii.dev/v1"
 
 # Shared
 $env:ASKII_MODE = "funny"
@@ -553,4 +566,24 @@ askii -p opencodego --opencodego-key ... --opencodego-model qwen3.7-max explain 
 askii -p opencodego --opencodego-key ... ask "what does this do?"
 askii -p opencodego --opencodego-key ... --opencodego-model kimi-k2.7-code do "add error handling"
 askii -p opencodego --opencodego-key ... --opencodego-model qwen3.7-max explain "arr.reduce((a, b) => a + b, 0)"
+```
+
+### ASKII Cloud
+
+An in-house, OpenAI-compatible inference service ([api.askii.dev](https://api.askii.dev)). All it needs is an API key — the base URL defaults to `https://api.askii.dev/v1`.
+
+**bash**
+
+```bash
+askii -p askiicloud --askiicloud-key ... ask "what does this do?"
+askii -p askiicloud --askiicloud-key ... --askiicloud-model askii-default do "add error handling"
+askii -p askiicloud --askiicloud-key ... explain "arr.reduce((a, b) => a + b, 0)"
+```
+
+**PowerShell**
+
+```powershell
+askii -p askiicloud --askiicloud-key ... ask "what does this do?"
+askii -p askiicloud --askiicloud-key ... --askiicloud-model askii-default do "add error handling"
+askii -p askiicloud --askiicloud-key ... explain "arr.reduce((a, b) => a + b, 0)"
 ```

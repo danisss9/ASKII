@@ -34,6 +34,9 @@ import {
   getOpenCodeGoResponse,
   getOpenCodeGoChatStreaming,
   OPENCODE_GO_URL,
+  getAskiiCloudResponse,
+  getAskiiCloudChatStreaming,
+  ASKII_CLOUD_URL,
   retryLLMCall,
   type ChatMessage,
 } from '@common/providers';
@@ -63,7 +66,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 interface Config {
-  platform: 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego';
+  platform: 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego' | 'askiicloud';
   url: string;
   model: string;
   openaiApiKey: string;
@@ -71,6 +74,8 @@ interface Config {
   anthropicApiKey: string;
   opencodegoApiKey: string;
   opencodegoBaseURL: string;
+  askiicloudApiKey: string;
+  askiicloudBaseURL: string;
   mode: 'helpful' | 'funny';
   maxRounds: number;
   yes: boolean;
@@ -99,7 +104,7 @@ function hasFlag(flags: string[], ...names: string[]): boolean {
 function getConfig(flags: string[]): Config {
   const platform = (getFlagValue(flags, '-p', '--platform') ||
     process.env.ASKII_PLATFORM ||
-    'ollama') as 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego';
+    'ollama') as 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego' | 'askiicloud';
 
   const ollamaUrl =
     getFlagValue(flags, '--ollama-url') || process.env.ASKII_OLLAMA_URL || 'http://localhost:11434';
@@ -142,11 +147,21 @@ function getConfig(flags: string[]): Config {
   const opencodegoBaseURL =
     getFlagValue(flags, '--opencodego-url') || process.env.ASKII_OPENCODEGO_URL || OPENCODE_GO_URL;
 
+  const askiicloudApiKey =
+    getFlagValue(flags, '--askiicloud-key') || process.env.ASKII_CLOUD_KEY || '';
+
+  const askiicloudModel =
+    getFlagValue(flags, '--askiicloud-model') || process.env.ASKII_CLOUD_MODEL || 'askii-default';
+
+  const askiicloudBaseURL =
+    getFlagValue(flags, '--askiicloud-url') || process.env.ASKII_CLOUD_URL || ASKII_CLOUD_URL;
+
   const modelMap: Record<string, string> = {
     lmstudio: lmStudioModel,
     openai: openaiModel,
     anthropic: anthropicModel,
     opencodego: opencodegoModel,
+    askiicloud: askiicloudModel,
   };
 
   return {
@@ -158,6 +173,8 @@ function getConfig(flags: string[]): Config {
     anthropicApiKey,
     opencodegoApiKey,
     opencodegoBaseURL,
+    askiicloudApiKey,
+    askiicloudBaseURL,
     mode: (getFlagValue(flags, '--mode') || process.env.ASKII_MODE || 'funny') as
       | 'helpful'
       | 'funny',
@@ -215,6 +232,15 @@ async function getResponse(
       system,
       imageBase64,
     );
+  } else if (config.platform === 'askiicloud') {
+    return getAskiiCloudResponse(
+      prompt,
+      config.askiicloudApiKey,
+      config.model,
+      config.askiicloudBaseURL,
+      system,
+      imageBase64,
+    );
   } else if (config.platform === 'lmstudio') {
     return getLMStudioResponse(prompt, config.url, config.model, system, imageBase64);
   } else if (config.platform === 'openai') {
@@ -251,6 +277,14 @@ async function getChatResponseStreaming(
       config.model,
       onChunk,
       config.opencodegoBaseURL,
+    );
+  } else if (config.platform === 'askiicloud') {
+    return getAskiiCloudChatStreaming(
+      messages,
+      config.askiicloudApiKey,
+      config.model,
+      onChunk,
+      config.askiicloudBaseURL,
     );
   } else if (config.platform === 'lmstudio') {
     return getLMStudioChatStreaming(messages, config.url, config.model, onChunk);
@@ -420,7 +454,7 @@ REPL Commands:
   /explain <text>                Explain a line of code
   /wiki-reload                   Rebuild the docs wiki index
   /code-wiki-reload              Rebuild the code wiki index
-  /platform <name>               Switch platform: ollama|lmstudio|openai|anthropic|opencodego
+  /platform <name>               Switch platform: ollama|lmstudio|openai|anthropic|opencodego|askiicloud
   /model <name>                  Switch model for current session
   /config                        Show current session config
   /clear                         Clear chat history (start a fresh conversation)
@@ -452,6 +486,7 @@ const PLATFORM_DEFAULT_MODELS: Record<string, string> = {
   openai: process.env.ASKII_OPENAI_MODEL || 'gpt-5-mini',
   anthropic: process.env.ASKII_ANTHROPIC_MODEL || 'claude-sonnet-4-6',
   opencodego: process.env.ASKII_OPENCODEGO_MODEL || 'glm-5.2',
+  askiicloud: process.env.ASKII_CLOUD_MODEL || 'askii-default',
 };
 
 function mergeConfigOverride(base: Config, tokens: string[]): Config {
@@ -470,7 +505,8 @@ function mergeConfigOverride(base: Config, tokens: string[]): Config {
     getFlagValue(tokens, '--lmstudio-model') ??
     getFlagValue(tokens, '--openai-model') ??
     getFlagValue(tokens, '--anthropic-model') ??
-    getFlagValue(tokens, '--opencodego-model');
+    getFlagValue(tokens, '--opencodego-model') ??
+    getFlagValue(tokens, '--askiicloud-model');
   if (model) result.model = model;
 
   const maxRoundsStr = getFlagValue(tokens, '--max-rounds');
@@ -798,13 +834,14 @@ async function handleReplInput(
         if (display.openaiApiKey) display.openaiApiKey = '***';
         if (display.anthropicApiKey) display.anthropicApiKey = '***';
         if (display.opencodegoApiKey) display.opencodegoApiKey = '***';
+        if (display.askiicloudApiKey) display.askiicloudApiKey = '***';
         console.error(JSON.stringify(display, null, 2));
         return false;
       }
 
       case '/platform': {
         if (!rest) {
-          console.error('Usage: /platform <ollama|lmstudio|openai|anthropic|opencodego>');
+          console.error('Usage: /platform <ollama|lmstudio|openai|anthropic|opencodego|askiicloud>');
           return false;
         }
         const updated = mergeConfigOverride(config, ['--platform', rest]);
@@ -1040,7 +1077,7 @@ Commands:
   code-wiki-reload      Index code files in --code-wiki-path (default: cwd)
 
 Options:
-  -p, --platform <p>         LLM platform: ollama, lmstudio, openai, anthropic, opencodego (default: ollama)
+  -p, --platform <p>         LLM platform: ollama, lmstudio, openai, anthropic, opencodego, askiicloud (default: ollama)
       --ollama-url <url>     Ollama server URL (default: http://localhost:11434)
       --lmstudio-url <url>   LM Studio server URL (default: ws://localhost:1234)
       --ollama-model <m>     Ollama model (default: gemma4:e4b)
@@ -1053,6 +1090,9 @@ Options:
       --opencodego-key <key> opencode Go API key (env: ASKII_OPENCODEGO_KEY)
       --opencodego-model <m> opencode Go model (default: glm-5.2)
       --opencodego-url <url> opencode Go base URL (env: ASKII_OPENCODEGO_URL)
+      --askiicloud-key <key> ASKII Cloud API key (env: ASKII_CLOUD_KEY)
+      --askiicloud-model <m> ASKII Cloud model (default: askii-default)
+      --askiicloud-url <url> ASKII Cloud base URL (env: ASKII_CLOUD_URL, default: https://api.askii.dev/v1)
       --mode <mode>          Response mode: helpful, funny (default: funny)
       --max-rounds <n>       Max agent rounds for "do" / "control" / "browse" (default: 5)
       --dir <path>           Working directory for "do" (default: cwd)
@@ -1075,6 +1115,7 @@ Environment variables:
   ASKII_OPENAI_KEY      ASKII_OPENAI_MODEL    ASKII_OPENAI_URL
   ASKII_ANTHROPIC_KEY   ASKII_ANTHROPIC_MODEL
   ASKII_OPENCODEGO_KEY  ASKII_OPENCODEGO_MODEL  ASKII_OPENCODEGO_URL
+  ASKII_CLOUD_KEY       ASKII_CLOUD_MODEL       ASKII_CLOUD_URL
   ASKII_MODE            ASKII_MAX_ROUNDS
   ASKII_WIKI_PATH       ASKII_USE_WIKI
   ASKII_CODE_WIKI_PATH  ASKII_USE_CODE_WIKI

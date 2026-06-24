@@ -11,6 +11,9 @@ export interface ChatMessage {
 // opencode Go (https://opencode.ai/go) — hosted, OpenAI-compatible inference service.
 export const OPENCODE_GO_URL = 'https://opencode.ai/zen/go/v1';
 
+// ASKII Cloud — in-house, OpenAI-compatible inference service (https://api.askii.dev).
+export const ASKII_CLOUD_URL = 'https://api.askii.dev/v1';
+
 // Qwen + MiniMax are served over opencode Go's Anthropic-compatible /messages endpoint;
 // every other model uses the OpenAI-compatible /chat/completions endpoint.
 export function isOpenCodeGoAnthropicModel(model: string): boolean {
@@ -322,6 +325,39 @@ export async function getOpenCodeGoChatStreaming(
   return isOpenCodeGoAnthropicModel(model)
     ? getAnthropicChatStreaming(messages, apiKey, model, onChunk, opencodeGoAnthropicBase(baseURL))
     : getOpenAIChatStreaming(messages, apiKey, model, onChunk, baseURL);
+}
+
+// ASKII Cloud is purely OpenAI-compatible, so these are thin wrappers over the OpenAI calls
+// that pin the base URL to the ASKII Cloud endpoint by default.
+export async function getAskiiCloudResponse(
+  prompt: string,
+  apiKey: string,
+  model: string,
+  baseURL: string = ASKII_CLOUD_URL,
+  system?: string,
+  imageBase64?: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return getOpenAIResponse(prompt, apiKey, model, baseURL, system, imageBase64, signal);
+}
+
+export async function getAskiiCloudChat(
+  messages: ChatMessage[],
+  apiKey: string,
+  model: string,
+  baseURL: string = ASKII_CLOUD_URL,
+): Promise<string> {
+  return getOpenAIChat(messages, apiKey, model, baseURL);
+}
+
+export async function getAskiiCloudChatStreaming(
+  messages: ChatMessage[],
+  apiKey: string,
+  model: string,
+  onChunk: (chunk: string) => void,
+  baseURL: string = ASKII_CLOUD_URL,
+): Promise<string> {
+  return getOpenAIChatStreaming(messages, apiKey, model, onChunk, baseURL);
 }
 
 export async function retryLLMCall<T>(

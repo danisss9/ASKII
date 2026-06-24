@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -133,10 +133,11 @@
             "lmstudio",
             "openai",
             "anthropic",
-            "opencodego"
+            "opencodego",
+            "askiicloud"
           ],
           "default": "ollama",
-          "description": "LLM platform to use (ollama, copilot, lmstudio, openai, anthropic, or opencodego)"
+          "description": "LLM platform to use (ollama, copilot, lmstudio, openai, anthropic, opencodego, or askiicloud)"
         },
         "askii.ollamaUrl": {
           "type": "string",
@@ -202,6 +203,21 @@
           "type": "string",
           "default": "https://opencode.ai/zen/go/v1",
           "description": "opencode Go base URL (OpenAI-compatible). Override only if needed."
+        },
+        "askii.askiicloudApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "ASKII Cloud API key (used when llmPlatform is askiicloud)."
+        },
+        "askii.askiicloudModel": {
+          "type": "string",
+          "default": "askii-default",
+          "description": "ASKII Cloud model id to use (when llmPlatform is askiicloud)."
+        },
+        "askii.askiicloudUrl": {
+          "type": "string",
+          "default": "https://api.askii.dev/v1",
+          "description": "ASKII Cloud base URL (OpenAI-compatible). Override only if needed."
         },
         "askii.inlineHelperMode": {
           "type": "string",
@@ -275,7 +291,8 @@
             "lmstudio",
             "openai",
             "anthropic",
-            "opencodego"
+            "opencodego",
+            "askiicloud"
           ],
           "enumDescriptions": [
             "Use the platform configured in askii.llmPlatform",
@@ -284,7 +301,8 @@
             "LM Studio (local)",
             "OpenAI / OpenAI-compatible",
             "Anthropic Claude",
-            "opencode Go"
+            "opencode Go",
+            "ASKII Cloud"
           ],
           "default": "default",
           "description": "LLM platform to use for inline auto-complete and inline helper mode decorations. Set to \"default\" to follow askii.llmPlatform."

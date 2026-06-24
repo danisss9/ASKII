@@ -17,6 +17,10 @@ import {
   getOpenCodeGoChat,
   getOpenCodeGoChatStreaming,
   OPENCODE_GO_URL,
+  getAskiiCloudResponse,
+  getAskiiCloudChat,
+  getAskiiCloudChatStreaming,
+  ASKII_CLOUD_URL,
   type ChatMessage,
 } from '@common/providers';
 import { loadWikiIndex, searchWikiRaw } from '@common/wiki';
@@ -32,7 +36,7 @@ import { loadWikiIndex, searchWikiRaw } from '@common/wiki';
  * @param overrideKey  The setting key that holds the per-feature override
  *                     (e.g. "inlinePlatform").
  * @returns The resolved platform id (ollama, copilot, lmstudio, openai,
- *          anthropic, or opencodego).
+ *          anthropic, opencodego, or askiicloud).
  */
 export function resolvePlatform(
   config: vscode.WorkspaceConfiguration,
@@ -51,7 +55,8 @@ export function resolvePlatform(
  *
  * When `modelOverride` is unset, empty, or "default", the platform's default
  * model setting (askii.ollamaModel, askii.copilotModel, askii.openaiModel,
- * askii.anthropicModel, askii.lmStudioModel, askii.opencodegoModel) is used.
+ * askii.anthropicModel, askii.lmStudioModel, askii.opencodegoModel,
+ * askii.askiicloudModel) is used.
  *
  * @returns The resolved model id (never "default").
  */
@@ -74,6 +79,8 @@ export function resolveModel(
       return config.get<string>('anthropicModel') || 'claude-opus-4-6';
     case 'opencodego':
       return config.get<string>('opencodegoModel') || 'glm-5.2';
+    case 'askiicloud':
+      return config.get<string>('askiicloudModel') || 'askii-default';
     default:
       return config.get<string>('ollamaModel') || 'gemma3:270m';
   }
@@ -106,6 +113,11 @@ export async function getExtensionResponseWithImage(
     const model = config.get<string>('opencodegoModel') || 'glm-5.2';
     const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
     return getOpenCodeGoResponse(prompt, apiKey, model, baseURL, undefined, imageBase64);
+  } else if (platform === 'askiicloud') {
+    const apiKey = config.get<string>('askiicloudApiKey') || '';
+    const model = config.get<string>('askiicloudModel') || 'askii-default';
+    const baseURL = config.get<string>('askiicloudUrl') || ASKII_CLOUD_URL;
+    return getAskiiCloudResponse(prompt, apiKey, model, baseURL, undefined, imageBase64);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -193,6 +205,12 @@ export async function getExtensionResponseStreaming(
     const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
     const result = await getOpenCodeGoResponse(prompt, apiKey, model, baseURL, system);
     onChunk(result);
+  } else if (platform === 'askiicloud') {
+    const apiKey = config.get<string>('askiicloudApiKey') || '';
+    const model = config.get<string>('askiicloudModel') || 'askii-default';
+    const baseURL = config.get<string>('askiicloudUrl') || ASKII_CLOUD_URL;
+    const result = await getAskiiCloudResponse(prompt, apiKey, model, baseURL, system);
+    onChunk(result);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const model = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -251,6 +269,10 @@ export async function getExtensionResponse(
     const apiKey = config.get<string>('opencodegoApiKey') || '';
     const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
     return getOpenCodeGoResponse(prompt, apiKey, model, baseURL, system, undefined, signal);
+  } else if (platform === 'askiicloud') {
+    const apiKey = config.get<string>('askiicloudApiKey') || '';
+    const baseURL = config.get<string>('askiicloudUrl') || ASKII_CLOUD_URL;
+    return getAskiiCloudResponse(prompt, apiKey, model, baseURL, system, undefined, signal);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     return getOllamaResponse(prompt, url, model, system, undefined, signal);
@@ -300,6 +322,11 @@ export async function getExtensionChat(messages: ChatMessage[]): Promise<string>
     const mdl = config.get<string>('opencodegoModel') || 'glm-5.2';
     const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
     return getOpenCodeGoChat(messages, apiKey, mdl, baseURL);
+  } else if (platform === 'askiicloud') {
+    const apiKey = config.get<string>('askiicloudApiKey') || '';
+    const mdl = config.get<string>('askiicloudModel') || 'askii-default';
+    const baseURL = config.get<string>('askiicloudUrl') || ASKII_CLOUD_URL;
+    return getAskiiCloudChat(messages, apiKey, mdl, baseURL);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const mdl = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -354,6 +381,11 @@ export async function getExtensionChatStreaming(
     const mdl = config.get<string>('opencodegoModel') || 'glm-5.2';
     const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
     return getOpenCodeGoChatStreaming(messages, apiKey, mdl, onChunk, baseURL);
+  } else if (platform === 'askiicloud') {
+    const apiKey = config.get<string>('askiicloudApiKey') || '';
+    const mdl = config.get<string>('askiicloudModel') || 'askii-default';
+    const baseURL = config.get<string>('askiicloudUrl') || ASKII_CLOUD_URL;
+    return getAskiiCloudChatStreaming(messages, apiKey, mdl, onChunk, baseURL);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     const mdl = config.get<string>('ollamaModel') || 'gemma3:270m';
@@ -389,6 +421,11 @@ export async function validateProviderConfig(): Promise<string | null> {
     const apiKey = (config.get<string>('opencodegoApiKey') || '').trim();
     if (!apiKey) {
       return 'ASKII (opencodego): No API key configured. Set askii.opencodegoApiKey in Settings.';
+    }
+  } else if (platform === 'askiicloud') {
+    const apiKey = (config.get<string>('askiicloudApiKey') || '').trim();
+    if (!apiKey) {
+      return 'ASKII (askiicloud): No API key configured. Set askii.askiicloudApiKey in Settings.';
     }
   } else if (platform === 'copilot') {
     const family = config.get<string>('copilotModel') || 'gpt-4o';
@@ -495,6 +532,13 @@ export async function getLLMExplanation(
       const baseURL = config.get<string>('opencodegoUrl') || OPENCODE_GO_URL;
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getOpenCodeGoResponse(userPrompt, apiKey, model, baseURL, systemPrompt);
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      return result || 'No explanation available.';
+    } else if (platform === 'askiicloud') {
+      const apiKey = config.get<string>('askiicloudApiKey') || '';
+      const baseURL = config.get<string>('askiicloudUrl') || ASKII_CLOUD_URL;
+      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      const result = await getAskiiCloudResponse(userPrompt, apiKey, model, baseURL, systemPrompt);
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       return result || 'No explanation available.';
     } else {

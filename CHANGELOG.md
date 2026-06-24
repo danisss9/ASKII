@@ -4,6 +4,17 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.3.2] - 2026-06-24
+
+### Added
+
+- **ASKII Cloud platform support**: Added `askiicloud` as a new LLM platform across the extension and CLI, powered by ASKII Cloud — an in-house, OpenAI-compatible inference service at [https://api.askii.dev](https://api.askii.dev). All it needs is an API key
+- **`askii.askiicloudApiKey` setting**: Your ASKII Cloud API key (used when `llmPlatform` is `askiicloud`)
+- **`askii.askiicloudModel` setting**: ASKII Cloud model id (default: `askii-default`)
+- **`askii.askiicloudUrl` setting**: ASKII Cloud base URL (default: `https://api.askii.dev/v1`); override only if needed
+- **CLI flags / env vars**: `--askiicloud-key` (`ASKII_CLOUD_KEY`), `--askiicloud-model` (`ASKII_CLOUD_MODEL`), `--askiicloud-url` (`ASKII_CLOUD_URL`); selectable via `-p askiicloud` and the REPL `/platform askiicloud`
+- **`getAskiiCloudResponse` / `getAskiiCloudChat` / `getAskiiCloudChatStreaming`** in `common/providers.ts`: Shared ASKII Cloud provider functions (thin wrappers over the OpenAI-compatible client, pinned to `ASKII_CLOUD_URL`); vision (base64 images) and streaming are supported
+
 ## [0.3.1] - 2026-06-23
 
 ### Added
