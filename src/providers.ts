@@ -35,7 +35,7 @@ import { loadWikiIndex, searchWikiRaw } from '@common/wiki';
  * @param config     The workspace configuration for "askii".
  * @param overrideKey  The setting key that holds the per-feature override
  *                     (e.g. "inlinePlatform").
- * @returns The resolved platform id (ollama, copilot, lmstudio, openai,
+ * @returns The resolved platform id (ollama, lmstudio, openai,
  *          anthropic, opencodego, or askiicloud).
  */
 export function resolvePlatform(
@@ -54,7 +54,7 @@ export function resolvePlatform(
  * per-feature model override.
  *
  * When `modelOverride` is unset, empty, or "default", the platform's default
- * model setting (askii.ollamaModel, askii.copilotModel, askii.openaiModel,
+ * model setting (askii.ollamaModel, askii.openaiModel,
  * askii.anthropicModel, askii.lmStudioModel, askii.opencodegoModel,
  * askii.askiicloudModel) is used.
  *
@@ -69,8 +69,6 @@ export function resolveModel(
     return modelOverride;
   }
   switch (platform) {
-    case 'copilot':
-      return config.get<string>('copilotModel') || 'gpt-4o';
     case 'lmstudio':
       return config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
     case 'openai':
@@ -93,9 +91,7 @@ export async function getExtensionResponseWithImage(
   const config = vscode.workspace.getConfiguration('askii');
   const platform = config.get<string>('llmPlatform') || 'ollama';
 
-  if (platform === 'copilot') {
-    return getCopilotResponse(prompt, imageBase64);
-  } else if (platform === 'lmstudio') {
+  if (platform === 'lmstudio') {
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
     return getLMStudioResponse(prompt, url, model, undefined, imageBase64);
@@ -125,39 +121,6 @@ export async function getExtensionResponseWithImage(
   }
 }
 
-export async function getCopilotResponse(prompt: string, imageBase64?: string): Promise<string> {
-  const config = vscode.workspace.getConfiguration('askii');
-  const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
-
-  const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
-  if (models.length === 0) throw new Error('GitHub Copilot not available');
-
-  const model = models[0];
-
-  let userMessage: vscode.LanguageModelChatMessage;
-  if (imageBase64) {
-    const imageBuffer = Buffer.from(imageBase64, 'base64');
-    userMessage = vscode.LanguageModelChatMessage.User([
-      new vscode.LanguageModelDataPart(imageBuffer, 'image/png'),
-      new vscode.LanguageModelTextPart(prompt),
-    ]);
-  } else {
-    userMessage = vscode.LanguageModelChatMessage.User(prompt);
-  }
-
-  const chatResponse = await model.sendRequest(
-    [userMessage],
-    {},
-    new vscode.CancellationTokenSource().token,
-  );
-
-  let responseText = '';
-  for await (const fragment of chatResponse.text) {
-    responseText += fragment;
-  }
-  return responseText;
-}
-
 export async function getExtensionResponseStreaming(
   prompt: string,
   onChunk: (chunk: string) => void,
@@ -166,23 +129,7 @@ export async function getExtensionResponseStreaming(
   const config = vscode.workspace.getConfiguration('askii');
   const platform = config.get<string>('llmPlatform') || 'ollama';
 
-  if (platform === 'copilot') {
-    const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
-    const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
-    if (models.length === 0) throw new Error('GitHub Copilot not available');
-    const model = models[0];
-    const messages: vscode.LanguageModelChatMessage[] = [];
-    if (system) messages.push(vscode.LanguageModelChatMessage.User(system));
-    messages.push(vscode.LanguageModelChatMessage.User(prompt));
-    const chatResponse = await model.sendRequest(
-      messages,
-      {},
-      new vscode.CancellationTokenSource().token,
-    );
-    for await (const fragment of chatResponse.text) {
-      if (fragment) onChunk(fragment);
-    }
-  } else if (platform === 'lmstudio') {
+  if (platform === 'lmstudio') {
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     const model = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
     // LMStudio SDK does not expose a simple streaming interface; deliver as one chunk
@@ -232,30 +179,7 @@ export async function getExtensionResponse(
       : config.get<string>('llmPlatform') || 'ollama';
   const model = resolveModel(config, platform, modelOverride);
 
-  if (platform === 'copilot') {
-    const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: model });
-    if (models.length === 0) throw new Error('GitHub Copilot not available');
-    const copilotModel = models[0];
-    const messages: vscode.LanguageModelChatMessage[] = [];
-    if (system) messages.push(vscode.LanguageModelChatMessage.User(system));
-    messages.push(vscode.LanguageModelChatMessage.User(prompt));
-    // Bridge the AbortSignal to a VSCode cancellation token so a superseded request stops streaming.
-    const cts = new vscode.CancellationTokenSource();
-    if (signal) {
-      if (signal.aborted) cts.cancel();
-      else signal.addEventListener('abort', () => cts.cancel(), { once: true });
-    }
-    try {
-      const chatResponse = await copilotModel.sendRequest(messages, {}, cts.token);
-      let responseText = '';
-      for await (const fragment of chatResponse.text) {
-        responseText += fragment;
-      }
-      return responseText;
-    } finally {
-      cts.dispose();
-    }
-  } else if (platform === 'lmstudio') {
+  if (platform === 'lmstudio') {
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     return getLMStudioResponse(prompt, url, model, system, undefined, signal);
   } else if (platform === 'openai') {
@@ -283,28 +207,7 @@ export async function getExtensionChat(messages: ChatMessage[]): Promise<string>
   const config = vscode.workspace.getConfiguration('askii');
   const platform = config.get<string>('llmPlatform') || 'ollama';
 
-  if (platform === 'copilot') {
-    const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
-    const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
-    if (models.length === 0) throw new Error('GitHub Copilot not available');
-    const model = models[0];
-
-    const vsMessages: vscode.LanguageModelChatMessage[] = messages.map((m) => {
-      if (m.role === 'assistant') return vscode.LanguageModelChatMessage.Assistant(m.content);
-      return vscode.LanguageModelChatMessage.User(m.content);
-    });
-
-    const chatResponse = await model.sendRequest(
-      vsMessages,
-      {},
-      new vscode.CancellationTokenSource().token,
-    );
-    let responseText = '';
-    for await (const fragment of chatResponse.text) {
-      responseText += fragment;
-    }
-    return responseText;
-  } else if (platform === 'lmstudio') {
+  if (platform === 'lmstudio') {
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     const mdl = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
     return getLMStudioChat(messages, url, mdl);
@@ -341,29 +244,7 @@ export async function getExtensionChatStreaming(
   const config = vscode.workspace.getConfiguration('askii');
   const platform = config.get<string>('llmPlatform') || 'ollama';
 
-  if (platform === 'copilot') {
-    const copilotModel = config.get<string>('copilotModel') || 'gpt-4o';
-    const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: copilotModel });
-    if (models.length === 0) throw new Error('GitHub Copilot not available');
-    const model = models[0];
-    const vsMessages: vscode.LanguageModelChatMessage[] = messages.map((m) => {
-      if (m.role === 'assistant') return vscode.LanguageModelChatMessage.Assistant(m.content);
-      return vscode.LanguageModelChatMessage.User(m.content);
-    });
-    const chatResponse = await model.sendRequest(
-      vsMessages,
-      {},
-      new vscode.CancellationTokenSource().token,
-    );
-    let full = '';
-    for await (const fragment of chatResponse.text) {
-      if (fragment) {
-        onChunk(fragment);
-        full += fragment;
-      }
-    }
-    return full;
-  } else if (platform === 'lmstudio') {
+  if (platform === 'lmstudio') {
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     const mdl = config.get<string>('lmStudioModel') || 'qwen/qwen3-coder-30b';
     return getLMStudioChatStreaming(messages, url, mdl, onChunk);
@@ -399,7 +280,6 @@ export async function getExtensionChatStreaming(
  *
  * Checks performed per platform:
  *  - openai / anthropic : API key must be non-empty
- *  - copilot            : selectChatModels must return at least one model
  *  - ollama             : GET <url>/api/tags must succeed within 3 s
  *  - lmstudio           : GET <http-url>/v1/models must succeed within 3 s
  */
@@ -426,12 +306,6 @@ export async function validateProviderConfig(): Promise<string | null> {
     const apiKey = (config.get<string>('askiicloudApiKey') || '').trim();
     if (!apiKey) {
       return 'ASKII (askiicloud): No API key configured. Set askii.askiicloudApiKey in Settings.';
-    }
-  } else if (platform === 'copilot') {
-    const family = config.get<string>('copilotModel') || 'gpt-4o';
-    const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family });
-    if (models.length === 0) {
-      return `ASKII (copilot): No Copilot model available for "${family}". Ensure the GitHub Copilot extension is installed and you are signed in.`;
     }
   } else if (platform === 'ollama') {
     const url = (config.get<string>('ollamaUrl') || '').trim();
@@ -486,29 +360,7 @@ export async function getLLMExplanation(
   try {
     if (abortSignal?.aborted) throw new Error('Request cancelled');
 
-    if (platform === 'copilot') {
-      const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: model });
-      if (models.length === 0) return 'Error: GitHub Copilot not available';
-
-      const copilotModel = models[0];
-      const messages = [
-        vscode.LanguageModelChatMessage.User(systemPrompt),
-        vscode.LanguageModelChatMessage.User(userPrompt),
-      ];
-      const chatResponse = await copilotModel.sendRequest(
-        messages,
-        {},
-        new vscode.CancellationTokenSource().token,
-      );
-
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
-
-      let responseText = '';
-      for await (const fragment of chatResponse.text) {
-        responseText += fragment;
-      }
-      return responseText || 'No explanation available.';
-    } else if (platform === 'lmstudio') {
+    if (platform === 'lmstudio') {
       const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getLMStudioResponse(userPrompt, url, model, systemPrompt);

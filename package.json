@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -129,7 +129,6 @@
           "type": "string",
           "enum": [
             "ollama",
-            "copilot",
             "lmstudio",
             "openai",
             "anthropic",
@@ -137,7 +136,7 @@
             "askiicloud"
           ],
           "default": "ollama",
-          "description": "LLM platform to use (ollama, copilot, lmstudio, openai, anthropic, opencodego, or askiicloud)"
+          "description": "LLM platform to use (ollama, lmstudio, openai, anthropic, opencodego, or askiicloud)"
         },
         "askii.ollamaUrl": {
           "type": "string",
@@ -153,11 +152,6 @@
           "type": "string",
           "default": "gemma4:e4b",
           "description": "Ollama model to use for explanations"
-        },
-        "askii.copilotModel": {
-          "type": "string",
-          "default": "gpt-5-mini",
-          "description": "GitHub Copilot model family to use for explanations"
         },
         "askii.lmStudioModel": {
           "type": "string",
@@ -287,7 +281,6 @@
           "enum": [
             "default",
             "ollama",
-            "copilot",
             "lmstudio",
             "openai",
             "anthropic",
@@ -297,7 +290,6 @@
           "enumDescriptions": [
             "Use the platform configured in askii.llmPlatform",
             "Ollama (local)",
-            "GitHub Copilot",
             "LM Studio (local)",
             "OpenAI / OpenAI-compatible",
             "Anthropic Claude",
@@ -310,7 +302,7 @@
         "askii.inlineModel": {
           "type": "string",
           "default": "default",
-          "description": "Model id to use for inline auto-complete and helper mode. Set to \"default\" to use the default model of the selected platform (askii.ollamaModel, askii.copilotModel, askii.openaiModel, etc.)."
+          "description": "Model id to use for inline auto-complete and helper mode. Set to "default" to use the default model of the selected platform (askii.ollamaModel, askii.openaiModel, etc.)."
         },
         "askii.inlineCompletionEagerness": {
           "type": "string",

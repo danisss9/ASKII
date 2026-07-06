@@ -4,7 +4,7 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
-## [0.3.2] - 2026-06-24
+## [0.4.0] - 2026-07-07
 
 ### Added
 
@@ -14,6 +14,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - **`askii.askiicloudUrl` setting**: ASKII Cloud base URL (default: `https://api.askii.dev/v1`); override only if needed
 - **CLI flags / env vars**: `--askiicloud-key` (`ASKII_CLOUD_KEY`), `--askiicloud-model` (`ASKII_CLOUD_MODEL`), `--askiicloud-url` (`ASKII_CLOUD_URL`); selectable via `-p askiicloud` and the REPL `/platform askiicloud`
 - **`getAskiiCloudResponse` / `getAskiiCloudChat` / `getAskiiCloudChatStreaming`** in `common/providers.ts`: Shared ASKII Cloud provider functions (thin wrappers over the OpenAI-compatible client, pinned to `ASKII_CLOUD_URL`); vision (base64 images) and streaming are supported
+
+### Removed
+
+- **GitHub Copilot LLM provider**: Removed `copilot` as a selectable LLM platform from the extension and CLI. The `askii.copilotModel` setting, the `copilot` enum value in `askii.llmPlatform` / `askii.inlinePlatform`, and all Copilot-specific code paths in `src/providers.ts` (including `getCopilotResponse`) have been removed. Use any of the remaining platforms — `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`, or `askiicloud` — instead.
 
 ## [0.3.1] - 2026-06-23
 
