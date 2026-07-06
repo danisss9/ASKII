@@ -15,12 +15,6 @@ import {
 } from '@common/workspace';
 import { unescapeJsonString, extractCode } from '@common/utils';
 import { buildWikiIndex, saveWikiIndex, loadWikiIndex, searchWiki } from '@common/wiki';
-import {
-  buildCodeWikiIndex,
-  saveCodeWikiIndex,
-  loadCodeWikiIndex,
-  searchCodeWiki,
-} from '@common/codewiki';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import {
   getOllamaResponse,
@@ -83,8 +77,6 @@ interface Config {
   chromePath: string | undefined;
   wikiPath: string | undefined;
   useWiki: boolean;
-  codeWikiPath: string | undefined;
-  useCodeWiki: boolean;
 }
 
 function getFlagValue(flags: string[], ...names: string[]): string | undefined {
@@ -184,9 +176,6 @@ function getConfig(flags: string[]): Config {
     chromePath: getFlagValue(flags, '--chrome-path') || process.env.ASKII_CHROME_PATH || undefined,
     wikiPath: getFlagValue(flags, '--wiki-path') || process.env.ASKII_WIKI_PATH || undefined,
     useWiki: hasFlag(flags, '--use-wiki') || process.env.ASKII_USE_WIKI === '1',
-    codeWikiPath:
-      getFlagValue(flags, '--code-wiki-path') || process.env.ASKII_CODE_WIKI_PATH || undefined,
-    useCodeWiki: hasFlag(flags, '--use-code-wiki') || process.env.ASKII_USE_CODE_WIKI === '1',
   };
 }
 
@@ -199,19 +188,6 @@ function getCliWikiContext(config: Config, query: string): string {
   }
   const ctx = searchWiki(query, index);
   if (ctx) console.error(`  [wiki] Injecting ${ctx.length} chars of context`);
-  return ctx;
-}
-
-function getCliCodeWikiContext(config: Config, query: string): string {
-  if (!config.useCodeWiki) return '';
-  const rootPath = config.codeWikiPath || process.cwd();
-  const index = loadCodeWikiIndex(rootPath);
-  if (!index) {
-    console.error('  [code-wiki] No index found — run: askii code-wiki-reload');
-    return '';
-  }
-  const ctx = searchCodeWiki(query, index);
-  if (ctx) console.error(`  [code-wiki] Injecting ${ctx.length} chars of context`);
   return ctx;
 }
 
@@ -429,7 +405,6 @@ function replCompleter(line: string): [string[], string] {
     '/edit ',
     '/explain ',
     '/wiki-reload',
-    '/code-wiki-reload',
     '/platform ',
     '/model ',
     '/config',
@@ -453,7 +428,6 @@ REPL Commands:
   /edit --file <path> <instr>    Edit a file in place
   /explain <text>                Explain a line of code
   /wiki-reload                   Rebuild the docs wiki index
-  /code-wiki-reload              Rebuild the code wiki index
   /platform <name>               Switch platform: ollama|lmstudio|openai|anthropic|opencodego|askiicloud
   /model <name>                  Switch model for current session
   /config                        Show current session config
@@ -467,14 +441,12 @@ Config overrides (bare flags at the prompt update session config):
 
 function printWelcomeBanner(config: Config): void {
   const wikiStatus = config.useWiki ? `on (${config.wikiPath ?? 'no path set'})` : 'off';
-  const codeWikiStatus = config.useCodeWiki ? 'on' : 'off';
   console.error(`
 ASKII ( •_•)>⌐■-■ (⌐■_■)  — interactive mode
 
   Platform : ${config.platform} (${config.model})
   Workspace: ${process.cwd()}
   Wiki     : ${wikiStatus}
-  Code wiki: ${codeWikiStatus}
 
 Type a message to chat, /help for commands, /exit to quit.
 `);
@@ -520,11 +492,7 @@ function mergeConfigOverride(base: Config, tokens: string[]): Config {
   return result;
 }
 
-async function runReplAsk(
-  question: string,
-  config: Config,
-  history: ChatMessage[],
-): Promise<void> {
+async function runReplAsk(question: string, config: Config, history: ChatMessage[]): Promise<void> {
   if (history.length === 0) {
     const system =
       config.mode === 'helpful'
@@ -534,11 +502,9 @@ async function runReplAsk(
   }
 
   const wikiCtx = getCliWikiContext(config, question);
-  const codeWikiCtx = getCliCodeWikiContext(config, question);
   const wikiSection = wikiCtx ? `Relevant documentation:\n${wikiCtx}\n\n` : '';
-  const codeSection = codeWikiCtx ? `Relevant code:\n${codeWikiCtx}\n\n` : '';
 
-  history.push({ role: 'user', content: `${wikiSection}${codeSection}${question}` });
+  history.push({ role: 'user', content: `${wikiSection}${question}` });
 
   process.stderr.write(`\nASKII: `);
   let response = '';
@@ -572,9 +538,7 @@ async function runReplDo(
     console.error(`Workspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
 
     const wikiAvailable = !!(config.wikiPath && loadWikiIndex(config.wikiPath));
-    const codeWikiRoot = config.codeWikiPath || workDir;
-    const codeWikiAvailable = !!(config.useCodeWiki && loadCodeWikiIndex(codeWikiRoot));
-    const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable, codeWikiAvailable);
+    const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable);
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -610,19 +574,11 @@ async function runReplDo(
 
       const readActions = actions.filter(
         (a) =>
-          a.type === 'view' ||
-          a.type === 'list' ||
-          a.type === 'search' ||
-          a.type === 'wiki_search' ||
-          a.type === 'code_search',
+          a.type === 'view' || a.type === 'list' || a.type === 'search' || a.type === 'wiki_search',
       );
       const writeActions = actions.filter(
         (a) =>
-          a.type !== 'view' &&
-          a.type !== 'list' &&
-          a.type !== 'search' &&
-          a.type !== 'wiki_search' &&
-          a.type !== 'code_search',
+          a.type !== 'view' && a.type !== 'list' && a.type !== 'search' && a.type !== 'wiki_search',
       );
 
       const feedbackParts: string[] = [];
@@ -637,13 +593,6 @@ async function runReplDo(
             viewResults[`wiki_search:${q}`] = wikiData
               ? searchWiki(q, wikiData) || 'No wiki results found'
               : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
-          } else if (action.type === 'code_search') {
-            const q = action.query ?? '';
-            console.error(`  → Code search: "${q}"`);
-            const codeWikiData = loadCodeWikiIndex(codeWikiRoot);
-            viewResults[`code_search:${q}`] = codeWikiData
-              ? searchCodeWiki(q, codeWikiData) || 'No code results found'
-              : 'Code wiki not available — run: askii code-wiki-reload';
           } else if (action.type === 'search') {
             console.error(`  → Search: "${action.pattern}"`);
             viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);
@@ -651,15 +600,16 @@ async function runReplDo(
             for (const p of action.paths) {
               console.error(`  → Viewing: ${p}`);
               try {
-                viewResults[p] = executeViewAction({ ...action, path: p, paths: undefined }, workDir);
+                viewResults[p] = executeViewAction(
+                  { ...action, path: p, paths: undefined },
+                  workDir,
+                );
               } catch (e) {
                 viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
               }
             }
           } else {
-            console.error(
-              `  → ${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`,
-            );
+            console.error(`  → ${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`);
             viewResults[action.path!] = executeViewAction(action, workDir);
           }
         } catch (e) {
@@ -681,7 +631,11 @@ async function runReplDo(
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Path error';
           console.error(`  ✗ BLOCKED: ${msg}`);
-          actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail: msg });
+          actionResults.push({
+            action: `${action.type}:${action.path}`,
+            status: 'error',
+            detail: msg,
+          });
           continue;
         }
 
@@ -841,7 +795,9 @@ async function handleReplInput(
 
       case '/platform': {
         if (!rest) {
-          console.error('Usage: /platform <ollama|lmstudio|openai|anthropic|opencodego|askiicloud>');
+          console.error(
+            'Usage: /platform <ollama|lmstudio|openai|anthropic|opencodego|askiicloud>',
+          );
           return false;
         }
         const updated = mergeConfigOverride(config, ['--platform', rest]);
@@ -876,21 +832,6 @@ async function handleReplInput(
           saveWikiIndex(index, wikiPath);
           console.error(
             `Wiki indexed: ${index.chunkCount} chunks from ${index.fileCount} file(s). ${getRandomKaomoji()}`,
-          );
-        } catch (e) {
-          console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
-        }
-        return false;
-      }
-
-      case '/code-wiki-reload': {
-        const rootPath = path.resolve(config.codeWikiPath || process.cwd());
-        try {
-          console.error(`Indexing code: ${rootPath}`);
-          const index = buildCodeWikiIndex(rootPath);
-          saveCodeWikiIndex(index, rootPath);
-          console.error(
-            `Code wiki indexed: ${index.chunkCount} chunks from ${index.fileCount} file(s). ${getRandomKaomoji()}`,
           );
         } catch (e) {
           console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
@@ -1074,7 +1015,6 @@ Commands:
   control <instruction> Screen control — takes screenshots and drives mouse/keyboard
   browse <task>         Browser agent — launches Puppeteer and navigates the web
   wiki-reload           Index .md files from --wiki-path into the local vector database
-  code-wiki-reload      Index code files in --code-wiki-path (default: cwd)
 
 Options:
   -p, --platform <p>         LLM platform: ollama, lmstudio, openai, anthropic, opencodego, askiicloud (default: ollama)
@@ -1103,8 +1043,6 @@ Options:
       --chrome-path <path>   Path to Chrome/Chromium executable for "browse" (env: ASKII_CHROME_PATH)
       --wiki-path <path>     Path to folder with .md docs for wiki RAG (env: ASKII_WIKI_PATH)
       --use-wiki             Inject wiki context into ask/edit/do (env: ASKII_USE_WIKI=1)
-      --code-wiki-path <p>   Path to root of codebase to index (default: cwd, env: ASKII_CODE_WIKI_PATH)
-      --use-code-wiki        Inject code wiki context into ask/edit/do (env: ASKII_USE_CODE_WIKI=1)
   -y, --yes                  Auto-confirm all actions
   -h, --help                 Show help
 
@@ -1118,7 +1056,6 @@ Environment variables:
   ASKII_CLOUD_KEY       ASKII_CLOUD_MODEL       ASKII_CLOUD_URL
   ASKII_MODE            ASKII_MAX_ROUNDS
   ASKII_WIKI_PATH       ASKII_USE_WIKI
-  ASKII_CODE_WIKI_PATH  ASKII_USE_CODE_WIKI
 
 Examples:
   cat myfile.ts | askii ask "what does this do?"
@@ -1134,8 +1071,6 @@ Examples:
   askii browse --yes --headless --ollama-model llava "search Google for Node.js"
   askii wiki-reload --wiki-path ./docs
   askii ask --wiki-path ./docs --use-wiki "how do I configure the database?"
-  askii code-wiki-reload
-  askii ask --use-code-wiki "where is the wiki index built?"
 `);
 }
 
@@ -1180,21 +1115,6 @@ async function main() {
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);
     }
-  } else if (command === 'code-wiki-reload') {
-    const rootPath = path.resolve(
-      config.codeWikiPath || getFlagValue(flags, '--code-wiki-path') || process.cwd(),
-    );
-    try {
-      console.error(`Indexing code files in: ${rootPath}`);
-      const index = buildCodeWikiIndex(rootPath);
-      saveCodeWikiIndex(index, rootPath);
-      console.error(
-        `Code wiki indexed: ${index.chunkCount} chunks from ${index.fileCount} file(s). ${getRandomKaomoji()}`,
-      );
-    } catch (error) {
-      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      process.exit(1);
-    }
   } else if (command === 'ask') {
     const stdin = await readStdin();
     const code = getFlagValue(flags, '-c', '--code') || stdin;
@@ -1209,10 +1129,6 @@ async function main() {
 
     const wikiCtxAsk = getCliWikiContext(config, question);
     const wikiSectionAsk = wikiCtxAsk ? `Relevant documentation:\n${wikiCtxAsk}\n\n` : '';
-    const codeWikiCtxAsk = getCliCodeWikiContext(config, question);
-    const codeWikiSectionAsk = codeWikiCtxAsk
-      ? `Relevant code from the codebase:\n${codeWikiCtxAsk}\n\n`
-      : '';
 
     let prompt: string;
     if (code) {
@@ -1220,9 +1136,9 @@ async function main() {
         .filter(Boolean)
         .join('\n');
       const codeBlock = `\`\`\`${lang ?? ''}\n${code}\n\`\`\``;
-      prompt = `${wikiSectionAsk}${codeWikiSectionAsk}${metaLines ? metaLines + '\n' : ''}Code:\n${codeBlock}\n\nQuestion: ${question}`;
+      prompt = `${wikiSectionAsk}${metaLines ? metaLines + '\n' : ''}Code:\n${codeBlock}\n\nQuestion: ${question}`;
     } else {
-      prompt = `${wikiSectionAsk}${codeWikiSectionAsk}Question: ${question}`;
+      prompt = `${wikiSectionAsk}Question: ${question}`;
     }
 
     console.error(`ASKII is thinking... ${getRandomThinkingKaomoji()}`);
@@ -1256,11 +1172,7 @@ async function main() {
       .join('\n');
     const wikiCtxEdit = getCliWikiContext(config, instruction);
     const wikiSectionEdit = wikiCtxEdit ? `Relevant documentation:\n${wikiCtxEdit}\n\n` : '';
-    const codeWikiCtxEdit = getCliCodeWikiContext(config, instruction);
-    const codeWikiSectionEdit = codeWikiCtxEdit
-      ? `Relevant code from the codebase:\n${codeWikiCtxEdit}\n\n`
-      : '';
-    const prompt = `${wikiSectionEdit}${codeWikiSectionEdit}${metaLines ? metaLines + '\n' : ''}Update this code:\n\`\`\`${lang ?? ''}\n${code}\n\`\`\`\n\nRequest: ${instruction}\n\nReturn only the updated code without explanation.`;
+    const prompt = `${wikiSectionEdit}${metaLines ? metaLines + '\n' : ''}Update this code:\n\`\`\`${lang ?? ''}\n${code}\n\`\`\`\n\nRequest: ${instruction}\n\nReturn only the updated code without explanation.`;
 
     console.error(`ASKII is editing... (•_•)>⌐■-■`);
 
@@ -1327,13 +1239,7 @@ async function main() {
       console.error(`\nWorkspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
 
       const wikiAvailableDo = !!(config.wikiPath && loadWikiIndex(config.wikiPath));
-      const codeWikiRootDo = config.codeWikiPath || workDir;
-      const codeWikiAvailableDo = !!(config.useCodeWiki && loadCodeWikiIndex(codeWikiRootDo));
-      const systemPrompt = buildDoSystemPrompt(
-        workspaceStructure,
-        wikiAvailableDo,
-        codeWikiAvailableDo,
-      );
+      const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailableDo);
       const messages: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: task },
@@ -1371,16 +1277,14 @@ async function main() {
             a.type === 'view' ||
             a.type === 'list' ||
             a.type === 'search' ||
-            a.type === 'wiki_search' ||
-            a.type === 'code_search',
+            a.type === 'wiki_search',
         );
         const writeActions = actions.filter(
           (a) =>
             a.type !== 'view' &&
             a.type !== 'list' &&
             a.type !== 'search' &&
-            a.type !== 'wiki_search' &&
-            a.type !== 'code_search',
+            a.type !== 'wiki_search',
         );
 
         const feedbackParts: string[] = [];
@@ -1396,13 +1300,6 @@ async function main() {
               viewResults[`wiki_search:${q}`] = wikiData
                 ? searchWiki(q, wikiData) || 'No wiki results found'
                 : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
-            } else if (action.type === 'code_search') {
-              const q = action.query ?? '';
-              console.error(`  → Code search: "${q}"`);
-              const codeWikiData = loadCodeWikiIndex(codeWikiRootDo);
-              viewResults[`code_search:${q}`] = codeWikiData
-                ? searchCodeWiki(q, codeWikiData) || 'No code results found'
-                : 'Code wiki not available — run: askii code-wiki-reload';
             } else if (action.type === 'search') {
               console.error(`  → Search: "${action.pattern}"`);
               viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);

@@ -170,19 +170,6 @@ The index is cached in memory after the first load — no disk reads on subseque
 
 ---
 
-### Codebase Wiki RAG (Code Context)
-
-Index your workspace code files (TypeScript, Python, Go, Rust, and more) into a BM25 search index and inject the most relevant chunks as context into inline completion, Ask, Edit, and Do commands.
-
-1. Run **ASKII: Reload Code Wiki** from the command palette (or status-bar menu) — ASKII walks the workspace root, splits files into 60-line overlapping chunks, and saves the index as `.askii-code-wiki-index.json`. A progress notification confirms when done.
-2. Enable `askii.codeWikiEnabled` to inject code context into Ask / Edit / Do commands.
-3. Optionally enable `askii.codeWikiAutoReload` to rebuild the index automatically on each VS Code startup.
-4. When enabled, the inline completer also uses the code wiki — querying it with recent lines near the cursor to retrieve relevant context before requesting a completion.
-
-Skipped by default: `node_modules`, `dist`, `out`, `build`, `target`, and files over 200 KB. Add `.askii-code-wiki-index.json` to your `.gitignore`.
-
----
-
 ### Quick Access with Status Bar Button
 
 Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickly access:
@@ -193,7 +180,6 @@ Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickl
 - ASKII Control
 - ASKII Browse
 - Reload Wiki
-- Reload Code Wiki
 - Clear Cache
 
 ### Code Auto-completion
@@ -206,7 +192,6 @@ ASKII provides Copilot-style ghost-text completions inside any code file open in
    - `low` — triggers after 1 200 ms with a wide code context window
    - `medium` — 500 ms (default)
    - `high` — 200 ms with a narrower context window for speed
-4. Enable `askii.codeWikiEnabled` (after running **ASKII: Reload Code Wiki**) to include relevant chunks from your indexed codebase as additional context for each completion.
 
 ### Commit Message Generator
 
@@ -254,8 +239,6 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.inlinePlatform`: LLM platform for inline auto-complete **and** helper mode (`default` | `ollama` | `lmstudio` | `openai` | `anthropic` | `opencodego` | `askiicloud`, default: `default` — follows `askii.llmPlatform`)
 - `askii.inlineModel`: Model id for inline auto-complete **and** helper mode (default: `default` — uses the selected platform's default model). Set to any model id supported by the chosen platform to override
 - `askii.inlineCompletionEagerness`: Completion trigger speed — `low` (1 200 ms), `medium` (500 ms, default), `high` (200 ms)
-- `askii.codeWikiEnabled`: Enable codebase wiki RAG context for inline completion, Ask, Edit, and Do (default: `false`). Run **ASKII: Reload Code Wiki** first
-- `askii.codeWikiAutoReload`: Automatically rebuild the codebase wiki index on extension startup (default: `false`)
 - `askii.commitMessageInstructions`: Path to a `.md` file with custom instructions for the commit message generator (appended to the built-in system prompt). Absolute or relative to the workspace root. Leave empty to use the built-in prompt (default: `""`)
 - `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control / Browse commands (default: 5)
 - `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control / Browse (default: `false`)

@@ -13,7 +13,6 @@ import {
   askiiControlCommand,
   askiiBrowseCommand,
   askiiReloadWikiCommand,
-  askiiReloadCodeWikiCommand,
   askiiDiffProvider,
 } from './commands';
 import { validateProviderConfig } from './providers';
@@ -33,12 +32,6 @@ export function activate(context: vscode.ExtensionContext) {
     (wikiConfig.get<boolean>('wikiAutoReload') ?? false)
   ) {
     askiiReloadWikiCommand();
-  }
-  if (
-    (wikiConfig.get<boolean>('codeWikiEnabled') ?? false) &&
-    (wikiConfig.get<boolean>('codeWikiAutoReload') ?? false)
-  ) {
-    askiiReloadCodeWikiCommand();
   }
   const decorationType = vscode.window.createTextEditorDecorationType({
     rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
@@ -78,9 +71,6 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('askii.reloadWiki', askiiReloadWikiCommand),
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand('askii.reloadCodeWiki', askiiReloadCodeWikiCommand),
-  );
-  context.subscriptions.push(
     vscode.commands.registerCommand('askii.generateCommitMessage', generateCommitMessageCommand),
   );
 
@@ -99,9 +89,8 @@ export function activate(context: vscode.ExtensionContext) {
         { label: '$(files) ASKII Do', command: 'askii.doTask' },
         { label: '$(screen-full) ASKII Control', command: 'askii.controlTask' },
         { label: '$(browser) ASKII Browse', command: 'askii.browseTask' },
+        { label: '$(sparkle) ASKII Git', command: 'askii.generateCommitMessage' },
         { label: '$(book) Reload Wiki', command: 'askii.reloadWiki' },
-        { label: '$(code) Reload Code Wiki', command: 'askii.reloadCodeWiki' },
-        { label: '$(sparkle) Generate Commit Message', command: 'askii.generateCommitMessage' },
         { label: '$(refresh) Clear Cache', command: 'askii.clearCache' },
       ]);
 

@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getExtensionResponse } from './providers';
-import { loadCodeWikiIndex, searchCodeWiki } from '@common/codewiki';
 
 export const INLINE_ACCEPT_COMMAND = 'askii.inlineCompletionAccepted';
 
@@ -10,20 +9,18 @@ No markdown fences, no explanations, no quotes. Never repeat text already before
 Match the file's language, indentation and style. Output nothing if no useful completion exists.`;
 
 // Hard cap on the most variable prompt sections to keep requests small and fast.
-const WIKI_CHAR_CAP = 600;
 const SELECTION_CHAR_CAP = 300;
 
 interface EagernessProfile {
   debounceMs: number;
   prefixChars: number;
   suffixChars: number;
-  topK: number;
 }
 
 const EAGERNESS_PROFILES: Record<string, EagernessProfile> = {
-  low: { debounceMs: 1200, prefixChars: 2000, suffixChars: 500, topK: 2 },
-  medium: { debounceMs: 500, prefixChars: 1200, suffixChars: 300, topK: 1 },
-  high: { debounceMs: 200, prefixChars: 800, suffixChars: 200, topK: 1 },
+  low: { debounceMs: 1200, prefixChars: 2000, suffixChars: 500 },
+  medium: { debounceMs: 500, prefixChars: 1200, suffixChars: 300 },
+  high: { debounceMs: 200, prefixChars: 800, suffixChars: 200 },
 };
 
 interface LastSuggestion {
@@ -122,7 +119,7 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
     const cancelSub = token.onCancellationRequested(() => controller.abort());
 
     try {
-      return await this.fetchCompletions(position, token, config, profile, id, ctx, controller.signal);
+      return await this.fetchCompletions(position, token, config, id, ctx, controller.signal);
     } catch (e) {
       if (!controller.signal.aborted) {
         console.error('Error fetching inline completion:', e);
@@ -161,8 +158,7 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
       if (selected) selectionText = selected.slice(0, SELECTION_CHAR_CAP);
     }
 
-    const contextKey =
-      `${document.uri.toString()}:${offset}:${hashString(prefix)}:${hashString(suffix)}`;
+    const contextKey = `${document.uri.toString()}:${offset}:${hashString(prefix)}:${hashString(suffix)}`;
 
     return {
       offset,
@@ -176,7 +172,11 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
     };
   }
 
-  private makeItem(text: string, position: vscode.Position, id: number): vscode.InlineCompletionItem {
+  private makeItem(
+    text: string,
+    position: vscode.Position,
+    id: number,
+  ): vscode.InlineCompletionItem {
     return new vscode.InlineCompletionItem(text, new vscode.Range(position, position), {
       command: INLINE_ACCEPT_COMMAND,
       title: '',
@@ -188,41 +188,16 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
     position: vscode.Position,
     token: vscode.CancellationToken,
     config: vscode.WorkspaceConfiguration,
-    profile: EagernessProfile,
     id: number,
     ctx: BaseContext,
     signal: AbortSignal,
   ): Promise<vscode.InlineCompletionItem[]> {
-    // Code wiki retrieval (the heaviest, most variable section) — capped, and only run after the
-    // debounce survives so we don't search on every keystroke.
-    let codeWikiSection = '';
-    if (config.get<boolean>('codeWikiEnabled') ?? false) {
-      const rootPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (rootPath) {
-        try {
-          const index = loadCodeWikiIndex(rootPath);
-          if (index) {
-            const queryLines = ctx.prefix
-              .split('\n')
-              .filter((l) => l.trim().length > 0)
-              .slice(-4)
-              .join(' ');
-            const wikiResults = searchCodeWiki(queryLines, index, profile.topK);
-            if (wikiResults) {
-              codeWikiSection = `Relevant codebase context:\n${wikiResults.slice(0, WIKI_CHAR_CAP)}\n\n`;
-            }
-          }
-        } catch {
-          // Non-fatal — continue without wiki context
-        }
-      }
-    }
-
-    const selectionSection = ctx.selectionText ? `Current selection:\n${ctx.selectionText}\n\n` : '';
+    const selectionSection = ctx.selectionText
+      ? `Current selection:\n${ctx.selectionText}\n\n`
+      : '';
 
     const prompt =
       `File: ${ctx.fileName} (language: ${ctx.languageId})\n\n` +
-      codeWikiSection +
       selectionSection +
       `Code before cursor:\n${ctx.prefix}\n` +
       `Code after cursor:\n${ctx.suffix}\n` +

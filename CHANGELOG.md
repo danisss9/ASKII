@@ -15,8 +15,19 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - **CLI flags / env vars**: `--askiicloud-key` (`ASKII_CLOUD_KEY`), `--askiicloud-model` (`ASKII_CLOUD_MODEL`), `--askiicloud-url` (`ASKII_CLOUD_URL`); selectable via `-p askiicloud` and the REPL `/platform askiicloud`
 - **`getAskiiCloudResponse` / `getAskiiCloudChat` / `getAskiiCloudChatStreaming`** in `common/providers.ts`: Shared ASKII Cloud provider functions (thin wrappers over the OpenAI-compatible client, pinned to `ASKII_CLOUD_URL`); vision (base64 images) and streaming are supported
 
+### Changed
+
+- **Status-bar quick-pick menu**: Renamed the **Generate Commit Message** entry to **ASKII Git** and moved it to sit above **Reload Wiki** and below **ASKII Browse** for a more logical grouping
+
 ### Removed
 
+- **Codebase wiki (code wiki) feature**: Removed the code wiki RAG feature entirely, leaving only the docs wiki (`askii.wikiPath` / `askii.wikiEnabled`) for documentation context. The following have been removed:
+  - `common/codewiki.ts` module (MiniSearch index over workspace code files)
+  - `ASKII: Reload Code Wiki` command (`askii.reloadCodeWiki`) and its status-bar menu entry
+  - `askii.codeWikiEnabled` and `askii.codeWikiAutoReload` settings
+  - `code_search` Do action type and its handling in the Do agent (extension + CLI)
+  - Code-wiki context injection in Ask / Edit / Do commands and inline completion
+  - CLI `code-wiki-reload` command, `/code-wiki-reload` REPL command, and `--code-wiki-path` / `--use-code-wiki` flags (plus `ASKII_CODE_WIKI_PATH` / `ASKII_USE_CODE_WIKI` env vars)
 - **GitHub Copilot LLM provider**: Removed `copilot` as a selectable LLM platform from the extension and CLI. The `askii.copilotModel` setting, the `copilot` enum value in `askii.llmPlatform` / `askii.inlinePlatform`, and all Copilot-specific code paths in `src/providers.ts` (including `getCopilotResponse`) have been removed. Use any of the remaining platforms — `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`, or `askiicloud` — instead.
 
 ## [0.3.1] - 2026-06-23

@@ -102,13 +102,8 @@
         "category": "ASKII"
       },
       {
-        "command": "askii.reloadCodeWiki",
-        "title": "ASKII: Reload Code Wiki",
-        "category": "ASKII"
-      },
-      {
         "command": "askii.generateCommitMessage",
-        "title": "ASKII: Generate Commit Message",
+        "title": "ASKII Git: Generate Commit Message",
         "category": "ASKII",
         "icon": "$(sparkle)"
       }
@@ -302,7 +297,7 @@
         "askii.inlineModel": {
           "type": "string",
           "default": "default",
-          "description": "Model id to use for inline auto-complete and helper mode. Set to "default" to use the default model of the selected platform (askii.ollamaModel, askii.openaiModel, etc.)."
+          "description": "Model id to use for inline auto-complete and helper mode. Set to \"default\" to use the default model of the selected platform (askii.ollamaModel, askii.openaiModel, etc.)."
         },
         "askii.inlineCompletionEagerness": {
           "type": "string",
@@ -318,16 +313,6 @@
           ],
           "default": "medium",
           "description": "How eagerly ASKII requests inline completions. Controls the debounce delay and context window size."
-        },
-        "askii.codeWikiEnabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable codebase wiki RAG context for inline completion, Ask, Edit, and Do commands. Run 'ASKII: Reload Code Wiki' to build the index."
-        },
-        "askii.codeWikiAutoReload": {
-          "type": "boolean",
-          "default": false,
-          "description": "Automatically rebuild and reload the code wiki index when the extension starts. Requires askii.codeWikiEnabled to be true."
         },
         "askii.commitMessageInstructions": {
           "type": "string",

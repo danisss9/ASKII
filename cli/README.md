@@ -29,7 +29,6 @@ ASKII ( •_•)>⌐■-■ (⌐■_■)  — interactive mode
   Platform : ollama (gemma4:e4b)
   Workspace: /your/project
   Wiki     : off
-  Code wiki: off
 
 Type a message to chat, /help for commands, /exit to quit.
 
@@ -57,20 +56,19 @@ Bare text input maintains a **persistent chat history** across turns — follow-
 
 ### REPL slash-commands
 
-| Command | Description |
-| --- | --- |
-| `/help` | Show all available commands |
-| `/ask <question>` | Explicit ask (same as bare text) |
-| `/do <task> [flags]` | Run the Do agent (`--max-rounds N`, `--yes`) |
-| `/edit --file <path> <instr>` | Edit a file in place |
-| `/explain <text>` | Explain a line of code |
-| `/wiki-reload` | Rebuild the docs wiki index |
-| `/code-wiki-reload` | Rebuild the code wiki index |
-| `/platform <name>` | Switch platform for the session (also updates default model) |
-| `/model <name>` | Switch model for the session |
-| `/config` | Show current session config (keys redacted) |
-| `/clear` | Clear chat history and start a fresh conversation |
-| `/exit`, `/quit` | Exit interactive mode |
+| Command                       | Description                                                  |
+| ----------------------------- | ------------------------------------------------------------ |
+| `/help`                       | Show all available commands                                  |
+| `/ask <question>`             | Explicit ask (same as bare text)                             |
+| `/do <task> [flags]`          | Run the Do agent (`--max-rounds N`, `--yes`)                 |
+| `/edit --file <path> <instr>` | Edit a file in place                                         |
+| `/explain <text>`             | Explain a line of code                                       |
+| `/wiki-reload`                | Rebuild the docs wiki index                                  |
+| `/platform <name>`            | Switch platform for the session (also updates default model) |
+| `/model <name>`               | Switch model for the session                                 |
+| `/config`                     | Show current session config (keys redacted)                  |
+| `/clear`                      | Clear chat history and start a fresh conversation            |
+| `/exit`, `/quit`              | Exit interactive mode                                        |
 
 Tab-complete any `/` command by pressing Tab. Up/down arrows cycle through input history.
 
@@ -172,18 +170,17 @@ askii do --dir .\my-project "refactor index.ts"
 
 The agent can use the following actions each round:
 
-| Action        | Description                                                      | Requires confirmation |
-| ------------- | ---------------------------------------------------------------- | --------------------- |
-| `list`        | List files in a folder (`[file]` / `[folder]` labels)            | No                    |
-| `view`        | Read a file's contents                                           | No                    |
-| `search`      | Grep workspace files for a pattern                               | No                    |
-| `wiki_search` | BM25 search over indexed `.md` docs (requires `--use-wiki`)      | No                    |
-| `code_search` | BM25 search over indexed code files (requires `--use-code-wiki`) | No                    |
-| `create`      | Create a new file                                                | Yes                   |
-| `modify`      | Replace text in an existing file                                 | Yes                   |
-| `rename`      | Rename or move a file                                            | Yes                   |
-| `delete`      | Delete a file                                                    | Yes                   |
-| `run`         | Run a shell command                                              | Yes (always)          |
+| Action        | Description                                                 | Requires confirmation |
+| ------------- | ----------------------------------------------------------- | --------------------- |
+| `list`        | List files in a folder (`[file]` / `[folder]` labels)       | No                    |
+| `view`        | Read a file's contents                                      | No                    |
+| `search`      | Grep workspace files for a pattern                          | No                    |
+| `wiki_search` | BM25 search over indexed `.md` docs (requires `--use-wiki`) | No                    |
+| `create`      | Create a new file                                           | Yes                   |
+| `modify`      | Replace text in an existing file                            | Yes                   |
+| `rename`      | Rename or move a file                                       | Yes                   |
+| `delete`      | Delete a file                                               | Yes                   |
+| `run`         | Run a shell command                                         | Yes (always)          |
 
 The loop continues after every round — not only after reads — until the AI returns `[]` or the round limit is hit.
 
@@ -263,47 +260,6 @@ askii do --wiki-path .\docs --use-wiki "implement the auth flow described in the
 
 ---
 
-### `code-wiki-reload` — Index workspace code files
-
-Walks all supported code files in a directory (TypeScript, Python, Go, Rust, C/C++, and more), splits them into 60-line overlapping chunks, builds a [MiniSearch](https://github.com/lucaong/minisearch) BM25 index, and saves it as `.askii-code-wiki-index.json` in the target directory. Run this once against your codebase and again whenever the code changes significantly.
-
-Skips: `node_modules`, `dist`, `out`, `build`, `target`, `bin`, `obj`, `coverage`, `__pycache__`, `venv`, and files over 200 KB.
-
-**bash**
-
-```bash
-askii code-wiki-reload                          # indexes current directory
-askii code-wiki-reload --code-wiki-path ./src  # indexes a specific directory
-```
-
-**PowerShell**
-
-```powershell
-askii code-wiki-reload
-askii code-wiki-reload --code-wiki-path .\src
-```
-
-After indexing, pass `--code-wiki-path` and `--use-code-wiki` to any `ask`, `edit`, or `do` command to inject the top matching code chunks as context:
-
-**bash**
-
-```bash
-askii ask --use-code-wiki "where is the wiki index built?"
-askii ask --use-code-wiki "how does the debounce work in the inline completer?"
-cat src/commands.ts | askii edit --use-code-wiki "add code wiki context to the ask command"
-askii do --use-code-wiki "refactor the provider functions to share a common helper"
-```
-
-**PowerShell**
-
-```powershell
-askii ask --use-code-wiki "where is the wiki index built?"
-Get-Content src\commands.ts | askii edit --use-code-wiki "add code wiki context to the ask command"
-askii do --use-code-wiki "refactor the provider functions to share a common helper"
-```
-
----
-
 ### `browse` — Browser agent
 
 Launches a Puppeteer browser, takes a screenshot of the current page and its URL, sends both to the AI, and executes the returned action. Repeats until the AI returns `DONE` or `--max-rounds` is reached. Requires a **vision-capable model** (e.g. `llava`, `moondream2`).
@@ -350,35 +306,33 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 
 ## Options
 
-| Flag                | Short | Description                                                                        | Default                  |
-| ------------------- | ----- | ---------------------------------------------------------------------------------- | ------------------------ |
-| `--platform`        | `-p`  | LLM platform: `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`, `askiicloud` | `ollama`              |
-| `--ollama-url`      |       | Ollama server URL                                                                  | `http://localhost:11434` |
-| `--lmstudio-url`    |       | LM Studio server URL                                                               | `ws://localhost:1234`    |
-| `--ollama-model`    |       | Ollama model                                                                       | `gemma4:e4b`             |
-| `--lmstudio-model`  |       | LM Studio model                                                                    | `qwen/qwen3-coder-30b`   |
-| `--openai-key`      |       | OpenAI API key (env: `ASKII_OPENAI_KEY`)                                           |                          |
-| `--openai-model`    |       | OpenAI model                                                                       | `gpt-5-mini`             |
-| `--openai-url`      |       | OpenAI-compatible base URL (env: `ASKII_OPENAI_URL`)                               |                          |
-| `--anthropic-key`   |       | Anthropic API key (env: `ASKII_ANTHROPIC_KEY`)                                     |                          |
-| `--anthropic-model` |       | Anthropic model (env: `ASKII_ANTHROPIC_MODEL`)                                     | `claude-sonnet-4-6`      |
-| `--opencodego-key`  |       | opencode Go API key (env: `ASKII_OPENCODEGO_KEY`)                                  |                          |
-| `--opencodego-model`|       | opencode Go model (env: `ASKII_OPENCODEGO_MODEL`)                                  | `glm-5.2`                |
-| `--opencodego-url`  |       | opencode Go base URL (env: `ASKII_OPENCODEGO_URL`)                                 | `https://opencode.ai/zen/go/v1` |
-| `--askiicloud-key`  |       | ASKII Cloud API key (env: `ASKII_CLOUD_KEY`)                                       |                          |
-| `--askiicloud-model`|       | ASKII Cloud model (env: `ASKII_CLOUD_MODEL`)                                       | `askii-default`          |
-| `--askiicloud-url`  |       | ASKII Cloud base URL (env: `ASKII_CLOUD_URL`)                                      | `https://api.askii.dev/v1` |
-| `--mode`            |       | Response style: `helpful`, `funny`                                                 | `funny`                  |
-| `--max-rounds`      |       | Max agent rounds for `do` / `control` / `browse`                                   | `5`                      |
-| `--dir`             |       | Working directory for `do`                                                         | cwd                      |
-| `--code`            | `-c`  | Code input (alternative to stdin)                                                  |                          |
-| `--yes`             | `-y`  | Auto-confirm all actions                                                           |                          |
-| `--headless`        |       | Run Puppeteer headlessly for `browse`                                              | `false` (visible)        |
-| `--chrome-path`     |       | Path to Chrome/Chromium executable for `browse`                                    |                          |
-| `--wiki-path`       |       | Path to folder with `.md` docs for wiki RAG (env: `ASKII_WIKI_PATH`)               |                          |
-| `--use-wiki`        |       | Inject wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_WIKI=1`)           |                          |
-| `--code-wiki-path`  |       | Path to codebase root to index / search (env: `ASKII_CODE_WIKI_PATH`)              | cwd                      |
-| `--use-code-wiki`   |       | Inject code wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_CODE_WIKI=1`) |                          |
+| Flag                 | Short | Description                                                                           | Default                         |
+| -------------------- | ----- | ------------------------------------------------------------------------------------- | ------------------------------- |
+| `--platform`         | `-p`  | LLM platform: `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`, `askiicloud` | `ollama`                        |
+| `--ollama-url`       |       | Ollama server URL                                                                     | `http://localhost:11434`        |
+| `--lmstudio-url`     |       | LM Studio server URL                                                                  | `ws://localhost:1234`           |
+| `--ollama-model`     |       | Ollama model                                                                          | `gemma4:e4b`                    |
+| `--lmstudio-model`   |       | LM Studio model                                                                       | `qwen/qwen3-coder-30b`          |
+| `--openai-key`       |       | OpenAI API key (env: `ASKII_OPENAI_KEY`)                                              |                                 |
+| `--openai-model`     |       | OpenAI model                                                                          | `gpt-5-mini`                    |
+| `--openai-url`       |       | OpenAI-compatible base URL (env: `ASKII_OPENAI_URL`)                                  |                                 |
+| `--anthropic-key`    |       | Anthropic API key (env: `ASKII_ANTHROPIC_KEY`)                                        |                                 |
+| `--anthropic-model`  |       | Anthropic model (env: `ASKII_ANTHROPIC_MODEL`)                                        | `claude-sonnet-4-6`             |
+| `--opencodego-key`   |       | opencode Go API key (env: `ASKII_OPENCODEGO_KEY`)                                     |                                 |
+| `--opencodego-model` |       | opencode Go model (env: `ASKII_OPENCODEGO_MODEL`)                                     | `glm-5.2`                       |
+| `--opencodego-url`   |       | opencode Go base URL (env: `ASKII_OPENCODEGO_URL`)                                    | `https://opencode.ai/zen/go/v1` |
+| `--askiicloud-key`   |       | ASKII Cloud API key (env: `ASKII_CLOUD_KEY`)                                          |                                 |
+| `--askiicloud-model` |       | ASKII Cloud model (env: `ASKII_CLOUD_MODEL`)                                          | `askii-default`                 |
+| `--askiicloud-url`   |       | ASKII Cloud base URL (env: `ASKII_CLOUD_URL`)                                         | `https://api.askii.dev/v1`      |
+| `--mode`             |       | Response style: `helpful`, `funny`                                                    | `funny`                         |
+| `--max-rounds`       |       | Max agent rounds for `do` / `control` / `browse`                                      | `5`                             |
+| `--dir`              |       | Working directory for `do`                                                            | cwd                             |
+| `--code`             | `-c`  | Code input (alternative to stdin)                                                     |                                 |
+| `--yes`              | `-y`  | Auto-confirm all actions                                                              |                                 |
+| `--headless`         |       | Run Puppeteer headlessly for `browse`                                                 | `false` (visible)               |
+| `--chrome-path`      |       | Path to Chrome/Chromium executable for `browse`                                       |                                 |
+| `--wiki-path`        |       | Path to folder with `.md` docs for wiki RAG (env: `ASKII_WIKI_PATH`)                  |                                 |
+| `--use-wiki`         |       | Inject wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_WIKI=1`)              |                                 |
 
 ## Environment Variables
 
@@ -422,10 +376,6 @@ export ASKII_CHROME_PATH=/usr/bin/chromium
 # Docs wiki RAG
 export ASKII_WIKI_PATH=./docs
 export ASKII_USE_WIKI=1
-
-# Code wiki RAG
-export ASKII_CODE_WIKI_PATH=./src   # defaults to cwd
-export ASKII_USE_CODE_WIKI=1
 ```
 
 **PowerShell**
@@ -468,10 +418,6 @@ $env:ASKII_CHROME_PATH = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 # Docs wiki RAG
 $env:ASKII_WIKI_PATH = ".\docs"
 $env:ASKII_USE_WIKI = "1"
-
-# Code wiki RAG
-$env:ASKII_CODE_WIKI_PATH = ".\src"   # defaults to cwd
-$env:ASKII_USE_CODE_WIKI = "1"
 ```
 
 ## Platforms

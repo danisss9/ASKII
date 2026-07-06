@@ -12,21 +12,20 @@ export interface WorkspaceAction {
     | 'list'
     | 'search'
     | 'wiki_search'
-    | 'code_search'
     | 'run'
     | 'copy'
     | 'mkdir';
   path?: string;
-  paths?: string[];     // multi-file view
+  paths?: string[]; // multi-file view
   newPath?: string;
   content?: string;
   oldContent?: string;
   newContent?: string;
-  startLine?: number;   // partial view / line-range modify (1-indexed)
+  startLine?: number; // partial view / line-range modify (1-indexed)
   endLine?: number;
-  pattern?: string;     // search (code grep)
-  query?: string;       // wiki_search (natural language)
-  command?: string;     // run
+  pattern?: string; // search (code grep)
+  query?: string; // wiki_search (natural language)
+  command?: string; // run
 }
 
 export type ActionResult = {
@@ -58,7 +57,11 @@ export function recordCreatedFile(workspaceRoot: string, relativePath: string): 
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     let list: string[] = [];
     if (fs.existsSync(logPath)) {
-      try { list = JSON.parse(fs.readFileSync(logPath, 'utf-8')); } catch { /* ignore */ }
+      try {
+        list = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
+      } catch {
+        /* ignore */
+      }
     }
     if (!list.includes(relativePath)) list.push(relativePath);
     fs.writeFileSync(logPath, JSON.stringify(list));
@@ -80,7 +83,10 @@ export function deleteAllBackups(workspaceRoot: string): void {
 }
 
 /** Restore all backed-up files and delete any files that were created this session. */
-export function restoreAllBackups(workspaceRoot: string): { restored: string[]; deleted: string[] } {
+export function restoreAllBackups(workspaceRoot: string): {
+  restored: string[];
+  deleted: string[];
+} {
   const backupDir = path.join(workspaceRoot, BACKUP_DIR);
   const restored: string[] = [];
   function walk(dir: string): void {
@@ -112,9 +118,13 @@ export function restoreAllBackups(workspaceRoot: string): { restored: string[]; 
             fs.unlinkSync(fullPath);
             deleted.push(rel);
           }
-        } catch { /* best-effort */ }
+        } catch {
+          /* best-effort */
+        }
       }
-    } catch { /* ignore malformed log */ }
+    } catch {
+      /* ignore malformed log */
+    }
   }
 
   return { restored, deleted };
@@ -153,8 +163,18 @@ export function getWorkspaceStructure(dirPath: string): string {
 
 export function parseWorkspaceActions(responseText: string): WorkspaceAction[] {
   const ALL_TYPES = [
-    'view', 'create', 'modify', 'write', 'delete', 'rename',
-    'list', 'search', 'wiki_search', 'code_search', 'run', 'copy', 'mkdir',
+    'view',
+    'create',
+    'modify',
+    'write',
+    'delete',
+    'rename',
+    'list',
+    'search',
+    'wiki_search',
+    'run',
+    'copy',
+    'mkdir',
   ];
   try {
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);
@@ -198,7 +218,8 @@ const LIST_EXCLUDED = new Set(['node_modules', 'dist', '.git', '.askii']);
 export function executeViewAction(action: WorkspaceAction, workspaceRoot: string): string {
   if (action.type === 'list') {
     const dirPath = sandboxPath(workspaceRoot, action.path ?? '.');
-    const entries = fs.readdirSync(dirPath)
+    const entries = fs
+      .readdirSync(dirPath)
       .filter((name) => !LIST_EXCLUDED.has(name))
       .map((name) => {
         const stat = fs.statSync(path.join(dirPath, name));
@@ -271,16 +292,9 @@ export function executeSearchAction(action: WorkspaceAction, workspaceRoot: stri
 }
 
 /** Builds the system prompt for the do command (shared by extension + CLI). */
-export function buildDoSystemPrompt(
-  workspaceStructure: string,
-  wikiAvailable = false,
-  codeWikiAvailable = false,
-): string {
+export function buildDoSystemPrompt(workspaceStructure: string, wikiAvailable = false): string {
   const wikiAction = wikiAvailable
     ? `- {"type": "wiki_search", "query": "natural language question"} — search the documentation wiki and get relevant context back\n`
-    : '';
-  const codeWikiAction = codeWikiAvailable
-    ? `- {"type": "code_search", "query": "natural language question"} — BM25 search over the indexed codebase, returns relevant code chunks\n`
     : '';
 
   return `You are ASKII, an AI agent that can create, modify, view, delete, rename, list, search, run commands, copy files, and make directories in a workspace.
@@ -298,7 +312,7 @@ READ ACTIONS (results returned to you, no confirmation needed):
 - {"type": "view", "paths": ["file1.ts", "file2.ts"]} — view multiple files at once
 - {"type": "list", "path": "src/"} — list folder contents (node_modules/dist excluded)
 - {"type": "search", "pattern": "TODO"} — grep workspace files for pattern (node_modules/dist excluded)
-${wikiAction}${codeWikiAction}
+${wikiAction}
 WRITE ACTIONS (require confirmation):
 - {"type": "create", "path": "path/to/file", "content": "full file content"} — create new file
 - {"type": "write", "path": "path/to/file", "content": "full file content"} — replace entire file
