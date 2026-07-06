@@ -69,7 +69,6 @@ interface Config {
   opencodegoApiKey: string;
   opencodegoBaseURL: string;
   askiicloudApiKey: string;
-  askiicloudBaseURL: string;
   mode: 'helpful' | 'funny';
   maxRounds: number;
   yes: boolean;
@@ -145,9 +144,6 @@ function getConfig(flags: string[]): Config {
   const askiicloudModel =
     getFlagValue(flags, '--askiicloud-model') || process.env.ASKII_CLOUD_MODEL || 'askii-default';
 
-  const askiicloudBaseURL =
-    getFlagValue(flags, '--askiicloud-url') || process.env.ASKII_CLOUD_URL || ASKII_CLOUD_URL;
-
   const modelMap: Record<string, string> = {
     lmstudio: lmStudioModel,
     openai: openaiModel,
@@ -166,7 +162,6 @@ function getConfig(flags: string[]): Config {
     opencodegoApiKey,
     opencodegoBaseURL,
     askiicloudApiKey,
-    askiicloudBaseURL,
     mode: (getFlagValue(flags, '--mode') || process.env.ASKII_MODE || 'funny') as
       | 'helpful'
       | 'funny',
@@ -213,7 +208,7 @@ async function getResponse(
       prompt,
       config.askiicloudApiKey,
       config.model,
-      config.askiicloudBaseURL,
+      ASKII_CLOUD_URL,
       system,
       imageBase64,
     );
@@ -260,7 +255,7 @@ async function getChatResponseStreaming(
       config.askiicloudApiKey,
       config.model,
       onChunk,
-      config.askiicloudBaseURL,
+      ASKII_CLOUD_URL,
     );
   } else if (config.platform === 'lmstudio') {
     return getLMStudioChatStreaming(messages, config.url, config.model, onChunk);
@@ -1032,7 +1027,6 @@ Options:
       --opencodego-url <url> opencode Go base URL (env: ASKII_OPENCODEGO_URL)
       --askiicloud-key <key> ASKII Cloud API key (env: ASKII_CLOUD_KEY)
       --askiicloud-model <m> ASKII Cloud model (default: askii-default)
-      --askiicloud-url <url> ASKII Cloud base URL (env: ASKII_CLOUD_URL, default: https://api.askii.dev/v1)
       --mode <mode>          Response mode: helpful, funny (default: funny)
       --max-rounds <n>       Max agent rounds for "do" / "control" / "browse" (default: 5)
       --dir <path>           Working directory for "do" (default: cwd)
@@ -1053,7 +1047,7 @@ Environment variables:
   ASKII_OPENAI_KEY      ASKII_OPENAI_MODEL    ASKII_OPENAI_URL
   ASKII_ANTHROPIC_KEY   ASKII_ANTHROPIC_MODEL
   ASKII_OPENCODEGO_KEY  ASKII_OPENCODEGO_MODEL  ASKII_OPENCODEGO_URL
-  ASKII_CLOUD_KEY       ASKII_CLOUD_MODEL       ASKII_CLOUD_URL
+  ASKII_CLOUD_KEY       ASKII_CLOUD_MODEL
   ASKII_MODE            ASKII_MAX_ROUNDS
   ASKII_WIKI_PATH       ASKII_USE_WIKI
 

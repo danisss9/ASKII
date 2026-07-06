@@ -44,7 +44,9 @@ interface GitApiLike {
  * file; falls back to the first repository. Returns null with an actionable
  * reason if Git is unavailable or no repo is open.
  */
-async function getGitRepository(): Promise<{ repo: GitRepositoryLike; reason?: string } | { repo: null; reason: string }> {
+async function getGitRepository(): Promise<
+  { repo: GitRepositoryLike; reason?: string } | { repo: null; reason: string }
+> {
   const gitExt = vscode.extensions.getExtension('vscode.git');
   if (!gitExt) {
     return { repo: null, reason: 'The built-in Git extension is not available.' };
@@ -79,9 +81,13 @@ async function getGitRepository(): Promise<{ repo: GitRepositoryLike; reason?: s
  * to the working-tree diff when nothing is staged. Returns a file summary and
  * a (possibly truncated) unified diff.
  */
-async function collectDiff(repo: GitRepositoryLike): Promise<{ diff: string; fileSummary: string; hasStaged: boolean }> {
+async function collectDiff(
+  repo: GitRepositoryLike,
+): Promise<{ diff: string; fileSummary: string; hasStaged: boolean }> {
   const stagedFiles = (repo.state.indexChanges ?? []).map((c) => path.basename(c.uri.fsPath));
-  const workingFiles = (repo.state.workingTreeChanges ?? []).map((c) => path.basename(c.uri.fsPath));
+  const workingFiles = (repo.state.workingTreeChanges ?? []).map((c) =>
+    path.basename(c.uri.fsPath),
+  );
 
   // Prefer staged diff; fall back to working-tree diff.
   let raw = '';
@@ -102,7 +108,8 @@ async function collectDiff(repo: GitRepositoryLike): Promise<{ diff: string; fil
     raw.length > MAX_DIFF_CHARS ? `${raw.slice(0, MAX_DIFF_CHARS)}\n…[diff truncated]` : raw;
 
   const changedFiles = hasStaged ? stagedFiles : workingFiles;
-  const fileSummary = changedFiles.length > 0 ? changedFiles.join('\n') : '(no file list available)';
+  const fileSummary =
+    changedFiles.length > 0 ? changedFiles.join('\n') : '(no file list available)';
 
   return { diff, fileSummary, hasStaged };
 }
@@ -151,7 +158,10 @@ function cleanCommitMessage(raw: string): string {
   text = text.replace(/^(commit\s*message|message)\s*[:\-]\s*/i, '');
 
   // Strip surrounding quotes.
-  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+  if (
+    (text.startsWith('"') && text.endsWith('"')) ||
+    (text.startsWith("'") && text.endsWith("'"))
+  ) {
     text = text.slice(1, -1).trim();
   }
 
@@ -163,10 +173,7 @@ export async function generateCommitMessageCommand(): Promise<void> {
 
   const { repo, reason } = await getGitRepository();
   if (!repo) {
-    const choice = await vscode.window.showErrorMessage(
-      `ASKII: ${reason}`,
-      'Open Source Control',
-    );
+    const choice = await vscode.window.showErrorMessage(`ASKII: ${reason}`, 'Open Source Control');
     if (choice === 'Open Source Control') {
       vscode.commands.executeCommand('workbench.view.scm');
     }
@@ -201,18 +208,22 @@ export async function generateCommitMessageCommand(): Promise<void> {
         const raw = await getExtensionResponse(
           userPrompt,
           system,
-          config.get<string>('inlinePlatform'),
-          config.get<string>('inlineModel'),
+          config.get<string>('llmInlinePlatform'),
+          config.get<string>('llmInlineModel'),
         );
 
         if (!raw || raw.trim() === NO_RESPONSE) {
-          vscode.window.showWarningMessage('ASKII: The model returned no commit message. Try again.');
+          vscode.window.showWarningMessage(
+            'ASKII: The model returned no commit message. Try again.',
+          );
           return;
         }
 
         const cleaned = cleanCommitMessage(raw);
         if (!cleaned) {
-          vscode.window.showWarningMessage('ASKII: The model returned no commit message. Try again.');
+          vscode.window.showWarningMessage(
+            'ASKII: The model returned no commit message. Try again.',
+          );
           return;
         }
 

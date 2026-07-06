@@ -207,8 +207,8 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
     const completionText = await getExtensionResponse(
       prompt,
       SYSTEM_PROMPT,
-      config.get<string>('inlinePlatform'),
-      config.get<string>('inlineModel'),
+      config.get<string>('llmInlinePlatform'),
+      config.get<string>('llmInlineModel'),
       signal,
     );
 

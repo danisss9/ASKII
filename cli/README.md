@@ -323,7 +323,6 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 | `--opencodego-url`   |       | opencode Go base URL (env: `ASKII_OPENCODEGO_URL`)                                    | `https://opencode.ai/zen/go/v1` |
 | `--askiicloud-key`   |       | ASKII Cloud API key (env: `ASKII_CLOUD_KEY`)                                          |                                 |
 | `--askiicloud-model` |       | ASKII Cloud model (env: `ASKII_CLOUD_MODEL`)                                          | `askii-default`                 |
-| `--askiicloud-url`   |       | ASKII Cloud base URL (env: `ASKII_CLOUD_URL`)                                         | `https://api.askii.dev/v1`      |
 | `--mode`             |       | Response style: `helpful`, `funny`                                                    | `funny`                         |
 | `--max-rounds`       |       | Max agent rounds for `do` / `control` / `browse`                                      | `5`                             |
 | `--dir`              |       | Working directory for `do`                                                            | cwd                             |
@@ -366,7 +365,6 @@ export ASKII_OPENCODEGO_URL=https://opencode.ai/zen/go/v1
 # ASKII Cloud
 export ASKII_CLOUD_KEY=...
 export ASKII_CLOUD_MODEL=askii-default
-export ASKII_CLOUD_URL=https://api.askii.dev/v1
 
 # Shared
 export ASKII_MODE=funny
@@ -408,7 +406,6 @@ $env:ASKII_OPENCODEGO_URL = "https://opencode.ai/zen/go/v1"
 # ASKII Cloud
 $env:ASKII_CLOUD_KEY = "..."
 $env:ASKII_CLOUD_MODEL = "askii-default"
-$env:ASKII_CLOUD_URL = "https://api.askii.dev/v1"
 
 # Shared
 $env:ASKII_MODE = "funny"
@@ -516,7 +513,7 @@ askii -p opencodego --opencodego-key ... --opencodego-model qwen3.7-max explain 
 
 ### ASKII Cloud
 
-An in-house, OpenAI-compatible inference service ([api.askii.dev](https://api.askii.dev)). All it needs is an API key — the base URL defaults to `https://api.askii.dev/v1`.
+An in-house, OpenAI-compatible inference service ([api.askii.dev](https://api.askii.dev)). All it needs is an API key — the base URL is fixed to `https://api.askii.dev/v1`.
 
 **bash**
 

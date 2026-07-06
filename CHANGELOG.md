@@ -9,18 +9,38 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Added
 
 - **ASKII Cloud platform support**: Added `askiicloud` as a new LLM platform across the extension and CLI, powered by ASKII Cloud — an in-house, OpenAI-compatible inference service at [https://api.askii.dev](https://api.askii.dev). All it needs is an API key
-- **`askii.askiicloudApiKey` setting**: Your ASKII Cloud API key (used when `llmPlatform` is `askiicloud`)
-- **`askii.askiicloudModel` setting**: ASKII Cloud model id (default: `askii-default`)
-- **`askii.askiicloudUrl` setting**: ASKII Cloud base URL (default: `https://api.askii.dev/v1`); override only if needed
-- **CLI flags / env vars**: `--askiicloud-key` (`ASKII_CLOUD_KEY`), `--askiicloud-model` (`ASKII_CLOUD_MODEL`), `--askiicloud-url` (`ASKII_CLOUD_URL`); selectable via `-p askiicloud` and the REPL `/platform askiicloud`
+- **`askii.askiicloudApiKey` setting**: Your ASKII Cloud API key (used when any `llm*Platform` is `askiicloud`)
 - **`getAskiiCloudResponse` / `getAskiiCloudChat` / `getAskiiCloudChatStreaming`** in `common/providers.ts`: Shared ASKII Cloud provider functions (thin wrappers over the OpenAI-compatible client, pinned to `ASKII_CLOUD_URL`); vision (base64 images) and streaming are supported
+- **Per-feature LLM platform/model settings**: Replaced the per-provider model settings with a single model setting per feature group, so each ASKII capability can target a different platform and model without duplicating config:
+  - `askii.llmModel` (default: `askii-smart`) — model id for ASKII Ask, Edit, Do and Generate
+  - `askii.llmInlinePlatform` (default: `askiicloud`) and `askii.llmInlineModel` (default: `askii-fast`) — platform and model for ASKII inline suggestions, inline completion and git commit message generation
+  - `askii.llmVisionPlatform` (default: `askiicloud`) and `askii.llmVisionModel` (default: `askii-smart`) — platform and model for ASKII Browse, Control and Note (vision-capable features)
+- **CLI flags / env vars**: `--askiicloud-key` (`ASKII_CLOUD_KEY`), `--askiicloud-model` (`ASKII_CLOUD_MODEL`); selectable via `-p askiicloud` and the REPL `/platform askiicloud`
 
 ### Changed
 
 - **Status-bar quick-pick menu**: Renamed the **Generate Commit Message** entry to **ASKII Git** and moved it to sit above **Reload Wiki** and below **ASKII Browse** for a more logical grouping
+- **Default LLM platform is now ASKII Cloud**: `askii.llmPlatform` now defaults to `askiicloud` (previously `ollama`), so ASKII works out of the box once an `askii.askiicloudApiKey` is set. The CLI default platform remains `ollama`.
+- **opencode Go base URL is no longer configurable**: The `askii.opencodegoUrl` setting and the `--opencodego-url` CLI flag / `ASKII_OPENCODEGO_URL` env var have been removed. opencode Go now always uses `https://opencode.ai/zen/go/v1` (via the `OPENCODE_GO_URL` constant in `common/providers.ts`).
+- **ASKII Cloud base URL is no longer configurable**: The `askii.askiicloudUrl` setting and the `--askiicloud-url` CLI flag / `ASKII_CLOUD_URL` env var have been removed. ASKII Cloud now always uses `https://api.askii.dev/v1` (via the `ASKII_CLOUD_URL` constant in `common/providers.ts`).
+- **`getExtensionResponseWithImage`** (Browse / Control) now reads `askii.llmVisionPlatform` and `askii.llmVisionModel` instead of `askii.llmPlatform` and the platform's default model.
+- **`getExtensionResponseStreaming` / `getExtensionChat` / `getExtensionChatStreaming`** (Ask / Do) now read `askii.llmModel` instead of the per-provider model settings.
+- **`getLLMExplanation`** (inline helper mode) now resolves its platform and model from `askii.llmInlinePlatform` / `askii.llmInlineModel` instead of `askii.inlinePlatform` / `askii.inlineModel`.
+- **Inline completion and commit message generation** now use `askii.llmInlinePlatform` / `askii.llmInlineModel` instead of `askii.inlinePlatform` / `askii.inlineModel`.
 
 ### Removed
 
+- **Per-provider model settings**: Replaced by the per-feature `askii.llmModel` / `askii.llmInlineModel` / `askii.llmVisionModel` settings. The following have been removed:
+  - `askii.ollamaModel`
+  - `askii.lmStudioModel`
+  - `askii.openaiModel`
+  - `askii.anthropicModel`
+  - `askii.opencodegoModel`
+  - `askii.askiicloudModel`
+- **`askii.inlinePlatform` and `askii.inlineModel` settings**: Replaced by `askii.llmInlinePlatform` and `askii.llmInlineModel` (no more `"default"` sentinel — each feature group now has its own explicit platform and model).
+- **`askii.opencodegoUrl` setting**: opencode Go now always uses `https://opencode.ai/zen/go/v1`.
+- **`askii.askiicloudUrl` setting**: ASKII Cloud now always uses `https://api.askii.dev/v1`.
+- **`resolvePlatform` helper** in `src/providers.ts`: No longer needed now that each feature group reads its own `llm*Platform` setting directly.
 - **Codebase wiki (code wiki) feature**: Removed the code wiki RAG feature entirely, leaving only the docs wiki (`askii.wikiPath` / `askii.wikiEnabled`) for documentation context. The following have been removed:
   - `common/codewiki.ts` module (MiniSearch index over workspace code files)
   - `ASKII: Reload Code Wiki` command (`askii.reloadCodeWiki`) and its status-bar menu entry

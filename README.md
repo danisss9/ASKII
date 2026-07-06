@@ -22,45 +22,47 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 
 ## Requirements
 
-### Option 1: Ollama (Default)
+### Option 1: ASKII Cloud (Default)
+
+- An **ASKII Cloud API key** (in-house, OpenAI-compatible inference service at [https://api.askii.dev](https://api.askii.dev))
+- Set your API key in `askii.askiicloudApiKey`
+- `askii.llmPlatform` defaults to `askiicloud`, so you're ready to go once the key is set
+- The default model is `askii-smart` (`askii.llmModel`)
+
+### Option 2: Ollama
 
 - **Ollama**: Download and install from [https://ollama.ai](https://ollama.ai)
 - Pull a model, e.g., `ollama pull gemma4:e4b`
 - Make sure Ollama is running (default: `http://localhost:11434`)
+- Select `ollama` in the `askii.llmPlatform` setting and set the model in `askii.llmModel`
 
-### Option 2: LM Studio
+### Option 3: LM Studio
 
 - **LM Studio**: Download from [https://lmstudio.ai](https://lmstudio.ai)
 - Start LM Studio and load your preferred model
-- Select `lmstudio` in the `askii.llmPlatform` setting
+- Select `lmstudio` in the `askii.llmPlatform` setting and set the model in `askii.llmModel`
 
-### Option 3: OpenAI
+### Option 4: OpenAI
 
 - An **OpenAI API key** (or any OpenAI-compatible API key)
 - Select `openai` in the `askii.llmPlatform` setting
 - Set your API key in `askii.openaiApiKey`
+- Set the model in `askii.llmModel` (e.g. `gpt-5-mini`, `gpt-4o`)
 - Optionally set a custom `askii.openaiUrl` for Azure OpenAI or other compatible APIs (leave empty for `api.openai.com`)
 
-### Option 4: Anthropic
+### Option 5: Anthropic
 
 - An **Anthropic API key** from [console.anthropic.com](https://console.anthropic.com)
 - Select `anthropic` in the `askii.llmPlatform` setting
 - Set your API key in `askii.anthropicApiKey`
-- Optionally set a model in `askii.anthropicModel` (default: `claude-sonnet-4-6`)
+- Set the model in `askii.llmModel` (e.g. `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`)
 
-### Option 5: opencode Go (New!)
+### Option 6: opencode Go
 
 - An **opencode Go API key** from [https://opencode.ai/go](https://opencode.ai/go) (a hosted, multi-model coding subscription)
 - Select `opencodego` in the `askii.llmPlatform` setting
 - Set your API key in `askii.opencodegoApiKey`
-- Optionally set a model in `askii.opencodegoModel` (default: `glm-5.2`; e.g. `kimi-k2.7-code`, `deepseek-v4-pro`, `qwen3.7-max`, `minimax-m3`). See the full list at [opencode.ai/zen/go/v1/models](https://opencode.ai/zen/go/v1/models)
-
-### Option 6: ASKII Cloud (New!)
-
-- An **ASKII Cloud API key** (in-house, OpenAI-compatible inference service at [https://api.askii.dev](https://api.askii.dev))
-- Select `askiicloud` in the `askii.llmPlatform` setting
-- Set your API key in `askii.askiicloudApiKey`
-- Optionally set a model in `askii.askiicloudModel` (default: `askii-default`)
+- Set the model in `askii.llmModel` (e.g. `glm-5.2`, `kimi-k2.7-code`, `deepseek-v4-pro`, `qwen3.7-max`, `minimax-m3`). See the full list at [opencode.ai/zen/go/v1/models](https://opencode.ai/zen/go/v1/models)
 
 ## Usage
 
@@ -70,12 +72,12 @@ Inline decorations are disabled by default. Enable them by setting `askii.inline
 
 Open VS Code Settings (`Ctrl+,` or `Cmd+,`) and search for "ASKII LLM Platform" to choose:
 
-- `ollama` (default)
+- `askiicloud` (default)
+- `ollama`
 - `lmstudio`
 - `openai`
 - `anthropic`
 - `opencodego`
-- `askiicloud`
 
 ### Choose Your Inline Helper Mode
 
@@ -202,43 +204,52 @@ ASKII can write your Git commit messages for you. A **sparkle (✦)** button is 
 3. Click the **✦** button in the Source Control view toolbar (or run **ASKII: Generate Commit Message** from the command palette, or press `Ctrl+Shift+K G` / `Cmd+Shift+K G`).
 4. ASKII reads the staged diff (falling back to the working-tree diff when nothing is staged), sends it to the LLM, and writes the generated commit message straight into the input box — ready for you to review and commit.
 
-The generator uses the **inline** LLM platform and model (`askii.inlinePlatform` / `askii.inlineModel`), so it can run on a different provider than your main Ask / Edit / Do commands. Set `askii.commitMessageInstructions` to a `.md` file with your own style rules (e.g. "always use Conventional Commits with a `feat`/`fix`/`chore` prefix and reference the Jira ticket in the body") and its contents are appended to the built-in system prompt. The path may be absolute or relative to the workspace root.
+The generator uses the **inline** LLM platform and model (`askii.llmInlinePlatform` / `askii.llmInlineModel`), so it can run on a different provider than your main Ask / Edit / Do commands. Set `askii.commitMessageInstructions` to a `.md` file with your own style rules (e.g. "always use Conventional Commits with a `feat`/`fix`/`chore` prefix and reference the Jira ticket in the body") and its contents are appended to the built-in system prompt. The path may be absolute or relative to the workspace root.
 
-### Inline Platform & Model
+### Per-Feature Platform & Model
 
-Inline auto-complete and inline helper mode decorations can use a **different LLM platform and model** than the main Ask / Edit / Do commands. This is handy when you want a fast local model for ghost-text completions but a stronger cloud model for chat.
+ASKII splits its LLM usage into three feature groups, each with its own platform and model settings. This lets you run a fast model for inline completions, a strong model for chat/edit/do, and a vision-capable model for browse/control — all independently.
 
-- `askii.inlinePlatform`: Platform for inline auto-complete **and** helper mode (`default` | `ollama` | `lmstudio` | `openai` | `anthropic` | `opencodego` | `askiicloud`, default: `default`). When set to `default`, the value of `askii.llmPlatform` is used.
-- `askii.inlineModel`: Model id for inline auto-complete **and** helper mode (default: `default`). When set to `default`, the selected platform's default model is used (`askii.ollamaModel`, `askii.openaiModel`, `askii.anthropicModel`, `askii.lmStudioModel`, `askii.opencodegoModel`, or `askii.askiicloudModel`). Set it to any model id supported by the chosen platform to override.
+- **Ask / Edit / Do / Generate** — `askii.llmPlatform` (default: `askiicloud`) and `askii.llmModel` (default: `askii-smart`)
+- **Inline suggestions / inline completion / git commit message** — `askii.llmInlinePlatform` (default: `askiicloud`) and `askii.llmInlineModel` (default: `askii-fast`)
+- **Browse / Control / Note (vision)** — `askii.llmVisionPlatform` (default: `askiicloud`) and `askii.llmVisionModel` (default: `askii-smart`)
+
+Each `llm*Platform` accepts the same values: `askiicloud`, `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`. API keys are shared per provider across all feature groups (e.g. `askii.openaiApiKey` is used whether `openai` is selected for `llmPlatform`, `llmInlinePlatform`, or `llmVisionPlatform`).
 
 ## Configuration
 
 All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 
-- `askii.llmPlatform`: Choose LLM provider (`ollama` | `lmstudio` | `openai` | `anthropic` | `opencodego` | `askiicloud`)
+**LLM platforms & models (per feature group):**
+
+- `askii.llmPlatform`: Platform for Ask / Edit / Do / Generate (`askiicloud` | `ollama` | `lmstudio` | `openai` | `anthropic` | `opencodego`, default: `askiicloud`)
+- `askii.llmModel`: Model id for Ask / Edit / Do / Generate (default: `askii-smart`)
+- `askii.llmInlinePlatform`: Platform for inline suggestions, inline completion and git commit message generation (same enum as `llmPlatform`, default: `askiicloud`)
+- `askii.llmInlineModel`: Model id for inline suggestions, inline completion and git commit message generation (default: `askii-fast`)
+- `askii.llmVisionPlatform`: Platform for Browse / Control / Note — vision-capable features (same enum as `llmPlatform`, default: `askiicloud`)
+- `askii.llmVisionModel`: Model id for Browse / Control / Note (default: `askii-smart`)
+
+**Provider API keys & URLs (shared across all feature groups):**
+
+- `askii.askiicloudApiKey`: ASKII Cloud API key (used when any `llm*Platform` is `askiicloud`). ASKII Cloud always uses `https://api.askii.dev/v1`
+- `askii.openaiApiKey`: OpenAI API key (used when any `llm*Platform` is `openai`)
+- `askii.openaiUrl`: OpenAI-compatible base URL — leave empty for `api.openai.com`, or use for Azure OpenAI / other compatible APIs
+- `askii.anthropicApiKey`: Anthropic API key (used when any `llm*Platform` is `anthropic`)
+- `askii.opencodegoApiKey`: opencode Go API key (used when any `llm*Platform` is `opencodego`). opencode Go always uses `https://opencode.ai/zen/go/v1`
 - `askii.ollamaUrl`: URL for Ollama API server (default: `http://localhost:11434`)
 - `askii.lmStudioUrl`: URL for LM Studio API server (default: `ws://localhost:1234`)
-- `askii.ollamaModel`: Ollama model name (default: `gemma4:e4b`)
-- `askii.lmStudioModel`: LM Studio model (default: `qwen/qwen3-coder-30b`)
-- `askii.openaiApiKey`: OpenAI API key (used when `llmPlatform` is `openai`)
-- `askii.openaiModel`: OpenAI model (default: `gpt-5-mini`)
-- `askii.openaiUrl`: OpenAI-compatible base URL — leave empty for `api.openai.com`, or use for Azure OpenAI / other compatible APIs
-- `askii.anthropicApiKey`: Anthropic API key (used when `llmPlatform` is `anthropic`)
-- `askii.anthropicModel`: Anthropic model (default: `claude-sonnet-4-6`; e.g. `claude-opus-4-6`, `claude-haiku-4-5`)
-- `askii.opencodegoApiKey`: opencode Go API key (used when `llmPlatform` is `opencodego`)
-- `askii.opencodegoModel`: opencode Go model (default: `glm-5.2`; e.g. `kimi-k2.7-code`, `deepseek-v4-pro`, `qwen3.7-max`, `minimax-m3`)
-- `askii.opencodegoUrl`: opencode Go base URL (default: `https://opencode.ai/zen/go/v1`) — override only if needed
-- `askii.askiicloudApiKey`: ASKII Cloud API key (used when `llmPlatform` is `askiicloud`)
-- `askii.askiicloudModel`: ASKII Cloud model (default: `askii-default`)
-- `askii.askiicloudUrl`: ASKII Cloud base URL (default: `https://api.askii.dev/v1`) — override only if needed
+
+**Inline & wiki:**
+
 - `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny` | `wiki`, default: `off`)
+- `askii.inlineCompletionEnabled`: Enable ASKII inline code completion — ghost text in code files, Tab to accept, Esc to dismiss (default: `false`)
+- `askii.inlineCompletionEagerness`: Completion trigger speed — `low` (1 200 ms), `medium` (500 ms, default), `high` (200 ms)
 - `askii.wikiEnabled`: Enable wiki RAG context for Ask / Edit / Do commands (default: `false`)
 - `askii.wikiPath`: Path to a folder containing `.md` documentation files to index for wiki RAG. Run **ASKII: Reload Wiki** after changing this or updating the docs
 - `askii.wikiAutoReload`: Automatically rebuild and reload the wiki index on extension startup (default: `false`). Requires `askii.wikiEnabled` and `askii.wikiPath` to be configured
-- `askii.inlineCompletionEnabled`: Enable ASKII inline code completion — ghost text in code files, Tab to accept, Esc to dismiss (default: `false`)
-- `askii.inlinePlatform`: LLM platform for inline auto-complete **and** helper mode (`default` | `ollama` | `lmstudio` | `openai` | `anthropic` | `opencodego` | `askiicloud`, default: `default` — follows `askii.llmPlatform`)
-- `askii.inlineModel`: Model id for inline auto-complete **and** helper mode (default: `default` — uses the selected platform's default model). Set to any model id supported by the chosen platform to override
-- `askii.inlineCompletionEagerness`: Completion trigger speed — `low` (1 200 ms), `medium` (500 ms, default), `high` (200 ms)
+
+**Agent & misc:**
+
 - `askii.commitMessageInstructions`: Path to a `.md` file with custom instructions for the commit message generator (appended to the built-in system prompt). Absolute or relative to the workspace root. Leave empty to use the built-in prompt (default: `""`)
 - `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control / Browse commands (default: 5)
 - `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control / Browse (default: `false`)

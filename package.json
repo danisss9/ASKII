@@ -130,8 +130,49 @@
             "opencodego",
             "askiicloud"
           ],
-          "default": "ollama",
-          "description": "LLM platform to use (ollama, lmstudio, openai, anthropic, opencodego, or askiicloud)"
+          "default": "askiicloud",
+          "description": "LLM platform to use for ASKII Ask, Edit, Do and Generate (ollama, lmstudio, openai, anthropic, opencodego, or askiicloud)"
+        },
+        "askii.llmModel": {
+          "type": "string",
+          "default": "askii-smart",
+          "description": "Model id to use for ASKII Ask, Edit, Do and Generate. Set to a model id supported by askii.llmPlatform (e.g. askii-smart, gpt-5-mini, claude-sonnet-4-6, glm-5.2, gemma4:e4b)."
+        },
+        "askii.llmInlinePlatform": {
+          "type": "string",
+          "enum": [
+            "ollama",
+            "lmstudio",
+            "openai",
+            "anthropic",
+            "opencodego",
+            "askiicloud"
+          ],
+          "default": "askiicloud",
+          "description": "LLM platform to use for ASKII inline suggestions, inline completion and git commit message generation."
+        },
+        "askii.llmInlineModel": {
+          "type": "string",
+          "default": "askii-fast",
+          "description": "Model id to use for ASKII inline suggestions, inline completion and git commit message generation."
+        },
+        "askii.llmVisionPlatform": {
+          "type": "string",
+          "enum": [
+            "ollama",
+            "lmstudio",
+            "openai",
+            "anthropic",
+            "opencodego",
+            "askiicloud"
+          ],
+          "default": "askiicloud",
+          "description": "LLM platform to use for ASKII Browse, Control and Note (vision-capable features)."
+        },
+        "askii.llmVisionModel": {
+          "type": "string",
+          "default": "askii-smart",
+          "description": "Model id to use for ASKII Browse, Control and Note (vision-capable features)."
         },
         "askii.ollamaUrl": {
           "type": "string",
@@ -143,25 +184,10 @@
           "default": "ws://localhost:1234",
           "description": "URL of the LM Studio API server"
         },
-        "askii.ollamaModel": {
-          "type": "string",
-          "default": "gemma4:e4b",
-          "description": "Ollama model to use for explanations"
-        },
-        "askii.lmStudioModel": {
-          "type": "string",
-          "default": "qwen/qwen3-coder-30b",
-          "description": "LM Studio model to use for explanations"
-        },
         "askii.openaiApiKey": {
           "type": "string",
           "default": "",
-          "description": "OpenAI API key (used when llmPlatform is openai)"
-        },
-        "askii.openaiModel": {
-          "type": "string",
-          "default": "gpt-5-mini",
-          "description": "OpenAI model to use (e.g. gpt-5-mini, gpt-4o, gpt-4-turbo)"
+          "description": "OpenAI API key (used when an llm*Platform is openai)"
         },
         "askii.openaiUrl": {
           "type": "string",
@@ -171,42 +197,17 @@
         "askii.anthropicApiKey": {
           "type": "string",
           "default": "",
-          "description": "Anthropic API key (used when llmPlatform is anthropic)"
-        },
-        "askii.anthropicModel": {
-          "type": "string",
-          "default": "claude-sonnet-4-6",
-          "description": "Anthropic model to use (e.g. claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5)"
+          "description": "Anthropic API key (used when an llm*Platform is anthropic)"
         },
         "askii.opencodegoApiKey": {
           "type": "string",
           "default": "",
-          "description": "opencode Go API key (used when llmPlatform is opencodego). Get it from https://opencode.ai/go"
-        },
-        "askii.opencodegoModel": {
-          "type": "string",
-          "default": "glm-5.2",
-          "description": "opencode Go model id (e.g. glm-5.2, kimi-k2.7-code, deepseek-v4-pro, qwen3.7-max, minimax-m3). See https://opencode.ai/zen/go/v1/models"
-        },
-        "askii.opencodegoUrl": {
-          "type": "string",
-          "default": "https://opencode.ai/zen/go/v1",
-          "description": "opencode Go base URL (OpenAI-compatible). Override only if needed."
+          "description": "opencode Go API key (used when an llm*Platform is opencodego). Get it from https://opencode.ai/go"
         },
         "askii.askiicloudApiKey": {
           "type": "string",
           "default": "",
-          "description": "ASKII Cloud API key (used when llmPlatform is askiicloud)."
-        },
-        "askii.askiicloudModel": {
-          "type": "string",
-          "default": "askii-default",
-          "description": "ASKII Cloud model id to use (when llmPlatform is askiicloud)."
-        },
-        "askii.askiicloudUrl": {
-          "type": "string",
-          "default": "https://api.askii.dev/v1",
-          "description": "ASKII Cloud base URL (OpenAI-compatible). Override only if needed."
+          "description": "ASKII Cloud API key (used when an llm*Platform is askiicloud)."
         },
         "askii.inlineHelperMode": {
           "type": "string",
@@ -270,34 +271,6 @@
           "type": "boolean",
           "default": false,
           "description": "Enable ASKII inline code completion (Copilot-style ghost text in the editor; Tab to accept, Esc to dismiss)."
-        },
-        "askii.inlinePlatform": {
-          "type": "string",
-          "enum": [
-            "default",
-            "ollama",
-            "lmstudio",
-            "openai",
-            "anthropic",
-            "opencodego",
-            "askiicloud"
-          ],
-          "enumDescriptions": [
-            "Use the platform configured in askii.llmPlatform",
-            "Ollama (local)",
-            "LM Studio (local)",
-            "OpenAI / OpenAI-compatible",
-            "Anthropic Claude",
-            "opencode Go",
-            "ASKII Cloud"
-          ],
-          "default": "default",
-          "description": "LLM platform to use for inline auto-complete and inline helper mode decorations. Set to \"default\" to follow askii.llmPlatform."
-        },
-        "askii.inlineModel": {
-          "type": "string",
-          "default": "default",
-          "description": "Model id to use for inline auto-complete and helper mode. Set to \"default\" to use the default model of the selected platform (askii.ollamaModel, askii.openaiModel, etc.)."
         },
         "askii.inlineCompletionEagerness": {
           "type": "string",
