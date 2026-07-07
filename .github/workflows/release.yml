@@ -67,19 +67,4 @@ jobs:
       # https://dev.azure.com with the "Marketplace (Publish)" scope.
 
       - name: Publish VS Code extension
-        env:
-          VSCE_PAT: ${{ secrets.MARKETPLACE_PAT }}
-        run: |
-          set -euo pipefail
-          VSIX="askii-${{ steps.version.outputs.VERSION }}.vsix"
-          for attempt in 1 2 3 4 5; do
-            echo "Publish attempt $attempt/5..."
-            if npx @vscode/vsce publish --packagePath "$VSIX" --noWait; then
-              echo "Publish submitted successfully."
-              exit 0
-            fi
-            echo "Attempt $attempt failed. Retrying in $((attempt * 20))s..."
-            sleep $((attempt * 20))
-          done
-          echo "All publish attempts failed."
-          exit 1
+        run: npx @vscode/vsce publish --packagePath askii-${{ steps.version.outputs.VERSION }}.vsix --pat ${{ secrets.MARKETPLACE_PAT }}
