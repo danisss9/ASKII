@@ -8,6 +8,16 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Added
 
+- **ASKII Generate agent** (`Ctrl+Shift+K R` / `Cmd+Shift+K R`): An agentic file generator that creates a Test, Doc, or Json file from a base name.
+  - Quick-pick the file type (Test / Doc / Json), then enter a base name — the agent decides the full path and extension based on workspace conventions.
+  - Reuses the ASKII Do agentic loop: it can `view`, `list`, `search`, and `wiki_search` the workspace to gather context before generating.
+  - New `clarify` action type: the agent can ask the user clarifying questions (via an input box in the extension, or a prompt in the CLI) when it needs more information.
+  - Initial context is seeded with the current tab (capped at ~8k chars), the selected text, and relevant wiki chunks.
+  - The generated file is written directly (no confirmation dialog) and opened in the editor; an **Undo** option restores any overwritten files and deletes the created file.
+  - Progress streams to an `ASKII Generate` output channel; cancellable via the progress notification.
+  - New shared helper `buildGenerateSystemPrompt` in `common/workspace.ts` (used by both the extension and the CLI); the `clarify` action type was added to the shared `parseWorkspaceActions` parser and the `WorkspaceAction` type.
+  - New file: `src/generate.ts` (`askiiGenerateCommand`).
+  - **CLI**: New `askii generate <type> <base-name>` command and `/generate <type> <base-name>` REPL slash-command, mirroring the extension flow. Optional `--file <path>` seeds context from a file and `--instruction <text>` adds extra instructions.
 - **ASKII Note agent** (`Ctrl+Shift+K N` / `Cmd+Shift+K N`): A notes / tasks / reminders mode with a dedicated webview panel.
   - Type free text and the AI auto-classifies it as a **note**, a **task** (with `low` / `medium` / `high` priority), or a **reminder** (with a due time). The AI can ask clarifying questions back when the intent or time is ambiguous.
   - **Full-text search** across all notes, tasks and reminders (powered by MiniSearch, same engine as the wiki RAG).
@@ -28,7 +38,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Changed
 
-- **Status-bar quick-pick menu**: Renamed the **Generate Commit Message** entry to **ASKII Git** and moved it to sit above **Reload Wiki** and below **ASKII Browse** for a more logical grouping
+- **Keybinding reassignment**: `Ctrl+Shift+K R` / `Cmd+Shift+K R` now triggers **ASKII Generate** (previously **Reload Wiki**). **Reload Wiki** has moved to `Ctrl+Shift+K W` / `Cmd+Shift+K W`.
+- **Status-bar quick-pick menu**: Added an **ASKII Generate** entry (`$(new-file)`). Renamed the **Generate Commit Message** entry to **ASKII Git** and moved it to sit above **Reload Wiki** and below **ASKII Browse** for a more logical grouping
 - **Default LLM platform is now ASKII Cloud**: `askii.llmPlatform` now defaults to `askiicloud` (previously `ollama`), so ASKII works out of the box once an `askii.askiicloudApiKey` is set. The CLI default platform remains `ollama`.
 - **opencode Go base URL is no longer configurable**: The `askii.opencodegoUrl` setting and the `--opencodego-url` CLI flag / `ASKII_OPENCODEGO_URL` env var have been removed. opencode Go now always uses `https://opencode.ai/zen/go/v1` (via the `OPENCODE_GO_URL` constant in `common/providers.ts`).
 - **ASKII Cloud base URL is no longer configurable**: The `askii.askiicloudUrl` setting and the `--askiicloud-url` CLI flag / `ASKII_CLOUD_URL` env var have been removed. ASKII Cloud now always uses `https://api.askii.dev/v1` (via the `ASKII_CLOUD_URL` constant in `common/providers.ts`).

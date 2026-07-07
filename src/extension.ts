@@ -20,6 +20,7 @@ import { AskiiInlineCompletionProvider, INLINE_ACCEPT_COMMAND } from './inlineCo
 import { generateCommitMessageCommand } from './commitMessage';
 import { askiiNoteCommand } from './notesPanel';
 import { startNoteScheduler, stopNoteScheduler } from './notesScheduler';
+import { askiiGenerateCommand } from './generate';
 
 export function activate(context: vscode.ExtensionContext) {
   // Register the in-memory content provider for diff previews
@@ -76,6 +77,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('askii.generateCommitMessage', generateCommitMessageCommand),
   );
   context.subscriptions.push(
+    vscode.commands.registerCommand('askii.generate', askiiGenerateCommand),
+  );
+  context.subscriptions.push(
     vscode.commands.registerCommand('askii.noteTask', (args?: { selectId?: string }) =>
       askiiNoteCommand(context, args),
     ),
@@ -100,6 +104,7 @@ export function activate(context: vscode.ExtensionContext) {
         { label: '$(screen-full) ASKII Control', command: 'askii.controlTask' },
         { label: '$(browser) ASKII Browse', command: 'askii.browseTask' },
         { label: '$(note) ASKII Note', command: 'askii.noteTask' },
+        { label: '$(new-file) ASKII Generate', command: 'askii.generate' },
         { label: '$(sparkle) ASKII Git', command: 'askii.generateCommitMessage' },
         { label: '$(book) Reload Wiki', command: 'askii.reloadWiki' },
         { label: '$(refresh) Clear Cache', command: 'askii.clearCache' },

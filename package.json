@@ -50,6 +50,11 @@
       },
       {
         "command": "askii.reloadWiki",
+        "key": "ctrl+shift+k w",
+        "mac": "cmd+shift+k w"
+      },
+      {
+        "command": "askii.generate",
         "key": "ctrl+shift+k r",
         "mac": "cmd+shift+k r"
       },
@@ -105,6 +110,12 @@
         "command": "askii.reloadWiki",
         "title": "ASKII: Reload Wiki",
         "category": "ASKII"
+      },
+      {
+        "command": "askii.generate",
+        "title": "ASKII Generate",
+        "category": "ASKII",
+        "icon": "$(new-file)"
       },
       {
         "command": "askii.generateCommitMessage",

@@ -16,6 +16,7 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
   - **ASKII Control**: Give ASKII a screen instruction — it takes screenshots and drives your mouse and keyboard until the task is done
   - **ASKII Browse**: Give ASKII a browser task — it launches a Puppeteer browser, takes page screenshots, and navigates the web until the task is done
   - **ASKII Note**: A notes / tasks / reminders mode — type free text and the AI auto-classifies it (note, task with priority, or reminder with a time), can ask clarifying questions back, captures full-screen screenshots, and pings you with a notification + sound when a reminder is due. Notes are stored globally (tagged by workspace, searchable everywhere) and reminders fire while VS Code is running.
+  - **ASKII Generate**: An agentic file generator — pick a type (Test / Doc / Json), give a base name, and the agent searches the workspace, asks clarifying questions when needed, then creates the file (deciding the full path and extension itself). Reuses the Do-style loop with `view` / `list` / `search` / `wiki_search` and a new `clarify` action.
 - **Code Auto-completion**: Copilot-style ghost-text code suggestions inside any open code file — Tab to accept, Esc to dismiss.
 - **Codebase Wiki RAG**: Index your own workspace code files and inject relevant chunks as context into inline completion, Ask, Edit, and Do commands.
 - **Commit Message Generator**: A one-click button in the Source Control view toolbar that reads your staged (or working-tree) diff and writes a generated commit message straight into the commit-message input box — powered by the same LLM platform/model used for inline completion.
@@ -123,6 +124,20 @@ Search for "ASKII Inline Helper Mode" and select:
    - **RENAME**: Confirmation to rename or move files
    - **DELETE**: Warning confirmation for deletions
    - **VIEW / LIST**: No confirmation needed (read-only)
+
+#### ASKII Generate (Agentic File Generator)
+
+1. Press `Ctrl+Shift+K R` (or `Cmd+Shift+K R`) — or open the command palette and search for "ASKII Generate"
+2. Pick a file type from the quick-pick: **Test**, **Doc**, or **Json**
+3. Enter a base name (e.g. `myComponent`) — the agent decides the full path and extension based on workspace conventions
+4. ASKII runs a Do-style loop, seeded with your current tab (capped at ~8k chars), selected text, and relevant wiki chunks:
+   - **Search & Read**: `view`, `list`, `search`, and `wiki_search` actions explore the workspace (no confirmation)
+   - **Clarify**: the agent can ask you clarifying questions via an input box when it needs more information
+   - **Generate**: finishes with a single `create` action that writes the file directly (no confirmation dialog)
+5. The generated file is opened in the editor; an **Undo** option restores any overwritten files and deletes the created file
+6. Progress streams to the **ASKII Generate** output channel; cancel via the progress notification
+
+> Tip: Reload Wiki moved to `Ctrl+Shift+K W` / `Cmd+Shift+K W`.
 
 #### ASKII Control (Screen Agent)
 

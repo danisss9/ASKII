@@ -61,6 +61,7 @@ Bare text input maintains a **persistent chat history** across turns — follow-
 | `/help`                       | Show all available commands                                  |
 | `/ask <question>`             | Explicit ask (same as bare text)                             |
 | `/do <task> [flags]`          | Run the Do agent (`--max-rounds N`, `--yes`)                 |
+| `/generate <type> <base>`     | Generate a file (`test` / `doc` / `json`) — agentic, can search & ask |
 | `/edit --file <path> <instr>` | Edit a file in place                                         |
 | `/explain <text>`             | Explain a line of code                                       |
 | `/wiki-reload`                | Rebuild the docs wiki index                                  |
@@ -183,6 +184,48 @@ The agent can use the following actions each round:
 | `run`         | Run a shell command                                         | Yes (always)          |
 
 The loop continues after every round — not only after reads — until the AI returns `[]` or the round limit is hit.
+
+---
+
+### `generate` — Agentic file generator
+
+Picks a file type (Test / Doc / Json) and a base name, then runs a Do-style loop that searches the workspace, asks clarifying questions when needed, and creates the generated file. The agent decides the full path and extension based on workspace conventions.
+
+**bash**
+
+```bash
+askii generate test utils --file src/utils.ts --instruction "use Jest"
+askii generate doc api --dir ./my-project
+askii generate json schema --file package.json
+askii generate test utils --yes   # auto-confirm (no clarifications prompted)
+```
+
+**PowerShell**
+
+```powershell
+askii generate test utils --file src/utils.ts --instruction "use Jest"
+askii generate doc api --dir .\my-project
+askii generate json schema --file package.json
+askii generate test utils --yes
+```
+
+Each round the agent can use:
+
+| Action        | Description                                                 | Prompts you? |
+| ------------- | ----------------------------------------------------------- | ------------ |
+| `list`        | List files in a folder (`[file]` / `[folder]` labels)       | No           |
+| `view`        | Read a file's contents                                      | No           |
+| `search`      | Grep workspace files for a pattern                          | No           |
+| `wiki_search` | BM25 search over indexed `.md` docs (requires `--use-wiki`) | No           |
+| `clarify`     | Ask you a clarifying question (type your answer at the prompt) | Yes        |
+| `create`      | Create the generated file (written directly; Undo offered at the end) | No   |
+
+Optional flags:
+
+- `--file <path>` — read this file as context (acts as the "current tab")
+- `--instruction <text>` — extra instructions for the generator
+- `--dir <path>` — working directory (default: cwd)
+- `--yes` — auto-confirm (skips clarification prompts)
 
 ---
 
@@ -324,9 +367,11 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 | `--askiicloud-key`   |       | ASKII Cloud API key (env: `ASKII_CLOUD_KEY`)                                          |                                 |
 | `--askiicloud-model` |       | ASKII Cloud model (env: `ASKII_CLOUD_MODEL`)                                          | `askii-default`                 |
 | `--mode`             |       | Response style: `helpful`, `funny`                                                    | `funny`                         |
-| `--max-rounds`       |       | Max agent rounds for `do` / `control` / `browse`                                      | `5`                             |
-| `--dir`              |       | Working directory for `do`                                                            | cwd                             |
+| `--max-rounds`       |       | Max agent rounds for `do` / `generate` / `control` / `browse`                          | `5`                             |
+| `--dir`              |       | Working directory for `do` / `generate`                                                | cwd                             |
 | `--code`             | `-c`  | Code input (alternative to stdin)                                                     |                                 |
+| `--file`             |       | Filename of the code (e.g. src/utils.ts) — also context file for `generate`            |                                 |
+| `--instruction`      | `-i`  | Extra instruction for `generate`                                                       |                                 |
 | `--yes`              | `-y`  | Auto-confirm all actions                                                              |                                 |
 | `--headless`         |       | Run Puppeteer headlessly for `browse`                                                 | `false` (visible)               |
 | `--chrome-path`      |       | Path to Chrome/Chromium executable for `browse`                                       |                                 |
