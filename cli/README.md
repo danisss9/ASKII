@@ -56,21 +56,22 @@ Bare text input maintains a **persistent chat history** across turns — follow-
 
 ### REPL slash-commands
 
-| Command                       | Description                                                           |
-| ----------------------------- | --------------------------------------------------------------------- |
-| `/help`                       | Show all available commands                                           |
-| `/ask <question>`             | Explicit ask (same as bare text)                                      |
-| `/do <task> [flags]`          | Run the Do agent (`--max-rounds N`, `--yes`)                          |
-| `/generate <type> <base>`     | Generate a file (`test` / `doc` / `json`) — agentic, can search & ask |
-| `/commit`                     | Generate a commit message from staged/working-tree diff               |
-| `/edit --file <path> <instr>` | Edit a file in place                                                  |
-| `/explain <text>`             | Explain a line of code                                                |
-| `/wiki-reload`                | Rebuild the docs wiki index                                           |
-| `/platform <name>`            | Switch platform for the session (also updates default model)          |
-| `/model <name>`               | Switch model for the session                                          |
-| `/config`                     | Show current session config (keys redacted)                           |
-| `/clear`                      | Clear chat history and start a fresh conversation                     |
-| `/exit`, `/quit`              | Exit interactive mode                                                 |
+| Command                       | Description                                                                  |
+| ----------------------------- | ---------------------------------------------------------------------------- |
+| `/help`                       | Show all available commands                                                  |
+| `/ask <question>`             | Explicit ask (same as bare text)                                             |
+| `/do <task> [flags]`          | Run the Do agent (`--max-rounds N`, `--yes`)                                 |
+| `/generate <type> <base>`     | Generate a file (`test` / `doc` / `json`) — agentic, can search & ask        |
+| `/commit`                     | Generate a commit message from staged/working-tree diff                      |
+| `/note <subcommand>`          | Notes / tasks / reminders (`add`, `list`, `search`, `done`, `delete`, `due`) |
+| `/edit --file <path> <instr>` | Edit a file in place                                                         |
+| `/explain <text>`             | Explain a line of code                                                       |
+| `/wiki-reload`                | Rebuild the docs wiki index                                                  |
+| `/platform <name>`            | Switch platform for the session (also updates default model)                 |
+| `/model <name>`               | Switch model for the session                                                 |
+| `/config`                     | Show current session config (keys redacted)                                  |
+| `/clear`                      | Clear chat history and start a fresh conversation                            |
+| `/exit`, `/quit`              | Exit interactive mode                                                        |
 
 Tab-complete any `/` command by pressing Tab. Up/down arrows cycle through input history.
 
@@ -323,6 +324,55 @@ askii commit --dir ..\my-project
 ```
 
 The diff is capped at 12,000 characters to keep context tight. The output is cleaned of markdown fences, quotes, and `Commit message:` labels, so it's ready to pass straight to `git commit -m`.
+
+---
+
+### `note` — Notes / tasks / reminders
+
+Type free text and the AI auto-classifies it into a **note**, **task** (with `low` / `medium` / `high` priority), or **reminder** (with a due time). Entries are stored globally at `~/.askii/notes.json`, tagged by workspace, and full-text searchable everywhere.
+
+**bash**
+
+```bash
+askii note add "the API rate limit is 100 req/min"
+askii note add "task: fix the login bug, high priority"
+askii note add "remind me to check the build in 30 minutes"
+askii note add --shot "remember this screen state"   # attach a full-screen screenshot
+askii note list                                       # list all entries (most-recent first)
+askii note list "login"                               # filter by full-text query
+askii note search "login"                             # full-text search
+askii note done abc12345                              # toggle a task's done state
+askii note delete abc12345                            # delete an entry
+askii note due                                        # list reminders that are due now
+```
+
+**PowerShell**
+
+```powershell
+askii note add "the API rate limit is 100 req/min"
+askii note add "task: fix the login bug, high priority"
+askii note add "remind me to check the build in 30 minutes"
+askii note add --shot "remember this screen state"
+askii note list
+askii note search "login"
+askii note done abc12345
+askii note delete abc12345
+askii note due
+```
+
+Subcommands:
+
+| Subcommand            | Description                                        |
+| --------------------- | -------------------------------------------------- |
+| `add "<text>"`        | Add a note / task / reminder (AI auto-classifies)  |
+| `add --shot "<text>"` | Attach a full-screen screenshot to the entry       |
+| `list [query]`        | List all entries, or filter by full-text query     |
+| `search "<query>"`    | Full-text search across all entries                |
+| `done <id>`           | Toggle a task's done state                         |
+| `delete <id>`         | Delete an entry                                    |
+| `due`                 | List reminders that are due now (marks them fired) |
+
+> **Reminders**: the CLI has no background scheduler, so reminders don't fire automatically. Run `askii note due` to see what's overdue — it prints the due entries and marks them fired. In the interactive REPL, `/note add` will ask a clarifying question if the reminder time is ambiguous.
 
 ---
 

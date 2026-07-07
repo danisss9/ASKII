@@ -56,9 +56,19 @@ import {
   executeBrowserAction,
   takePageScreenshot,
 } from '@common/browser';
+import {
+  type NoteEntry,
+  type NoteKind,
+  type TaskPriority,
+  type NoteContext,
+  searchNotes,
+  parseReminderTimeLocal,
+} from '@common/notes';
+import { randomBytes } from 'crypto';
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 
 interface Config {
   platform: 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego' | 'askiicloud';
@@ -400,6 +410,7 @@ function replCompleter(line: string): [string[], string] {
     '/do ',
     '/generate ',
     '/commit',
+    '/note ',
     '/edit ',
     '/explain ',
     '/wiki-reload',
@@ -425,6 +436,7 @@ REPL Commands:
   /do <task> [--max-rounds N]    Run the Do agent (--yes/-y to auto-confirm)
   /generate <type> <base>        Generate a file (type: test|doc|json) — agentic, can search & ask
   /commit                        Generate a commit message from staged/working-tree diff
+  /note <subcommand>             Notes / tasks / reminders (add, list, search, done, delete, due)
   /edit --file <path> <instr>    Edit a file in place
   /explain <text>                Explain a line of code
   /wiki-reload                   Rebuild the docs wiki index
@@ -1161,14 +1173,18 @@ async function handleReplInput(
         const genTokens = rest.split(/\s+/).filter(Boolean);
         const genType = normalizeGenerateType(genTokens[0] ?? '');
         if (!genType) {
-          console.error('Usage: /generate <test|doc|json> <base-name> [--file <path>] [--instruction <text>]');
+          console.error(
+            'Usage: /generate <test|doc|json> <base-name> [--file <path>] [--instruction <text>]',
+          );
           return false;
         }
         const genFlags = genTokens.filter((t) => t.startsWith('-'));
         const genWords = genTokens.filter((t) => !t.startsWith('-'));
         const genBaseName = genWords[1];
         if (!genBaseName) {
-          console.error('Usage: /generate <test|doc|json> <base-name> [--file <path>] [--instruction <text>]');
+          console.error(
+            'Usage: /generate <test|doc|json> <base-name> [--file <path>] [--instruction <text>]',
+          );
           return false;
         }
         const genConfig = mergeConfigOverride(config, genFlags);
@@ -1271,6 +1287,15 @@ async function handleReplInput(
         return false;
       }
 
+      case '/note': {
+        // /note <subcommand> [args...] — same as the top-level `note` command
+        const noteTokens = rest.split(/\s+/).filter(Boolean);
+        const noteSub = noteTokens[0] ?? 'list';
+        const noteArgs = noteTokens.slice(1);
+        await runNoteCommand(noteSub, noteArgs, [], config);
+        return false;
+      }
+
       case '/ask': {
         if (!rest) {
           console.error('Usage: /ask <question>');
@@ -1366,6 +1391,7 @@ Commands:
   do <task>             Agentic task runner — creates, modifies, and deletes files
   generate <type> <base>  Agentic file generator (type: test|doc|json) — searches workspace & asks clarifications
   commit                 Generate a commit message from staged/working-tree diff and print to stdout
+  note <subcommand>      Notes / tasks / reminders (add, list, search, done, delete, due)
   control <instruction> Screen control — takes screenshots and drives mouse/keyboard
   browse <task>         Browser agent — launches Puppeteer and navigates the web
   wiki-reload           Index .md files from --wiki-path into the local vector database
@@ -1421,6 +1447,13 @@ Examples:
   askii generate doc api --dir ./my-project
   askii commit                       # print a generated commit message to stdout
   askii commit --dir ./my-project    # generate for a different repo
+  askii note add "fix the login bug, high priority"
+  askii note add "remind me to check the build in 30 minutes"
+  askii note list                     # list all entries (most-recent first)
+  askii note search "login"           # full-text search
+  askii note done <id>                # toggle a task's done state
+  askii note delete <id>              # delete an entry
+  askii note due                      # list reminders that are due now
   askii -p lmstudio --lmstudio-model "my-model" do "refactor index.ts"
   askii control --ollama-model llava "open Notepad and type hello world"
   askii control --yes --ollama-model llava "click the search bar and search for cats"
@@ -1429,6 +1462,510 @@ Examples:
   askii wiki-reload --wiki-path ./docs
   askii ask --wiki-path ./docs --use-wiki "how do I configure the database?"
 `);
+}
+
+// ── ASKII Note (CLI) ──────────────────────────────────────────────────────────
+// Notes / tasks / reminders persisted to ~/.askii/notes.json, tagged by
+// workspace. Mirrors src/notes.ts + src/notesPanel.ts in the extension, minus
+// the webview UI and the in-process reminder scheduler (the CLI prints due
+// reminders on demand via `askii note due`).
+
+const NOTES_FILE = path.join(os.homedir(), '.askii', 'notes.json');
+
+function noteGenId(): string {
+  return randomBytes(8).toString('hex') + Date.now().toString(36);
+}
+
+function loadCliNotes(): NoteEntry[] {
+  try {
+    if (!fs.existsSync(NOTES_FILE)) return [];
+    const raw = fs.readFileSync(NOTES_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as NoteEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCliNotes(notes: NoteEntry[]): void {
+  const dir = path.dirname(NOTES_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(NOTES_FILE, JSON.stringify(notes, null, 2));
+}
+
+function currentWorkspaceTagCli(): string | undefined {
+  try {
+    const cwd = process.cwd();
+    return path.basename(cwd) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function captureContextCli(): NoteContext {
+  return {
+    workspaceFolder: currentWorkspaceTagCli(),
+  };
+}
+
+// ── Classification (mirrors src/notes.ts classifyNoteInput) ──────────────────
+
+interface CliClassification {
+  kind: NoteKind;
+  priority: TaskPriority | null;
+  dueAt: string | null;
+  tags: string[];
+  needsClarification: boolean;
+  clarifyingQuestion: string | null;
+  summary: string;
+}
+
+const NOTE_CLASSIFY_SYSTEM = `You are ASKII Note, an assistant that classifies free-text notes from the user into one of three kinds and extracts structured metadata.
+
+Current date/time (ISO8601): {NOW}
+Workspace: {WORKSPACE}
+
+Kinds:
+- "note"  : a plain piece of information to remember (no deadline, no priority).
+- "task"  : an actionable item that should be done. Extract a priority: "low" | "medium" | "high".
+- "reminder" : something the user wants to be pinged about at a specific time. Extract "dueAt" as an ISO8601 timestamp in UTC. Resolve relative phrases ("in 2 hours", "tomorrow 9am", "next monday") against the current date/time above.
+
+Rules:
+- If the user's text is ambiguous about WHEN a reminder should fire (e.g. "later", "soon", "remind me"), set "needsClarification": true and provide a short "clarifyingQuestion" asking for a concrete time. Otherwise set "needsClarification": false and "clarifyingQuestion": null.
+- Extract up to 5 short lowercase tags (single words or hyphenated phrases) that describe the topic.
+- "summary" is a short (<= 80 chars) human-readable title for the entry.
+- Respond with ONLY a single JSON object, no markdown, no extra text.
+
+Output schema:
+{"kind":"note"|"task"|"reminder","priority":"low"|"medium"|"high"|null,"dueAt":<ISO8601 or null>,"tags":[],"needsClarification":false,"clarifyingQuestion":null,"summary":""}`;
+
+function buildNoteClassifyPrompt(text: string, context: NoteContext): string {
+  const ctxLines: string[] = [];
+  if (context.workspaceFolder) ctxLines.push(`- Workspace: ${context.workspaceFolder}`);
+  const ctxSection = ctxLines.length
+    ? `\n\nContext the user currently has open:\n${ctxLines.join('\n')}`
+    : '';
+  return `Classify this user note:${ctxSection}\n\nUser note:\n"""\n${text}\n"""`;
+}
+
+function safeParseJsonRaw(raw: string): Record<string, unknown> | null {
+  let s = raw.trim();
+  s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) s = s.slice(start, end + 1);
+  try {
+    return JSON.parse(s) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function coerceKind(v: unknown): NoteKind {
+  return v === 'task' || v === 'reminder' ? (v as NoteKind) : 'note';
+}
+
+function coercePriority(v: unknown): TaskPriority | null {
+  return v === 'low' || v === 'medium' || v === 'high' ? (v as TaskPriority) : null;
+}
+
+function coerceTags(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => x.toLowerCase().trim())
+    .filter((x) => x.length > 0)
+    .slice(0, 5);
+}
+
+async function classifyNoteCli(
+  text: string,
+  context: NoteContext,
+  config: Config,
+): Promise<CliClassification> {
+  const now = new Date();
+  const system = NOTE_CLASSIFY_SYSTEM.replace('{NOW}', now.toISOString()).replace(
+    '{WORKSPACE}',
+    context.workspaceFolder ?? '(no workspace)',
+  );
+
+  try {
+    const raw = await getResponse(config, buildNoteClassifyPrompt(text, context), system);
+    const obj = safeParseJsonRaw(raw);
+    if (obj) {
+      const kind = coerceKind(obj['kind']);
+      const priority = coercePriority(obj['priority']);
+      const tags = coerceTags(obj['tags']);
+      const needsClarification = obj['needsClarification'] === true;
+      const clarifyingQuestion =
+        typeof obj['clarifyingQuestion'] === 'string' ? obj['clarifyingQuestion'] : null;
+      const summary =
+        typeof obj['summary'] === 'string' && obj['summary'].trim()
+          ? obj['summary'].trim().slice(0, 120)
+          : text.slice(0, 80);
+      let dueAt: string | null = null;
+      if (typeof obj['dueAt'] === 'string' && obj['dueAt']) {
+        const d = new Date(obj['dueAt']);
+        if (!isNaN(d.getTime())) dueAt = d.toISOString();
+      }
+      if (kind === 'reminder' && !dueAt && !needsClarification) {
+        dueAt = parseReminderTimeLocal(text, now);
+        if (!dueAt) {
+          return {
+            kind,
+            priority,
+            dueAt: null,
+            tags,
+            needsClarification: true,
+            clarifyingQuestion:
+              'When should I remind you? (e.g. "in 2 hours", "tomorrow 9am", "2026-07-08 14:30")',
+            summary,
+          };
+        }
+      }
+      return { kind, priority, dueAt, tags, needsClarification, clarifyingQuestion, summary };
+    }
+  } catch {
+    // fall through to heuristic
+  }
+
+  // Heuristic fallback (mirrors src/notes.ts)
+  const lower = text.toLowerCase();
+  let kind: NoteKind = 'note';
+  let priority: TaskPriority | null = null;
+  let dueAt: string | null = null;
+  let needsClarification = false;
+  let clarifyingQuestion: string | null = null;
+
+  if (/remind|reminder|ping|notify|alert/.test(lower)) {
+    kind = 'reminder';
+    dueAt = parseReminderTimeLocal(text, now);
+    if (!dueAt) {
+      needsClarification = true;
+      clarifyingQuestion = 'When should I remind you? (e.g. "in 2 hours", "tomorrow 9am")';
+    }
+  } else if (/task|todo|to-do|fix|implement|do:|need to|should|must/.test(lower)) {
+    kind = 'task';
+    if (/high|critical|urgent|asap/.test(lower)) priority = 'high';
+    else if (/low|minor|whenever|someday/.test(lower)) priority = 'low';
+    else priority = 'medium';
+  }
+
+  return {
+    kind,
+    priority,
+    dueAt,
+    tags: [],
+    needsClarification,
+    clarifyingQuestion,
+    summary: text.slice(0, 80),
+  };
+}
+
+function buildCliEntry(text: string, cls: CliClassification, context: NoteContext): NoteEntry {
+  return {
+    id: noteGenId(),
+    kind: cls.kind,
+    text,
+    summary: cls.summary,
+    tags: cls.tags,
+    createdAt: new Date().toISOString(),
+    workspaceTag: context.workspaceFolder,
+    priority: cls.kind === 'task' ? (cls.priority ?? 'medium') : undefined,
+    done: cls.kind === 'task' ? false : undefined,
+    dueAt: cls.kind === 'reminder' ? (cls.dueAt ?? undefined) : undefined,
+    fired: cls.kind === 'reminder' ? false : undefined,
+    context,
+  };
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+
+const KIND_ICON: Record<NoteKind, string> = { note: '📝', task: '✅', reminder: '⏰' };
+const PRIORITY_ICON: Record<TaskPriority, string> = { low: '🟢', medium: '🟡', high: '🔴' };
+
+function formatDue(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const delta = d.getTime() - now.getTime();
+  const past = delta < 0;
+  const absMin = Math.round(Math.abs(delta) / 60_000);
+  let rel: string;
+  if (absMin < 1) rel = 'now';
+  else if (absMin < 60) rel = `${absMin}m`;
+  else if (absMin < 60 * 24) rel = `${Math.round(absMin / 60)}h`;
+  else rel = `${Math.round(absMin / (60 * 24))}d`;
+  const local = d.toLocaleString();
+  return past ? `${local} (overdue ${rel})` : `${local} (in ${rel})`;
+}
+
+function printNoteEntry(n: NoteEntry, idx?: number): void {
+  const prefix = idx !== undefined ? `${idx}. ` : '';
+  const icon = KIND_ICON[n.kind];
+  const parts: string[] = [`${prefix}${icon} [${n.id}]`];
+  if (n.kind === 'task') {
+    const pIcon = n.priority ? PRIORITY_ICON[n.priority] : '';
+    const done = n.done ? ' ✓ done' : '';
+    parts.push(`${pIcon}${done}`);
+  }
+  if (n.kind === 'reminder' && n.dueAt) {
+    parts.push(`due: ${formatDue(n.dueAt)}`);
+    if (n.fired) parts.push('fired');
+    if (n.missed) parts.push('missed');
+  }
+  console.log(parts.join('  '));
+  console.log(`    ${n.summary ?? n.text}`);
+  if (n.text && n.text !== n.summary) {
+    const snip = n.text.length > 200 ? n.text.slice(0, 200) + '…' : n.text;
+    console.log(`    "${snip}"`);
+  }
+  const meta: string[] = [];
+  if (n.workspaceTag) meta.push(`ws:${n.workspaceTag}`);
+  if (n.tags?.length) meta.push(`#${n.tags.join(' #')}`);
+  meta.push(`created ${new Date(n.createdAt).toLocaleString()}`);
+  console.log(`    ${meta.join(' · ')}`);
+}
+
+// ── Subcommands ───────────────────────────────────────────────────────────────
+
+async function noteAdd(
+  text: string,
+  flags: string[],
+  config: Config,
+  rl?: readline.Interface,
+): Promise<void> {
+  const attachScreenshot = hasFlag(flags, '--shot', '--screenshot');
+  const ctx = captureContextCli();
+
+  let screenshotPath: string | undefined;
+  if (attachScreenshot) {
+    try {
+      const dir = path.join(path.dirname(NOTES_FILE), 'notes-screenshots');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const { base64 } = await takeScreenshot();
+      const id = noteGenId();
+      screenshotPath = path.join(dir, `${id}.png`);
+      fs.writeFileSync(screenshotPath, Buffer.from(base64, 'base64'));
+      console.error(`  ✓ Screenshot saved: ${screenshotPath}`);
+    } catch (e) {
+      console.error(
+        `  Warning: screenshot failed (${e instanceof Error ? e.message : 'Unknown error'})`,
+      );
+    }
+  }
+
+  let cls = await classifyNoteCli(text, ctx, config);
+
+  // Clarifying-question loop (max 2 rounds), only in interactive REPL
+  let rounds = 0;
+  while (cls.needsClarification && cls.clarifyingQuestion && rl && rounds < 2) {
+    console.error(`\n  ${cls.clarifyingQuestion}`);
+    const answer = await new Promise<string | null>((resolve) => {
+      rl.question('  > ', (a) => resolve(a.trim() || null));
+    });
+    if (answer === null) {
+      // user cancelled — save as a plain note
+      cls = {
+        kind: 'note',
+        priority: null,
+        dueAt: null,
+        tags: cls.tags,
+        needsClarification: false,
+        clarifyingQuestion: null,
+        summary: text.slice(0, 80),
+      };
+      break;
+    }
+    const combined = `${text}\n\n[clarified: ${answer}]`;
+    cls = await classifyNoteCli(combined, ctx, config);
+    rounds++;
+  }
+
+  if (cls.needsClarification && cls.clarifyingQuestion && !rl) {
+    // Non-interactive: print the question and save as a plain note
+    console.error(`  Note: ${cls.clarifyingQuestion} (saving as a plain note)`);
+    cls = {
+      kind: 'note',
+      priority: null,
+      dueAt: null,
+      tags: cls.tags,
+      needsClarification: false,
+      clarifyingQuestion: null,
+      summary: text.slice(0, 80),
+    };
+  }
+
+  const entry = buildCliEntry(text, cls, ctx);
+  if (screenshotPath) entry.screenshotPath = screenshotPath;
+
+  const notes = loadCliNotes();
+  notes.push(entry);
+  saveCliNotes(notes);
+
+  console.error(`  ✓ Saved ${entry.kind}! ${getRandomKaomoji()}`);
+  printNoteEntry(entry);
+}
+
+function noteList(query: string): void {
+  const notes = loadCliNotes();
+  if (notes.length === 0) {
+    console.log('No notes yet. Add one with: askii note add "<text>"');
+    return;
+  }
+  const results = searchNotes(query, notes);
+  if (query) console.log(`Search results for "${query}" (${results.length}):`);
+  else console.log(`Notes (${results.length}, most-recent first):`);
+  console.log('');
+  results.forEach((r, i) => printNoteEntry(r.entry, i + 1));
+}
+
+function noteToggleDone(id: string): void {
+  const notes = loadCliNotes();
+  const i = notes.findIndex((n) => n.id === id);
+  if (i === -1) {
+    console.error(`Error: no entry with id "${id}"`);
+    process.exit(1);
+  }
+  if (notes[i].kind !== 'task') {
+    console.error(`Error: entry ${id} is a ${notes[i].kind}, not a task`);
+    process.exit(1);
+  }
+  notes[i].done = !notes[i].done;
+  saveCliNotes(notes);
+  console.log(`  ✓ Task ${id} marked ${notes[i].done ? 'done' : 'not done'}`);
+}
+
+function noteDelete(id: string): void {
+  const notes = loadCliNotes();
+  const i = notes.findIndex((n) => n.id === id);
+  if (i === -1) {
+    console.error(`Error: no entry with id "${id}"`);
+    process.exit(1);
+  }
+  const removed = notes.splice(i, 1)[0];
+  saveCliNotes(notes);
+  console.log(`  ✓ Deleted ${removed.kind} ${id}`);
+}
+
+function noteDue(): void {
+  const notes = loadCliNotes();
+  const now = Date.now();
+  const due = notes.filter(
+    (n) => n.kind === 'reminder' && n.dueAt && !n.fired && new Date(n.dueAt).getTime() <= now,
+  );
+  if (due.length === 0) {
+    console.log('No reminders are due. (´･_･`)');
+    return;
+  }
+  console.log(`⏰ ${due.length} reminder(s) due:\n`);
+  due.forEach((n, i) => {
+    printNoteEntry(n, i + 1);
+    // Mark as fired + missed (CLI has no background scheduler)
+    n.fired = true;
+    n.missed = true;
+  });
+  saveCliNotes(notes);
+  console.error('\n  (Reminders marked as fired. Use `askii note add` to create new ones.)');
+}
+
+async function runNoteCommand(
+  sub: string,
+  args: string[],
+  flags: string[],
+  config: Config,
+  rl?: readline.Interface,
+): Promise<void> {
+  switch (sub) {
+    case 'add': {
+      const text = args.join(' ').trim();
+      if (!text) {
+        console.error('Usage: askii note add "<text>"');
+        console.error('Examples:');
+        console.error('  askii note add "the API rate limit is 100 req/min"');
+        console.error('  askii note add "task: fix the login bug, high priority"');
+        console.error('  askii note add "remind me to check the build in 30 minutes"');
+        console.error('  askii note add --shot "remember this screen state"');
+        process.exit(1);
+      }
+      console.error(`ASKII Note is classifying... ${getRandomThinkingKaomoji()}`);
+      await noteAdd(text, flags, config, rl);
+      break;
+    }
+    case 'list':
+    case 'ls': {
+      noteList(args.join(' '));
+      break;
+    }
+    case 'search':
+    case 'find': {
+      const query = args.join(' ');
+      if (!query) {
+        console.error('Usage: askii note search "<query>"');
+        process.exit(1);
+      }
+      noteList(query);
+      break;
+    }
+    case 'done':
+    case 'check': {
+      const id = args[0];
+      if (!id) {
+        console.error('Usage: askii note done <id>');
+        process.exit(1);
+      }
+      noteToggleDone(id);
+      break;
+    }
+    case 'delete':
+    case 'rm':
+    case 'remove': {
+      const id = args[0];
+      if (!id) {
+        console.error('Usage: askii note delete <id>');
+        process.exit(1);
+      }
+      noteDelete(id);
+      break;
+    }
+    case 'due':
+    case 'reminders': {
+      noteDue();
+      break;
+    }
+    case 'help':
+    case '--help':
+    case '-h': {
+      console.log(`ASKII Note — notes / tasks / reminders
+
+Usage: askii note <subcommand> [args]
+
+Subcommands:
+  add "<text>"            Add a note / task / reminder (AI auto-classifies)
+  add --shot "<text>"      Attach a full-screen screenshot to the entry
+  list [query]             List all entries, or filter by full-text query
+  search "<query>"         Full-text search across all entries
+  done <id>                Toggle a task's done state
+  delete <id>              Delete an entry
+  due                      List reminders that are due now (marks them fired)
+
+Notes are stored globally at ${NOTES_FILE}, tagged by workspace.
+
+Examples:
+  askii note add "fix the login bug, high priority"
+  askii note add "remind me to check the build in 30 minutes"
+  askii note list
+  askii note search "login"
+  askii note done abc12345...
+  askii note due
+`);
+      break;
+    }
+    default: {
+      console.error(`Unknown note subcommand: ${sub}`);
+      console.error('Run `askii note help` for usage.');
+      process.exit(1);
+    }
+  }
 }
 
 async function main() {
@@ -1578,9 +2115,7 @@ Rules:
       }
 
       const diff =
-        raw.length > MAX_DIFF_CHARS
-          ? `${raw.slice(0, MAX_DIFF_CHARS)}\n…[diff truncated]`
-          : raw;
+        raw.length > MAX_DIFF_CHARS ? `${raw.slice(0, MAX_DIFF_CHARS)}\n…[diff truncated]` : raw;
 
       const scope = hasStaged ? 'staged' : 'working-tree';
       const fileSummary =
@@ -1916,7 +2451,9 @@ Rules:
     const positionalType = positional[1];
     const rawType = typeFlag || positionalType;
     if (!rawType) {
-      console.error('Error: provide a file type (test, doc, json) — e.g. askii generate test myComponent');
+      console.error(
+        'Error: provide a file type (test, doc, json) — e.g. askii generate test myComponent',
+      );
       process.exit(1);
     }
     const fileType = normalizeGenerateType(rawType);
@@ -2159,6 +2696,11 @@ Rules:
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);
     }
+  } else if (command === 'note') {
+    // ASKII Note — notes / tasks / reminders, persisted to ~/.askii/notes.json
+    const subcommand = positional[1] ?? 'list';
+    const noteArgs = positional.slice(2);
+    await runNoteCommand(subcommand, noteArgs, flags, config);
   } else if (command === 'browse') {
     const task = positional.slice(1).join(' ');
 
