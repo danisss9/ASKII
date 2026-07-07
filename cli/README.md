@@ -56,20 +56,21 @@ Bare text input maintains a **persistent chat history** across turns — follow-
 
 ### REPL slash-commands
 
-| Command                       | Description                                                  |
-| ----------------------------- | ------------------------------------------------------------ |
-| `/help`                       | Show all available commands                                  |
-| `/ask <question>`             | Explicit ask (same as bare text)                             |
-| `/do <task> [flags]`          | Run the Do agent (`--max-rounds N`, `--yes`)                 |
+| Command                       | Description                                                           |
+| ----------------------------- | --------------------------------------------------------------------- |
+| `/help`                       | Show all available commands                                           |
+| `/ask <question>`             | Explicit ask (same as bare text)                                      |
+| `/do <task> [flags]`          | Run the Do agent (`--max-rounds N`, `--yes`)                          |
 | `/generate <type> <base>`     | Generate a file (`test` / `doc` / `json`) — agentic, can search & ask |
-| `/edit --file <path> <instr>` | Edit a file in place                                         |
-| `/explain <text>`             | Explain a line of code                                       |
-| `/wiki-reload`                | Rebuild the docs wiki index                                  |
-| `/platform <name>`            | Switch platform for the session (also updates default model) |
-| `/model <name>`               | Switch model for the session                                 |
-| `/config`                     | Show current session config (keys redacted)                  |
-| `/clear`                      | Clear chat history and start a fresh conversation            |
-| `/exit`, `/quit`              | Exit interactive mode                                        |
+| `/commit`                     | Generate a commit message from staged/working-tree diff               |
+| `/edit --file <path> <instr>` | Edit a file in place                                                  |
+| `/explain <text>`             | Explain a line of code                                                |
+| `/wiki-reload`                | Rebuild the docs wiki index                                           |
+| `/platform <name>`            | Switch platform for the session (also updates default model)          |
+| `/model <name>`               | Switch model for the session                                          |
+| `/config`                     | Show current session config (keys redacted)                           |
+| `/clear`                      | Clear chat history and start a fresh conversation                     |
+| `/exit`, `/quit`              | Exit interactive mode                                                 |
 
 Tab-complete any `/` command by pressing Tab. Up/down arrows cycle through input history.
 
@@ -211,14 +212,14 @@ askii generate test utils --yes
 
 Each round the agent can use:
 
-| Action        | Description                                                 | Prompts you? |
-| ------------- | ----------------------------------------------------------- | ------------ |
-| `list`        | List files in a folder (`[file]` / `[folder]` labels)       | No           |
-| `view`        | Read a file's contents                                      | No           |
-| `search`      | Grep workspace files for a pattern                          | No           |
-| `wiki_search` | BM25 search over indexed `.md` docs (requires `--use-wiki`) | No           |
-| `clarify`     | Ask you a clarifying question (type your answer at the prompt) | Yes        |
-| `create`      | Create the generated file (written directly; Undo offered at the end) | No   |
+| Action        | Description                                                           | Prompts you? |
+| ------------- | --------------------------------------------------------------------- | ------------ |
+| `list`        | List files in a folder (`[file]` / `[folder]` labels)                 | No           |
+| `view`        | Read a file's contents                                                | No           |
+| `search`      | Grep workspace files for a pattern                                    | No           |
+| `wiki_search` | BM25 search over indexed `.md` docs (requires `--use-wiki`)           | No           |
+| `clarify`     | Ask you a clarifying question (type your answer at the prompt)        | Yes          |
+| `create`      | Create the generated file (written directly; Undo offered at the end) | No           |
 
 Optional flags:
 
@@ -303,6 +304,28 @@ askii do --wiki-path .\docs --use-wiki "implement the auth flow described in the
 
 ---
 
+### `commit` — Generate a commit message
+
+Reads the staged diff (or, if nothing is staged, the working-tree diff) plus the list of changed files, asks the LLM to write a well-formed Git commit message, and prints it to **stdout**. Pipe-friendly — use it with `git commit`:
+
+**bash**
+
+```bash
+git commit -m "$(askii commit)"
+askii commit --dir ./my-project
+```
+
+**PowerShell**
+
+```powershell
+git commit -m "$(askii commit)"
+askii commit --dir ..\my-project
+```
+
+The diff is capped at 12,000 characters to keep context tight. The output is cleaned of markdown fences, quotes, and `Commit message:` labels, so it's ready to pass straight to `git commit -m`.
+
+---
+
 ### `browse` — Browser agent
 
 Launches a Puppeteer browser, takes a screenshot of the current page and its URL, sends both to the AI, and executes the returned action. Repeats until the AI returns `DONE` or `--max-rounds` is reached. Requires a **vision-capable model** (e.g. `llava`, `moondream2`).
@@ -367,11 +390,11 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 | `--askiicloud-key`   |       | ASKII Cloud API key (env: `ASKII_CLOUD_KEY`)                                          |                                 |
 | `--askiicloud-model` |       | ASKII Cloud model (env: `ASKII_CLOUD_MODEL`)                                          | `askii-default`                 |
 | `--mode`             |       | Response style: `helpful`, `funny`                                                    | `funny`                         |
-| `--max-rounds`       |       | Max agent rounds for `do` / `generate` / `control` / `browse`                          | `5`                             |
-| `--dir`              |       | Working directory for `do` / `generate`                                                | cwd                             |
+| `--max-rounds`       |       | Max agent rounds for `do` / `generate` / `control` / `browse`                         | `5`                             |
+| `--dir`              |       | Working directory for `do` / `generate`                                               | cwd                             |
 | `--code`             | `-c`  | Code input (alternative to stdin)                                                     |                                 |
-| `--file`             |       | Filename of the code (e.g. src/utils.ts) — also context file for `generate`            |                                 |
-| `--instruction`      | `-i`  | Extra instruction for `generate`                                                       |                                 |
+| `--file`             |       | Filename of the code (e.g. src/utils.ts) — also context file for `generate`           |                                 |
+| `--instruction`      | `-i`  | Extra instruction for `generate`                                                      |                                 |
 | `--yes`              | `-y`  | Auto-confirm all actions                                                              |                                 |
 | `--headless`         |       | Run Puppeteer headlessly for `browse`                                                 | `false` (visible)               |
 | `--chrome-path`      |       | Path to Chrome/Chromium executable for `browse`                                       |                                 |
