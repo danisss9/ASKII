@@ -8,6 +8,15 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Added
 
+- **ASKII Note agent** (`Ctrl+Shift+K N` / `Cmd+Shift+K N`): A notes / tasks / reminders mode with a dedicated webview panel.
+  - Type free text and the AI auto-classifies it as a **note**, a **task** (with `low` / `medium` / `high` priority), or a **reminder** (with a due time). The AI can ask clarifying questions back when the intent or time is ambiguous.
+  - **Full-text search** across all notes, tasks and reminders (powered by MiniSearch, same engine as the wiki RAG).
+  - **Screenshots**: attach a full-screen capture to any entry (reuses the ASKII Control screenshot pipeline); thumbnails are shown in the list and click-to-open.
+  - **Reminders** are scheduled in the background and fire as VS Code notifications with a sound, including the context that was open when the note was created (open file, selected text, workspace). Actions: **Open** (reveals the entry in the panel), **Snooze** (reschedules by `askii.noteSnoozeMinutes`), **Dismiss**.
+  - **Context capture**: each entry records the active file, language id, selected text (truncated) and workspace folder at creation time.
+  - **Global storage**: notes persist across workspaces via `globalState`, tagged with their origin workspace, and are searchable globally.
+  - New settings: `askii.noteReminderSound` (boolean, default `true`) and `askii.noteSnoozeMinutes` (number, default `10`).
+  - New files: `common/notes.ts` (types, MiniSearch search, local time parser), `src/notes.ts` (storage, AI classification, context/screenshot capture), `src/notesScheduler.ts` (reminder timer scheduler), `src/notesPanel.ts` (webview panel + command).
 - **ASKII Cloud platform support**: Added `askiicloud` as a new LLM platform across the extension and CLI, powered by ASKII Cloud — an in-house, OpenAI-compatible inference service at [https://api.askii.dev](https://api.askii.dev). All it needs is an API key
 - **`askii.askiicloudApiKey` setting**: Your ASKII Cloud API key (used when any `llm*Platform` is `askiicloud`)
 - **`getAskiiCloudResponse` / `getAskiiCloudChat` / `getAskiiCloudChatStreaming`** in `common/providers.ts`: Shared ASKII Cloud provider functions (thin wrappers over the OpenAI-compatible client, pinned to `ASKII_CLOUD_URL`); vision (base64 images) and streaming are supported

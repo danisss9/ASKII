@@ -54,6 +54,11 @@
         "mac": "cmd+shift+k r"
       },
       {
+        "command": "askii.noteTask",
+        "key": "ctrl+shift+k n",
+        "mac": "cmd+shift+k n"
+      },
+      {
         "command": "askii.clearCache",
         "key": "ctrl+shift+k x",
         "mac": "cmd+shift+k x"
@@ -106,6 +111,12 @@
         "title": "ASKII Git: Generate Commit Message",
         "category": "ASKII",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "askii.noteTask",
+        "title": "ASKII Note",
+        "category": "ASKII",
+        "icon": "$(note)"
       }
     ],
     "menus": {
@@ -291,6 +302,17 @@
           "type": "string",
           "default": "",
           "description": "Path to a .md file with custom instructions for the commit message generator (injected as the system prompt, appended to the built-in rules). May be absolute or relative to the workspace root. Leave empty to use the built-in prompt."
+        },
+        "askii.noteReminderSound": {
+          "type": "boolean",
+          "default": true,
+          "description": "Play a sound when an ASKII Note reminder fires."
+        },
+        "askii.noteSnoozeMinutes": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "description": "Minutes to snooze an ASKII Note reminder when the user clicks 'Snooze' on the notification."
         }
       }
     }

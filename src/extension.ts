@@ -18,6 +18,8 @@ import {
 import { validateProviderConfig } from './providers';
 import { AskiiInlineCompletionProvider, INLINE_ACCEPT_COMMAND } from './inlineCompletion';
 import { generateCommitMessageCommand } from './commitMessage';
+import { askiiNoteCommand } from './notesPanel';
+import { startNoteScheduler, stopNoteScheduler } from './notesScheduler';
 
 export function activate(context: vscode.ExtensionContext) {
   // Register the in-memory content provider for diff previews
@@ -73,6 +75,14 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.generateCommitMessage', generateCommitMessageCommand),
   );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('askii.noteTask', (args?: { selectId?: string }) =>
+      askiiNoteCommand(context, args),
+    ),
+  );
+
+  // Start the reminder scheduler for ASKII Note
+  startNoteScheduler(context);
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.text = '(⌐■_■)';
@@ -89,6 +99,7 @@ export function activate(context: vscode.ExtensionContext) {
         { label: '$(files) ASKII Do', command: 'askii.doTask' },
         { label: '$(screen-full) ASKII Control', command: 'askii.controlTask' },
         { label: '$(browser) ASKII Browse', command: 'askii.browseTask' },
+        { label: '$(note) ASKII Note', command: 'askii.noteTask' },
         { label: '$(sparkle) ASKII Git', command: 'askii.generateCommitMessage' },
         { label: '$(book) Reload Wiki', command: 'askii.reloadWiki' },
         { label: '$(refresh) Clear Cache', command: 'askii.clearCache' },
@@ -170,4 +181,5 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
   cleanupDecorations();
+  stopNoteScheduler();
 }
