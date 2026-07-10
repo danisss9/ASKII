@@ -4,6 +4,19 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.4.2] - 2026-07-10
+
+### Added
+
+- **Configurable ASKII Git commit message style**: Added a new `askii.commitMessageStyle` setting for the Git commit-message generator.
+  - Supported values: `oneliner`, `brief`, and `descriptive`.
+  - `brief` is the default and keeps the generated message concise while still allowing a short body when needed.
+  - The setting influences the prompt sent to the LLM so ASKII Git can produce either a single-line subject, a concise brief message, or a more descriptive message.
+
+### Changed
+
+- **ASKII Git prompt generation**: The commit-message generator now reads the new style setting and adapts its instructions accordingly.
+
 ## [0.4.0] - 2026-07-07
 
 ### Added
