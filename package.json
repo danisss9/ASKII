@@ -314,6 +314,21 @@
           "default": "",
           "description": "Path to a .md file with custom instructions for the commit message generator (injected as the system prompt, appended to the built-in rules). May be absolute or relative to the workspace root. Leave empty to use the built-in prompt."
         },
+        "askii.commitMessageStyle": {
+          "type": "string",
+          "enum": [
+            "oneliner",
+            "brief",
+            "descriptive"
+          ],
+          "enumDescriptions": [
+            "Generate a single-line subject only",
+            "Generate a concise subject with an optional short body",
+            "Generate a fuller message with more descriptive context"
+          ],
+          "default": "oneliner",
+          "description": "Preferred output style for ASKII Git commit messages (OneLiner, Brief, or Descriptive)."
+        },
         "askii.noteReminderSound": {
           "type": "boolean",
           "default": true,

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getExtensionResponse } from './providers';
+import { buildCommitMessageSystemPrompt, getCommitMessageStyle } from './commitMessageStyle';
 
 // Sentinel returned by providers when the model produces no text.
 const NO_RESPONSE = 'No response';
@@ -12,17 +13,6 @@ const MAX_DIFF_CHARS = 12_000;
 
 // Commit messages are short — keep generation tight.
 const COMMIT_MAX_TOKENS = 256;
-
-// Built-in system prompt. The user's instruction-md file (if any) is appended
-// to this so core formatting rules always apply.
-const BASE_SYSTEM_PROMPT = `You are an expert at writing Git commit messages.
-Given a list of changed files and a unified diff, write a single, well-formed Git commit message.
-Rules:
-- Use the Conventional Commits format when appropriate (type(scope): subject).
-- The first line is the subject: imperative mood, <= 72 characters, no trailing period.
-- Optionally follow with a blank line and a concise body explaining the "why" (not the "what").
-- Output ONLY the raw commit message text — no markdown fences, no quotes, no "Commit message:" label, no preamble.
-- If the diff is empty or trivial, output a single short subject line describing the change.`;
 
 interface GitRepositoryLike {
   inputBox: { value: string };
@@ -187,9 +177,8 @@ export async function generateCommitMessageCommand(): Promise<void> {
   }
 
   const instructions = loadCommitInstructions();
-  const system = instructions
-    ? `${BASE_SYSTEM_PROMPT}\n\nAdditional instructions from the user:\n${instructions}`
-    : BASE_SYSTEM_PROMPT;
+  const style = getCommitMessageStyle(config.get<string>('commitMessageStyle'));
+  const system = buildCommitMessageSystemPrompt(style, instructions);
 
   const scope = hasStaged ? 'staged' : 'working-tree';
   const userPrompt =
