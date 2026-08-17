@@ -1,0 +1,38 @@
+.empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.5;
+}
+
+.chat-msg-row {
+  --padding-start: 8px;
+  --inner-padding-end: 8px;
+  align-items: flex-start;
+}
+
+.chat-msg {
+  width: 100%;
+}
+
+.chat-msg.assistant {
+  margin-top: 4px;
+}
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 6px 10px calc(6px + env(safe-area-inset-bottom));
+  background: var(--ion-toolbar-background, var(--ion-color-step-50));
+  border-top: 1px solid var(--ion-border-color, var(--ion-color-step-150));
+}
+
+.composer ion-textarea {
+  flex: 1;
+  --background: var(--ion-color-step-100);
+  --padding-start: 8px;
+  --padding-end: 8px;
+  border-radius: 10px;
+}

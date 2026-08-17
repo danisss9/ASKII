@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Typecheck + lint + test the extension, shared, and CLI ──────────────────
+  test-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - name: Typecheck (root)
+        run: npm run check-types
+      - name: Lint
+        run: npm run lint
+      - name: Build extension bundle
+        run: node esbuild.js
+      - name: Build CLI
+        working-directory: ./cli
+        run: |
+          npm ci
+          npm run build
+      - name: Test shared + CLI
+        run: |
+          npm run test:shared
+
+  # ── Test the relay mock broker ───────────────────────────────────────────────
+  test-relay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - working-directory: ./relay
+        run: |
+          npm ci
+          npm test
+
+  # ── Build the Ionic Angular app (web build only — APK is in release.yml) ────
+  build-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - working-directory: ./app
+        run: |
+          npm ci
+          npm run build

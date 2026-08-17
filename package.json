@@ -64,6 +64,11 @@
         "mac": "cmd+shift+k n"
       },
       {
+        "command": "askii.connect",
+        "key": "ctrl+shift+k m",
+        "mac": "cmd+shift+k m"
+      },
+      {
         "command": "askii.clearCache",
         "key": "ctrl+shift+k x",
         "mac": "cmd+shift+k x"
@@ -128,6 +133,16 @@
         "title": "ASKII Note",
         "category": "ASKII",
         "icon": "$(note)"
+      },
+      {
+        "command": "askii.connect",
+        "title": "ASKII: Connect to Android App",
+        "category": "ASKII"
+      },
+      {
+        "command": "askii.remoteSession",
+        "title": "ASKII: Remote Session",
+        "category": "ASKII"
       }
     ],
     "menus": {
@@ -339,6 +354,16 @@
           "default": 10,
           "minimum": 1,
           "description": "Minutes to snooze an ASKII Note reminder when the user clicks 'Snooze' on the notification."
+        },
+        "askii.remoteEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable remote-session control of a paired ASKII Android app from this extension."
+        },
+        "askii.askiicloudSessionsUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Override the ASKII Cloud Sessions broker URL (for remote sessions). Leave empty to use the default (https://api.askii.dev/v1). Point to a local `relay/` mock for development."
         }
       }
     }
@@ -354,8 +379,9 @@
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "check-types": "tsc --noEmit",
-    "lint": "eslint src common",
+    "lint": "eslint src common shared",
     "test": "vscode-test",
+    "test:shared": "tsc -p shared --noEmit && npm run compile-tests && node --test out/test/shared-*.test.js",
     "release": "vsce publish"
   },
   "devDependencies": {

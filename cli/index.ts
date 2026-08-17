@@ -35,6 +35,14 @@ import {
   retryLLMCall,
   type ChatMessage,
 } from '@common/providers';
+import { SessionClient } from '@shared/session-client';
+import type {
+  SessionEvent,
+  SessionMode,
+  SessionOptions,
+  CreateSessionRequest,
+} from '@shared/protocol';
+import { type ProviderId } from '@shared/providers';
 import {
   buildControlSystemPrompt,
   takeScreenshot,
@@ -418,6 +426,8 @@ function replCompleter(line: string): [string[], string] {
     '/model ',
     '/config',
     '/clear',
+    '/connect',
+    '/remote ',
     '/exit',
     '/quit',
   ];
@@ -440,6 +450,8 @@ REPL Commands:
   /edit --file <path> <instr>    Edit a file in place
   /explain <text>                Explain a line of code
   /wiki-reload                   Rebuild the docs wiki index
+  /connect [--name <name>]       Pair with the ASKII Android app
+  /remote <prompt>               Start a remote session on a paired device (--device --mode)
   /platform <name>               Switch platform: ollama|lmstudio|openai|anthropic|opencodego|askiicloud
   /model <name>                  Switch model for current session
   /config                        Show current session config
@@ -1296,6 +1308,44 @@ async function handleReplInput(
         return false;
       }
 
+      case '/connect': {
+        const qrFlag = getFlagValue(rest.split(/\s+/), '--qr');
+        const devFlag = getFlagValue(rest.split(/\s+/), '--device-id');
+        const tokFlag = getFlagValue(rest.split(/\s+/), '--pairing-token');
+        const connectFlags: string[] = ['--askiicloud-key', config.askiicloudApiKey];
+        if (qrFlag) connectFlags.push('--qr', qrFlag);
+        if (devFlag) connectFlags.push('--device-id', devFlag);
+        if (tokFlag) connectFlags.push('--pairing-token', tokFlag);
+        if (!qrFlag && !devFlag) {
+          console.error('Usage: /connect --qr \'{"deviceId":"dev-1","pairingToken":"tok-..."}\'');
+          console.error('       /connect --device-id <id> --pairing-token <token>');
+          console.error('Get the payload from the ASKII app → Settings → Pair (QR code).');
+          return false;
+        }
+        await runConnectCommand(connectFlags);
+        return false;
+      }
+
+      case '/remote': {
+        if (!rest) {
+          console.error('Usage: /remote <prompt> [--device <id>] [--mode ask] [--provider askiicloud] [--model x]');
+          return false;
+        }
+        const remoteTokens = rest.split(/\s+/).filter(Boolean);
+        const remoteFlags = remoteTokens.filter((t) => t.startsWith('-'));
+        const remotePrompt = remoteTokens.filter((t) => !t.startsWith('-')).join(' ');
+        if (!remotePrompt) {
+          console.error('Usage: /remote <prompt>');
+          return false;
+        }
+        // runSessionCommand expects positional[0]=command, positional[1:]=prompt
+        await runSessionCommand(
+          ['session', remotePrompt],
+          ['--askiicloud-key', config.askiicloudApiKey, ...remoteFlags],
+        );
+        return false;
+      }
+
       case '/ask': {
         if (!rest) {
           console.error('Usage: /ask <question>');
@@ -1395,6 +1445,8 @@ Commands:
   control <instruction> Screen control — takes screenshots and drives mouse/keyboard
   browse <task>         Browser agent — launches Puppeteer and navigates the web
   wiki-reload           Index .md files from --wiki-path into the local vector database
+  connect               Pair with the ASKII Android app (--qr '<json>' or --device-id <id> --pairing-token <tok>)
+  session "<prompt>"    Start a remote session on a paired Android app (--device <id> --mode ask)
 
 Options:
   -p, --platform <p>         LLM platform: ollama, lmstudio, openai, anthropic, opencodego, askiicloud (default: ollama)
@@ -1965,6 +2017,198 @@ Examples:
       console.error('Run `askii note help` for usage.');
       process.exit(1);
     }
+  }
+}
+
+// ── Remote session: connect + session commands ──────────────────────────────
+
+const DEVICES_FILE = path.join(os.homedir(), '.askii', 'devices.json');
+
+interface CliDevice {
+  deviceId: string;
+  deviceName: string;
+  pairingToken: string;
+  pairedAt: string;
+}
+
+function loadDevices(): CliDevice[] {
+  try {
+    if (!fs.existsSync(DEVICES_FILE)) return [];
+    const raw = fs.readFileSync(DEVICES_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as CliDevice[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDevices(devices: CliDevice[]): void {
+  const dir = path.dirname(DEVICES_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(DEVICES_FILE, JSON.stringify(devices, null, 2));
+}
+
+async function runConnectCommand(flags: string[]): Promise<void> {
+  const apiKey =
+    getFlagValue(flags, '--askiicloud-key') || process.env.ASKII_CLOUD_KEY || '';
+  if (!apiKey) {
+    console.error('Error: provide --askiicloud-key <key> or set ASKII_CLOUD_KEY');
+    process.exit(1);
+  }
+
+  // The ASKII app generates a deviceId + pairingToken via its Settings → Pair
+  // button and displays them as a QR code. The controller (CLI) reads that
+  // pairing info and stores it — it does NOT call pair() itself.
+  const qrPayload = getFlagValue(flags, '--qr');
+  const deviceIdFlag = getFlagValue(flags, '--device-id');
+  const tokenFlag = getFlagValue(flags, '--pairing-token');
+
+  let deviceId: string;
+  let pairingToken: string;
+  let deviceName: string;
+
+  if (qrPayload) {
+    try {
+      const payload = JSON.parse(qrPayload);
+      deviceId = payload.deviceId;
+      pairingToken = payload.pairingToken;
+      deviceName = payload.deviceName ?? 'Android device';
+      if (!deviceId || !pairingToken) throw new Error('Missing deviceId or pairingToken in QR payload');
+    } catch (err) {
+      console.error(`Error: invalid --qr payload: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  } else if (deviceIdFlag && tokenFlag) {
+    deviceId = deviceIdFlag;
+    pairingToken = tokenFlag;
+    deviceName = 'Android device';
+  } else {
+    console.error('Error: provide --qr \'{"deviceId":"dev-1","pairingToken":"tok-..."}\' or --device-id <id> --pairing-token <token>');
+    console.error('Get the pairing payload from the ASKII app → Settings → Pair (QR code).');
+    process.exit(1);
+  }
+
+  const devices = loadDevices();
+  const filtered = devices.filter((d) => d.deviceId !== deviceId);
+  filtered.push({
+    deviceId,
+    deviceName,
+    pairingToken,
+    pairedAt: new Date().toISOString(),
+  });
+  saveDevices(filtered);
+  console.error(`✓ Paired with "${deviceName}" (${deviceId})`);
+  console.error(`  Use: askii session "your prompt" --device ${deviceId}`);
+}
+
+async function runSessionCommand(positional: string[], flags: string[]): Promise<void> {
+  const devices = loadDevices();
+  if (devices.length === 0) {
+    console.error('No paired devices. Run `askii connect` first.');
+    process.exit(1);
+  }
+
+  // Resolve the target device
+  let device = devices[0];
+  const deviceFlag = getFlagValue(flags, '--device');
+  if (deviceFlag) {
+    const found = devices.find(
+      (d) => d.deviceId === deviceFlag || d.deviceName === deviceFlag,
+    );
+    if (!found) {
+      console.error(`Error: no paired device matching "${deviceFlag}"`);
+      console.error('Paired devices:');
+      devices.forEach((d) => console.error(`  - ${d.deviceName} (${d.deviceId})`));
+      process.exit(1);
+    }
+    device = found;
+  } else if (devices.length > 1) {
+    console.error('Multiple paired devices. Specify one with --device <id|name>:');
+    devices.forEach((d) => console.error(`  - ${d.deviceName} (${d.deviceId})`));
+    process.exit(1);
+  }
+
+  // Resolve the prompt
+  const prompt = positional.slice(1).join(' ').trim();
+  if (!prompt) {
+    console.error('Error: provide a prompt — e.g. askii session "hello from CLI"');
+    process.exit(1);
+  }
+
+  // Resolve mode + options
+  const mode = (getFlagValue(flags, '--mode') || 'ask') as SessionMode;
+  const provider = (getFlagValue(flags, '-p', '--platform') || 'askiicloud') as ProviderId;
+  const model = getFlagValue(flags, '--model') || 'askii-smart';
+  const apiKey =
+    getFlagValue(flags, '--askiicloud-key') || process.env.ASKII_CLOUD_KEY || '';
+  const brokerUrl =
+    getFlagValue(flags, '--broker-url') ||
+    process.env.ASKII_BROKER_URL ||
+    ASKII_CLOUD_URL;
+
+  const options: SessionOptions = { provider, model };
+  const req: CreateSessionRequest = {
+    deviceId: device.deviceId,
+    pairingToken: device.pairingToken,
+    mode,
+    options,
+    prompt,
+    apiKey,
+  };
+
+  const client = new SessionClient({ baseUrl: brokerUrl, apiKey });
+  const ac = new AbortController();
+
+  process.once('SIGINT', () => {
+    ac.abort();
+    console.error('\n\nStopped by user (Ctrl+C).');
+    process.exit(0);
+  });
+
+  try {
+    console.error(`Starting remote session with "${device.deviceName}" (mode: ${mode}, provider: ${provider}, model: ${model})...`);
+    const { sessionId } = await client.createSession(req);
+    console.error(`Session started: ${sessionId}\n`);
+
+    for await (const ev of client.events(sessionId, device.pairingToken, ac.signal)) {
+      printSessionEvent(ev);
+      if (ev.type === 'done' || ev.type === 'error') break;
+    }
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    process.exit(1);
+  }
+}
+
+function printSessionEvent(ev: SessionEvent): void {
+  switch (ev.type) {
+    case 'session_created':
+      // already printed above
+      break;
+    case 'message':
+      console.log(`[${ev.role}] ${ev.content}`);
+      break;
+    case 'chunk':
+      process.stdout.write(ev.delta);
+      break;
+    case 'action':
+      console.log(`\n[ACTION] ${ev.description}`);
+      break;
+    case 'screenshot':
+      console.log(`[screenshot received]`);
+      break;
+    case 'clarify':
+      console.log(`[clarify] ${ev.question}`);
+      break;
+    case 'status':
+      console.error(`[status] ${ev.status}${ev.detail ? ': ' + ev.detail : ''}`);
+      break;
+    case 'done':
+      console.log(`\n[DONE]${ev.summary ? ' ' + ev.summary : ''}`);
+      break;
+    case 'error':
+      console.error(`[ERROR] ${ev.message}`);
+      break;
   }
 }
 
@@ -2696,6 +2940,10 @@ Rules:
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);
     }
+  } else if (command === 'connect') {
+    await runConnectCommand(flags);
+  } else if (command === 'session') {
+    await runSessionCommand(positional, flags);
   } else if (command === 'note') {
     // ASKII Note — notes / tasks / reminders, persisted to ~/.askii/notes.json
     const subcommand = positional[1] ?? 'list';

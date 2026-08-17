@@ -38,6 +38,7 @@ async function main() {
     logLevel: 'silent',
     alias: {
       '@common': path.resolve(__dirname, 'common'),
+      '@shared': path.resolve(__dirname, 'shared'),
     },
     plugins: [
       /* add to the end of plugins array */

@@ -21,6 +21,7 @@ import { generateCommitMessageCommand } from './commitMessage';
 import { askiiNoteCommand } from './notesPanel';
 import { startNoteScheduler, stopNoteScheduler } from './notesScheduler';
 import { askiiGenerateCommand } from './generate';
+import { askiiConnectCommand, askiiRemoteSessionCommand } from './remote';
 
 export function activate(context: vscode.ExtensionContext) {
   // Register the in-memory content provider for diff previews
@@ -85,6 +86,13 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('askii.connect', () => askiiConnectCommand(context)),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('askii.remoteSession', () => askiiRemoteSessionCommand(context)),
+  );
+
   // Start the reminder scheduler for ASKII Note
   startNoteScheduler(context);
 
@@ -106,6 +114,8 @@ export function activate(context: vscode.ExtensionContext) {
         { label: '$(note) ASKII Note', command: 'askii.noteTask' },
         { label: '$(new-file) ASKII Generate', command: 'askii.generate' },
         { label: '$(sparkle) ASKII Git', command: 'askii.generateCommitMessage' },
+        { label: '$(remote) Connect to Android App', command: 'askii.connect' },
+        { label: '$(live-share) Remote Session', command: 'askii.remoteSession' },
         { label: '$(book) Reload Wiki', command: 'askii.reloadWiki' },
         { label: '$(refresh) Clear Cache', command: 'askii.clearCache' },
       ]);

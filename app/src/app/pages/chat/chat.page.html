@@ -1,0 +1,68 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>ASKII (⌐■_■)</ion-title>
+    <ion-buttons slot="end">
+      <ion-button (click)="newChat()" aria-label="New chat">New</ion-button>
+      <ion-button (click)="openHistory()" aria-label="History">History</ion-button>
+      <ion-button (click)="openSettings()" aria-label="Settings">Settings</ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+  <ion-toolbar>
+    <ion-item lines="none" style="--background: transparent; width: 100%">
+      <ion-select
+        interface="popover"
+        [value]="mode()"
+        (ionChange)="modeChanged($any($event))"
+        slot="start"
+        style="max-width: 120px"
+      >
+        <ion-select-option *ngFor="let m of MODES" [value]="m.id">{{ m.label }}</ion-select-option>
+      </ion-select>
+      <ion-select
+        interface="popover"
+        [value]="config.current.provider"
+        (ionChange)="providerChanged($any($event))"
+        style="max-width: 160px"
+      >
+        <ion-select-option *ngFor="let p of config.PLATFORMS" [value]="p">
+          {{ config.PROVIDER_LABELS[p] }}
+        </ion-select-option>
+      </ion-select>
+      <ion-input
+        style="flex: 1"
+        [value]="config.current.model"
+        (ionChange)="modelChanged($any($event))"
+        placeholder="model"
+      ></ion-input>
+    </ion-item>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="chat-md">
+  <ion-list lines="none" *ngIf="session() as s">
+    <ion-item *ngFor="let m of s.messages" class="chat-msg-row">
+      <div class="chat-msg">
+        <ion-chip [color]="m.role === 'user' ? 'primary' : 'tertiary'" outline="true">
+          <ion-label>{{ m.role }}</ion-label>
+        </ion-chip>
+        <div *ngIf="m.role === 'assistant'" class="chat-msg assistant" [innerHTML]="render(m.content)"></div>
+        <div *ngIf="m.role === 'user'" class="chat-msg user">{{ m.content }}</div>
+        <ion-spinner *ngIf="m.streaming" name="dots"></ion-spinner>
+      </div>
+    </ion-item>
+  </ion-list>
+</ion-content>
+
+<div class="composer">
+  <ion-textarea
+    [(ngModel)]="input"
+    [autoGrow]="true"
+    rows="1"
+    placeholder="Message ASKII…  (Ctrl/Cmd+Enter to send)"
+    (keydown)="onKeydown($event)"
+  ></ion-textarea>
+  <ion-button [disabled]="sending()" (click)="send()">
+    <ion-spinner *ngIf="sending()" name="crescent"></ion-spinner>
+    Send
+  </ion-button>
+</div>

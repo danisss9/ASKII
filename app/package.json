@@ -1,0 +1,48 @@
+{
+  "name": "askii-app",
+  "version": "0.4.2",
+  "private": true,
+  "description": "ASKII Android app (Ionic + Capacitor + Angular) — chat with LLMs and remote-controlled by the ASKII extension & CLI.",
+  "scripts": {
+    "ng": "ng",
+    "build": "ng build --configuration development",
+    "build:prod": "ng build --configuration production",
+    "serve": "ng serve --configuration development",
+    "sync": "cap sync android",
+    "add:android": "cap add android",
+    "typecheck": "ng build --configuration development"
+  },
+  "dependencies": {
+    "@angular/animations": "^22.1.0",
+    "@angular/common": "^22.1.0",
+    "@angular/compiler": "^22.1.0",
+    "@angular/core": "^22.1.0",
+    "@angular/forms": "^22.1.0",
+    "@angular/platform-browser": "^22.1.0",
+    "@angular/platform-browser-dynamic": "^22.1.0",
+    "@angular/router": "^22.1.0",
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/local-notifications": "^8.2.1",
+    "@capacitor/preferences": "^8.0.1",
+    "@ionic/angular": "^8.8.0",
+    "markdown-it": "^14.1.1",
+    "minisearch": "^7.2.0",
+    "qrcode": "^1.5.4",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0",
+    "zone.js": "~0.15.0"
+  },
+  "devDependencies": {
+    "@angular-devkit/build-angular": "^22.1.0",
+    "@angular/cli": "^22.1.0",
+    "@angular/compiler-cli": "^22.1.0",
+    "@capacitor/cli": "^8.5.0",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "22.x",
+    "@types/qrcode": "^1.5.5",
+    "typescript": "~6.0.3"
+  }
+}

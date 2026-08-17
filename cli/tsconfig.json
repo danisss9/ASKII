@@ -8,7 +8,8 @@
     "forceConsistentCasingInFileNames": true,
     "baseUrl": "./",
     "paths": {
-      "@common/*": ["../common/*"]
+      "@common/*": ["../common/*"],
+      "@shared/*": ["../shared/*"]
     }
   },
   "include": [

@@ -20,6 +20,7 @@ async function main() {
     },
     alias: {
       '@common': path.resolve(__dirname, '..', 'common'),
+      '@shared': path.resolve(__dirname, '..', 'shared'),
     },
     logLevel: 'info',
   });

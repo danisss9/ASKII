@@ -3,3 +3,15 @@ dist
 node_modules
 .vscode-test/
 *.vsix
+
+# Ionic / Capacitor app build artifacts
+app/www
+app/.angular
+app/android/app/build
+app/android/.gradle
+app/android/build
+app/android/local.properties
+app/android/captures/
+
+# Relay build artifacts
+relay/dist

@@ -1,0 +1,38 @@
+/*
+ * Ionic global styles + ASKII app chrome.
+ * See https://ionicframework.com/docs/theming/basics for theming options.
+ */
+
+@import '@ionic/angular/css/core.css';
+@import '@ionic/angular/css/normalize.css';
+@import '@ionic/angular/css/structure.css';
+@import '@ionic/angular/css/typography.css';
+@import '@ionic/angular/css/padding.css';
+@import '@ionic/angular/css/float-elements.css';
+@import '@ionic/angular/css/text-alignment.css';
+@import '@ionic/angular/css/text-transformation.css';
+@import '@ionic/angular/css/flex-utils.css';
+@import '@ionic/angular/css/display.css';
+
+/* Optional palette CSS for dark mode. */
+@import '@ionic/angular/css/palettes/dark.always.css';
+
+:root {
+  --ion-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.chat-msg {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-md pre {
+  background: var(--ion-color-step-150, #1e1e1e);
+  color: var(--ion-color-step-contrast-150, #eee);
+  padding: 8px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.chat-md code {
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  font-size: 0.92em;
+}

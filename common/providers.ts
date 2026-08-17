@@ -2,23 +2,25 @@ import { Ollama } from 'ollama';
 import { type ChatMessageInput, LMStudioClient } from '@lmstudio/sdk';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import {
+  OPENCODE_GO_URL,
+  ASKII_CLOUD_URL,
+  isOpenCodeGoAnthropicModel,
+  type ChatMessage,
+} from '@shared/providers';
 
-export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-// opencode Go (https://opencode.ai/go) — hosted, OpenAI-compatible inference service.
-export const OPENCODE_GO_URL = 'https://opencode.ai/zen/go/v1';
-
-// ASKII Cloud — in-house, OpenAI-compatible inference service (https://api.askii.dev).
-export const ASKII_CLOUD_URL = 'https://api.askii.dev/v1';
-
-// Qwen + MiniMax are served over opencode Go's Anthropic-compatible /messages endpoint;
-// every other model uses the OpenAI-compatible /chat/completions endpoint.
-export function isOpenCodeGoAnthropicModel(model: string): boolean {
-  return /^(qwen|minimax)/i.test((model || '').trim());
-}
+// Pure catalog/constants/types now live in @shared/providers so the Android app
+// can import them without pulling Node SDKs. Re-exported here for back-compat.
+export type { ChatMessage, ProviderId } from '@shared/providers';
+export {
+  OPENCODE_GO_URL,
+  ASKII_CLOUD_URL,
+  PLATFORMS,
+  PLATFORM_DEFAULT_MODELS,
+  PROVIDER_LABELS,
+  PROVIDER_NEEDS_KEY,
+  isOpenCodeGoAnthropicModel,
+} from '@shared/providers';
 
 export async function getOllamaResponse(
   prompt: string,

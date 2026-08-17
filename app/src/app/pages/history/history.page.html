@@ -1,0 +1,26 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-buttons slot="start">
+      <ion-button routerLink="/chat">Back</ion-button>
+    </ion-buttons>
+    <ion-title>History</ion-title>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  <ion-list *ngIf="sessions.length; else empty">
+    <ion-item *ngFor="let s of sessions" button (click)="open(s)">
+      <ion-label>
+        <h3>{{ s.title || '(untitled)' }}</h3>
+        <ion-note>{{ s.mode }} · {{ s.provider }}/{{ s.model }} · {{ s.updatedAt | date: 'short' }}</ion-note>
+      </ion-label>
+      <ion-button slot="end" color="danger" fill="clear" (click)="remove(s, $event)">Delete</ion-button>
+    </ion-item>
+  </ion-list>
+
+  <ng-template #empty>
+    <div style="text-align: center; padding: 40px; opacity: 0.6">
+      No chats yet. Start one from the chat tab. (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧
+    </div>
+  </ng-template>
+</ion-content>

@@ -1,0 +1,7 @@
+{
+  "name": "askii-app",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "angular-standalone"
+}

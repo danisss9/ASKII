@@ -1,0 +1,109 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-buttons slot="start">
+      <ion-button routerLink="/chat">Back</ion-button>
+    </ion-buttons>
+    <ion-title>Settings</ion-title>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  <ion-list>
+    <ion-item-divider>
+      <ion-label>Provider</ion-label>
+    </ion-item-divider>
+    <ion-item>
+      <ion-select
+        label="Platform"
+        interface="popover"
+        [value]="config.current.provider"
+        (ionChange)="providerChanged($any($event))"
+      >
+        <ion-select-option *ngFor="let p of PROVIDERS" [value]="p">
+          {{ config.PROVIDER_LABELS[p] }}
+        </ion-select-option>
+      </ion-select>
+    </ion-item>
+    <ion-item>
+      <ion-input label="Model" [value]="config.current.model" (ionChange)="config.save({ model: ($any($event)).detail.value })"></ion-input>
+    </ion-item>
+
+    <ion-item-divider>
+      <ion-label>ASKII Cloud (broker) key</ion-label>
+    </ion-item-divider>
+    <ion-item>
+      <ion-input
+        label="API key"
+        type="password"
+        [value]="config.current.apiKey"
+        (ionChange)="apiKeyChange($any($event))"
+      ></ion-input>
+    </ion-item>
+    <ion-item>
+      <ion-input
+        label="Broker URL"
+        [value]="config.current.brokerUrl"
+        (ionChange)="urlChange('brokerUrl', $any($event))"
+      ></ion-input>
+    </ion-item>
+
+    <ion-item-divider>
+      <ion-label>Provider keys &amp; URLs</ion-label>
+    </ion-item-divider>
+    <ion-item *ngIf="config.current.provider === 'openai' || config.current.provider === 'anthropic' || config.current.provider === 'opencodego'">
+      <ion-input
+        label="Provider key"
+        type="password"
+        [value]="config.current.keys[config.current.provider] || ''"
+        (ionChange)="setKey(config.current.provider, $any($event))"
+      ></ion-input>
+    </ion-item>
+    <ion-item *ngIf="config.current.provider === 'ollama'">
+      <ion-input label="Ollama URL" [value]="config.current.ollamaUrl" (ionChange)="urlChange('ollamaUrl', $any($event))"></ion-input>
+    </ion-item>
+    <ion-item *ngIf="config.current.provider === 'lmstudio'">
+      <ion-input label="LM Studio URL" [value]="config.current.lmStudioUrl" (ionChange)="urlChange('lmStudioUrl', $any($event))"></ion-input>
+    </ion-item>
+    <ion-item *ngIf="config.current.provider === 'openai'">
+      <ion-input label="OpenAI base URL" [value]="config.current.openaiUrl" (ionChange)="urlChange('openaiUrl', $any($event))"></ion-input>
+    </ion-item>
+
+    <ion-item-divider>
+      <ion-label>Remote control (pairing)</ion-label>
+    </ion-item-divider>
+    <ion-item>
+      <ion-label>
+        <h3>Pair this device</h3>
+        <ion-note>Let the VS Code extension &amp; CLI drive this app via the broker.</ion-note>
+      </ion-label>
+      <ion-input slot="end" [(ngModel)]="deviceName" placeholder="device name" style="max-width: 140px"></ion-input>
+      <ion-button slot="end" (click)="pair()">Pair</ion-button>
+    </ion-item>
+    <ion-item *ngIf="config.current.pairingDeviceId as id">
+      <ion-label>
+        <h3>Paired</h3>
+        <ion-note>{{ id }}</ion-note>
+      </ion-label>
+      <ion-button slot="end" color="danger" (click)="unpair()">Unpair</ion-button>
+    </ion-item>
+
+    <!-- QR code display for pairing with the extension/CLI -->
+    <ion-item *ngIf="qrDataUrl() as qr">
+      <ion-label>
+        <h3>Scan to pair controller</h3>
+        <ion-note>Scan this QR with the ASKII extension or CLI to pair as a controller.</ion-note>
+      </ion-label>
+    </ion-item>
+    <div *ngIf="qrDataUrl() as qr" style="text-align: center; padding: 12px">
+      <img [src]="qr" alt="Pairing QR code" style="max-width: 280px; border-radius: 8px" />
+      <p style="font-size: 0.8em; opacity: 0.6; margin-top: 8px">
+        Or enter manually in the extension/CLI: deviceId + pairing token
+      </p>
+    </div>
+    <ion-item *ngIf="pairingError() as err">
+      <ion-label color="danger">
+        <ion-note>{{ err }}</ion-note>
+      </ion-label>
+    </ion-item>
+  </ion-list>
+</ion-content>

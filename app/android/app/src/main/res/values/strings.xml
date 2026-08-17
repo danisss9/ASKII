@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ASKII</string>
+    <string name="title_activity_main">ASKII</string>
+    <string name="package_name">dev.askii.app</string>
+    <string name="custom_url_scheme">dev.askii.app</string>
+    <string name="askii_accessibility_description">Allows ASKII to control your screen — dispatching taps, swipes, and keyboard input to automate tasks. Required for ASKII Control mode.</string>
+    <string name="askii_screen_capture_notification_title">ASKII Screen Control</string>
+    <string name="askii_screen_capture_notification_text">Screen capture is active for ASKII Control mode.</string>
+    <string name="askii_screen_capture_channel">ASKII Screen Capture</string>
+</resources>

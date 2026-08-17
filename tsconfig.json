@@ -13,7 +13,9 @@
     "noFallthroughCasesInSwitch": true,
     "noUnusedParameters": true,
     "paths": {
-      "@common/*": ["./common/*"]
+      "@common/*": ["./common/*"],
+      "@shared/*": ["./shared/*"]
     }
-  }
+  },
+  "exclude": ["node_modules", "dist", "out", "app", "relay", "cli"]
 }
