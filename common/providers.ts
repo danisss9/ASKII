@@ -446,6 +446,48 @@ export async function getAskiiCloudChatStreaming(
   return getOpenAIChatStreaming(messages, apiKey, model, onChunk, baseURL);
 }
 
+// ── Speech-to-text (audio transcription) ─────────────────────────────────────
+
+/**
+ * Transcribes an audio buffer through an OpenAI-compatible
+ * `/audio/transcriptions` endpoint (multipart upload). Works with OpenAI
+ * (`whisper-1`, `gpt-4o-transcribe`, …), LM Studio's REST API and any
+ * compatible gateway (ASKII Cloud, opencode Go) that exposes the endpoint.
+ *
+ * `filename`'s extension is how servers sniff the container format — keep it
+ * in sync with the recorded mime type (audio/webm for ASKII voice notes).
+ */
+export async function transcribeAudio(
+  audio: Buffer,
+  filename: string,
+  mimeType: string,
+  apiKey: string,
+  model: string,
+  baseURL?: string,
+  extraHeaders?: Record<string, string>,
+): Promise<string> {
+  const client = new OpenAI({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    ...(extraHeaders ? { defaultHeaders: extraHeaders } : {}),
+  });
+  const file = new File([new Uint8Array(audio)], filename, { type: mimeType });
+  const response = await client.audio.transcriptions.create({ model, file });
+  return (response.text || '').trim();
+}
+
+/**
+ * Converts an LM Studio SDK base URL (`ws://localhost:1234`) into the REST
+ * base expected by OpenAI-compatible endpoints (`http://localhost:1234/v1`).
+ */
+export function lmStudioRestBase(url: string): string {
+  const http = url
+    .trim()
+    .replace(/^ws(s?):\/\//, 'http$1://')
+    .replace(/\/+$/, '');
+  return `${http}/v1`;
+}
+
 export async function retryLLMCall<T>(
   fn: () => Promise<T>,
   maxRetries = 2,

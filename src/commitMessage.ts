@@ -14,9 +14,22 @@ const MAX_DIFF_CHARS = 12_000;
 // Commit messages are short — keep generation tight.
 const COMMIT_MAX_TOKENS = 256;
 
+// The repository's recent commit messages are sent to the model as style
+// examples so generated messages match the user's existing habits.
+const MAX_RECENT_COMMITS = 10;
+
+// Cap each example message so huge commit bodies don't dominate the prompt.
+const MAX_EXAMPLE_MESSAGE_CHARS = 500;
+
+/** Minimal shape of a commit entry returned by the Git extension's log(). */
+interface GitLogCommitLike {
+  message?: string;
+}
+
 interface GitRepositoryLike {
   inputBox: { value: string };
   diff(cached?: boolean): Promise<string>;
+  log?(options?: { maxEntries?: number }): Promise<GitLogCommitLike[]>;
   state: {
     indexChanges?: { uri: vscode.Uri; status: number }[];
     workingTreeChanges?: { uri: vscode.Uri; status: number }[];
@@ -105,6 +118,47 @@ async function collectDiff(
 }
 
 /**
+ * Formats one example commit message: caps its length and indents wrapped
+ * lines so multi-line messages stay nested under their numbered bullet.
+ */
+function formatExampleMessage(message: string): string {
+  const normalized = message.replace(/\r\n/g, '\n').trim();
+  const capped =
+    normalized.length > MAX_EXAMPLE_MESSAGE_CHARS
+      ? `${normalized.slice(0, MAX_EXAMPLE_MESSAGE_CHARS)}…`
+      : normalized;
+  return capped.replace(/\n/g, '\n   ');
+}
+
+/**
+ * Fetches the repository's last commit messages to use as style examples for
+ * the model. Returns '' when the log is unavailable (older Git extension,
+ * no commits yet) so the prompt simply omits the section.
+ */
+async function collectRecentCommitMessages(repo: GitRepositoryLike): Promise<string> {
+  if (!repo.log) {
+    return '';
+  }
+  let messages: string[];
+  try {
+    const commits = await repo.log({ maxEntries: MAX_RECENT_COMMITS });
+    messages = (commits ?? [])
+      .map((c) => (c.message ?? '').trim())
+      .filter(Boolean)
+      .map(formatExampleMessage);
+  } catch {
+    return '';
+  }
+  if (messages.length === 0) {
+    return '';
+  }
+  return (
+    'Recent commit messages (style examples from this repository):\n' +
+    messages.map((m, i) => `${i + 1}. ${m}`).join('\n')
+  );
+}
+
+/**
  * Reads the user's custom instruction .md file (if configured and present) and
  * returns its text to append to the system prompt. Returns '' when unset/missing.
  */
@@ -179,12 +233,16 @@ export async function generateCommitMessageCommand(): Promise<void> {
   const instructions = loadCommitInstructions();
   const style = getCommitMessageStyle(config.get<string>('commitMessageStyle'));
   const system = buildCommitMessageSystemPrompt(style, instructions);
+  const examples = await collectRecentCommitMessages(repo);
 
   const scope = hasStaged ? 'staged' : 'working-tree';
   const userPrompt =
     `Changed files (${scope}):\n${fileSummary}\n\n` +
     `Unified diff (${scope}):\n${diff || '(empty)'}\n\n` +
-    `Write the commit message now.`;
+    (examples ? `${examples}\n\n` : '') +
+    (examples
+      ? 'Write the commit message now, matching the style of the example messages above.'
+      : 'Write the commit message now.');
 
   await vscode.window.withProgress(
     {

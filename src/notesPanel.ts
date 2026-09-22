@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { randomBytes } from 'crypto';
 import { type NoteEntry, type NoteKind, searchNotes } from '@common/notes';
 import {
@@ -14,12 +15,15 @@ import {
 import { rescheduleAll, onNotesChanged } from './notesScheduler';
 import { getNotePanelHtml } from './notesPanelHtml';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
+import { startVoiceRecording, type VoiceRecording } from './voiceRecorder';
+import { getExtensionTranscription } from './providers';
 
 // ── Single-instance panel ────────────────────────────────────────────────────
 
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentContext: vscode.ExtensionContext | undefined;
 let notesChangedSub: vscode.Disposable | undefined;
+let activeRecording: VoiceRecording | undefined;
 
 export async function askiiNoteCommand(
   context: vscode.ExtensionContext,
@@ -68,6 +72,9 @@ export async function askiiNoteCommand(
     currentPanel = undefined;
     notesChangedSub?.dispose();
     notesChangedSub = undefined;
+    // Mic capture outlives the panel only until the file is finalized — then it is discarded.
+    activeRecording?.cancel();
+    activeRecording = undefined;
   });
 
   currentPanel = panel;
@@ -302,6 +309,76 @@ async function handleWebviewMessage(
       }
       break;
     }
+
+    case 'voiceStart': {
+      void beginVoiceCapture(panel, context);
+      break;
+    }
+
+    case 'voiceStop': {
+      void finishVoiceCapture(panel);
+      break;
+    }
+  }
+}
+
+// ── Voice input ───────────────────────────────────────────────────────────────
+
+async function beginVoiceCapture(
+  panel: vscode.WebviewPanel,
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  if (activeRecording) return;
+  try {
+    const recording = await startVoiceRecording(context, (level) => {
+      panel.webview.postMessage({ type: 'voiceLevel', level });
+    });
+    activeRecording = recording;
+    // Duration cap reached / device vanished: wrap up like a user stop so the
+    // captured audio is still transcribed instead of being dropped silently.
+    recording.onAutoEnd(() => {
+      if (activeRecording === recording) void finishVoiceCapture(panel);
+    });
+    panel.webview.postMessage({ type: 'voiceStarted' });
+  } catch (err) {
+    panel.webview.postMessage({
+      type: 'voiceError',
+      error: err instanceof Error ? err.message : 'Voice input failed to start.',
+    });
+  }
+}
+
+async function finishVoiceCapture(panel: vscode.WebviewPanel): Promise<void> {
+  const recording = activeRecording;
+  activeRecording = undefined;
+  if (!recording) return;
+  panel.webview.postMessage({
+    type: 'status',
+    status: 'thinking',
+    kaomoji: `${getRandomThinkingKaomoji()} transcribing…`,
+  });
+  try {
+    const file = await recording.stop();
+    let audio: Buffer;
+    try {
+      audio = await fs.promises.readFile(file);
+    } finally {
+      void fs.promises.unlink(file).catch(() => undefined);
+    }
+    const text = await getExtensionTranscription(audio);
+    if (!text) {
+      panel.webview.postMessage({
+        type: 'voiceError',
+        error: 'No speech was detected in the recording.',
+      });
+    } else {
+      panel.webview.postMessage({ type: 'voiceText', text });
+    }
+  } catch (err) {
+    panel.webview.postMessage({
+      type: 'voiceError',
+      error: err instanceof Error ? err.message : 'Transcription failed.',
+    });
   }
 }
 

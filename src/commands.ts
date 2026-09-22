@@ -161,6 +161,7 @@ export async function askAskiiCommand() {
       transition: opacity 0.15s;
     }
     .icon-btn:hover { opacity: 1; }
+    .icon-btn.active { opacity: 1; color: var(--vscode-textLink-foreground, #4daafc); }
     #copyBtn.copied { opacity: 1; color: var(--vscode-terminal-ansiGreen, #4ec9b0); }
     #copyBtn .icon-check { display: none; }
     #copyBtn.copied .icon-copy { display: none; }
@@ -168,6 +169,18 @@ export async function askAskiiCommand() {
     @keyframes check-pop {
       from { transform: scale(0.4); opacity: 0; }
       to { transform: scale(1); opacity: 1; }
+    }
+    .history-entry { margin: 0 0 1.2em; }
+    .history-entry:last-child { margin-bottom: 0; }
+    .history-q {
+      font-weight: 600;
+      font-size: 0.92em;
+      background: var(--vscode-input-background, rgba(128,128,128,0.12));
+      border-left: 3px solid var(--vscode-activityBarBadge-background, #007acc);
+      border-radius: 3px;
+      padding: 4px 10px;
+      margin-bottom: 0.5em;
+      opacity: 0.9;
     }
     .stream-cursor {
       display: inline-block;
@@ -188,6 +201,13 @@ export async function askAskiiCommand() {
   <div class="header-row">
     <h2 id="title">ASKII is thinking... (๑•﹏•)</h2>
     <div class="btn-group">
+      <button id="historyBtn" class="icon-btn" title="View conversation history">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 3v5h5"></path>
+          <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"></path>
+          <polyline points="12 7 12 12 15 14"></polyline>
+        </svg>
+      </button>
       <button id="followUpBtn" class="icon-btn" title="Ask a follow-up">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
@@ -211,11 +231,21 @@ export async function askAskiiCommand() {
     const titleEl = document.getElementById('title');
     const copyBtn = document.getElementById('copyBtn');
     const followUpBtn = document.getElementById('followUpBtn');
+    const historyBtn = document.getElementById('historyBtn');
     let rawText = '';
+    let showingHistory = false;
+    let savedHtml = '';
+    let savedTitle = 'ASKII Says: (⌐■_■)';
+    function resetHistoryView() {
+      showingHistory = false;
+      historyBtn.classList.remove('active');
+      historyBtn.title = 'View conversation history';
+    }
     function showBtns(visible) {
       const d = visible ? 'inline-flex' : 'none';
       copyBtn.style.display = d;
       followUpBtn.style.display = d;
+      historyBtn.style.display = d;
     }
     function flashCopied() {
       copyBtn.classList.add('copied');
@@ -249,8 +279,19 @@ export async function askAskiiCommand() {
       } else if (msg.type === 'thinking') {
         rawText = '';
         showBtns(false);
+        resetHistoryView();
         titleEl.textContent = 'ASKII is thinking... (๑•﹏•)';
         contentEl.innerHTML = '<p class="thinking">Waiting for response...</p>';
+      } else if (msg.type === 'history') {
+        if (!showingHistory) {
+          showingHistory = true;
+          savedHtml = contentEl.innerHTML;
+          savedTitle = titleEl.textContent;
+          historyBtn.classList.add('active');
+          historyBtn.title = 'Back to response';
+          titleEl.textContent = 'Conversation history';
+        }
+        contentEl.innerHTML = safeHtml;
       } else if (msg.type === 'cancelled') {
         titleEl.textContent = 'ASKII Says: (⌐■_■)';
         showBtns(true);
@@ -266,6 +307,15 @@ export async function askAskiiCommand() {
     });
     // Inline onclick attributes are blocked by this page's CSP (script-src 'nonce-...'),
     // so the buttons are wired up here from the nonce'd script instead.
+    historyBtn.addEventListener('click', () => {
+      if (showingHistory) {
+        resetHistoryView();
+        titleEl.textContent = savedTitle;
+        contentEl.innerHTML = savedHtml;
+      } else {
+        vscode.postMessage({ type: 'requestHistory' });
+      }
+    });
     followUpBtn.addEventListener('click', () => {
       showBtns(false);
       vscode.postMessage({ type: 'followup' });
@@ -293,8 +343,12 @@ export async function askAskiiCommand() {
 
   panel.webview.html = panelHtml;
 
-  // Copy requests are honored for the whole panel lifetime — the webview falls back to
-  // this path when its own clipboard access is unavailable (e.g. unfocused webview).
+  // Full transcript of this panel's conversation (question + answer per turn), kept in
+  // sync alongside `history` so the webview can browse previous messages on demand.
+  const conversation: Array<{ question: string; answer: string }> = [];
+
+  // Copy & history requests are honored for the whole panel lifetime — the webview falls
+  // back to the clipboard path when its own access is unavailable (e.g. unfocused webview).
   panel.webview.onDidReceiveMessage((msg) => {
     if (typeof msg !== 'object' || msg === null) return;
     if (msg.type === 'copy' && typeof msg.text === 'string') {
@@ -306,6 +360,22 @@ export async function askAskiiCommand() {
           if (!panelDisposed) panel.webview.postMessage({ type: 'copyFailed' });
         },
       );
+    } else if (msg.type === 'requestHistory') {
+      const html =
+        conversation.length === 0
+          ? '<p class="thinking">No previous messages yet.</p>'
+          : conversation
+              .map((entry) => {
+                let answerHtml: string;
+                try {
+                  answerHtml = md.render(entry.answer);
+                } catch {
+                  answerHtml = `<pre>${escapeHtml(entry.answer)}</pre>`;
+                }
+                return `<div class="history-entry"><div class="history-q">${escapeHtml(entry.question)}</div>${answerHtml}</div>`;
+              })
+              .join('<hr>');
+      if (!panelDisposed) panel.webview.postMessage({ type: 'history', html });
     }
   });
 
@@ -359,6 +429,7 @@ export async function askAskiiCommand() {
       }
 
       history += `Question: ${currentQuestion}\n\nAnswer: ${accumulated}\n\n`;
+      conversation.push({ question: currentQuestion, answer: accumulated });
       panel.webview.postMessage({ type: 'done', html: renderAccumulated(), text: accumulated });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';

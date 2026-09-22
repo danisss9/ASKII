@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -184,6 +184,27 @@
           "type": "string",
           "default": "askii-smart",
           "description": "Model id to use for ASKII Control (screen and browser) and Note (vision-capable features)."
+        },
+        "askii.sttPlatform": {
+          "type": "string",
+          "enum": [
+            "openai",
+            "lmstudio",
+            "opencodego",
+            "askiicloud"
+          ],
+          "default": "askiicloud",
+          "description": "Platform used to transcribe ASKII Note voice input (OpenAI-compatible /audio/transcriptions endpoint)."
+        },
+        "askii.sttModel": {
+          "type": "string",
+          "default": "whisper-1",
+          "description": "Speech-to-text model id for ASKII Note voice input (e.g. whisper-1 or gpt-4o-transcribe on OpenAI)."
+        },
+        "askii.ffmpegPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the ffmpeg executable used for ASKII Note voice input (leave empty to auto-detect ffmpeg on PATH, winget, Chocolatey or C:\\ffmpeg)."
         },
         "askii.ollamaUrl": {
           "type": "string",

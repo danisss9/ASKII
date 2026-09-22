@@ -309,7 +309,53 @@ export function getNotePanelHtml(
       overflow-y: hidden;
     }
     #input::placeholder { color: var(--vscode-input-placeholderForeground, #777); }
-
+    /* ── Voice input ────────────────────────────────────────────────── */
+    #micBtn.listening {
+      color: var(--vscode-charts-red, #f14c4c);
+      animation: mic-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes mic-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(241,76,76,.45); }
+      50% { box-shadow: 0 0 0 5px rgba(241,76,76,0); }
+    }
+    #micBtn:disabled { opacity: .45; cursor: default; }
+    .voice-strip {
+      display: none; align-items: center; gap: 8px;
+      margin-bottom: 6px; padding: 5px 10px;
+      border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border, #444));
+      border-radius: 8px;
+      background: var(--vscode-input-background, #222);
+      font-size: .85em; color: var(--vscode-foreground, #ddd);
+      min-height: 30px;
+    }
+    .voice-strip.show { display: flex; }
+    .voice-strip.error {
+      border-color: var(--vscode-inputValidation-errorBorder, #be1100);
+      color: var(--vscode-errorForeground, #f48771);
+    }
+    .voice-strip.error .voice-dot { display: none; }
+    .voice-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex: none;
+      background: var(--vscode-charts-red, #f14c4c);
+      animation: mic-blink 1.2s ease-in-out infinite;
+    }
+    @keyframes mic-blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+    .voice-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .vu, .voice-timer { display: none; }
+    .voice-strip.listening .vu {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      gap: 2px; height: 18px; min-width: 60px; overflow: hidden;
+    }
+    .vu-bar {
+      width: 3px; height: 8%; border-radius: 1.5px; flex: none;
+      background: var(--vscode-button-background, #0e639c);
+      transition: height .09s linear;
+    }
+    .voice-strip.listening .voice-timer {
+      display: inline-block; flex: none;
+      font-variant-numeric: tabular-nums;
+      color: var(--vscode-descriptionForeground, #999);
+    }
     /* ── Clarify modal ──────────────────────────────────────────────────── */
     .clarify-overlay {
       position: fixed; inset: 0; background: rgba(0,0,0,.45);
@@ -392,8 +438,15 @@ export function getNotePanelHtml(
       <button class="hint" data-prefix="task: " title="Prepend the task prefix">task:</button>
       <button class="hint" data-prefix="remind me to " title="Prepend the reminder prefix">remind me to…</button>
     </div>
+    <div id="voiceStrip" class="voice-strip" role="status">
+      <span id="voiceDot" class="voice-dot"></span>
+      <span id="voiceLabel" class="voice-label">Listening…</span>
+      <div id="vu" class="vu"></div>
+      <span id="voiceTimer" class="voice-timer">0:00</span>
+    </div>
     <div class="composer">
       <textarea id="input" rows="1" placeholder="Write a note, task, or reminder…"></textarea>
+      <button id="micBtn" class="icon-btn" title="Dictate a note (voice input)" aria-label="Dictate note" aria-pressed="false"></button>
       <button id="shotBtn" class="icon-btn" title="Attach a full-screen screenshot" aria-label="Attach screenshot" aria-pressed="false"></button>
       <button id="sendBtn" class="btn" title="Send (Enter · Shift+Enter for a new line)">Send</button>
     </div>
@@ -429,6 +482,7 @@ export function getNotePanelHtml(
         edit: '<path d="M11.25 2 14 4.75 6.25 12.5 3 13l.5-3.25z"/><path d="m10 3.25 2.75 2.75"/>',
         trash: '<path d="M2.75 4.5h10.5"/><path d="M6.25 4.5V2.75h3.5V4.5"/><path d="M4.25 4.5l.75 8.75h6l.75-8.75"/><path d="M6.75 7v4M9.25 7v4"/>',
         camera: '<rect x="1.75" y="4.25" width="12.5" height="9" rx="1.5"/><path d="M5.25 4.25 6.25 2.5h3.5l1 1.75"/><circle cx="8" cy="8.75" r="2.25"/>',
+        mic: '<rect x="6" y="1.75" width="4" height="8.25" rx="2"/><path d="M3.5 7.75a4.5 4.5 0 0 0 9 0"/><path d="M8 12.25v2"/>',,
         send: '<path d="M14.25 1.75 1.75 7l4.75 2 2 4.75z"/><path d="M14.25 1.75 6.5 9"/>',
         search: '<circle cx="6.75" cy="6.75" r="4.5"/><path d="m10.5 10.5 3.25 3.25"/>',
         close: '<path d="m4 4 8 8M12 4l-8 8"/>',
@@ -455,7 +509,13 @@ export function getNotePanelHtml(
       var chipAll = document.getElementById('chipAll');
       var counterEl = document.getElementById('taskCounter');
       var shotBtn = document.getElementById('shotBtn');
+      var micBtn = document.getElementById('micBtn');
       var sendBtn = document.getElementById('sendBtn');
+      var voiceStrip = document.getElementById('voiceStrip');
+      var voiceDot = document.getElementById('voiceDot');
+      var voiceLabel = document.getElementById('voiceLabel');
+      var vuEl = document.getElementById('vu');
+      var voiceTimerEl = document.getElementById('voiceTimer');
       var clarifyOverlay = document.getElementById('clarifyOverlay');
       var clarifyQuestionEl = document.getElementById('clarifyQuestion');
       var clarifyInput = document.getElementById('clarifyInput');
@@ -865,6 +925,118 @@ export function getNotePanelHtml(
           : 'Attach a full-screen screenshot';
       });
 
+      // ── Voice input ──────────────────────────────────────────────────
+      // The mic is captured by ffmpeg in the extension host (webviews cannot
+      // use getUserMedia); the host streams normalized 0..1 loudness levels
+      // that drive the VU bars below.
+      micBtn.innerHTML = icon('mic');
+
+      var VU_BARS = 14;
+      var vuBars = [];
+      for (var vi = 0; vi < VU_BARS; vi++) {
+        var vb = el('span', 'vu-bar');
+        vuEl.appendChild(vb);
+        vuBars.push(vb);
+      }
+      var levelHistory = [];
+      var voiceState = 'idle'; // idle | starting | listening | processing | error
+      var voiceTimerInt = null;
+      var voiceStartTs = 0;
+      var voiceFallbackTimer = null;
+      var voiceErrorTimer = null;
+
+      function stopVoiceTimer() {
+        clearInterval(voiceTimerInt);
+        voiceTimerInt = null;
+      }
+
+      function setVoiceState(state, text) {
+        voiceState = state;
+        clearTimeout(voiceFallbackTimer);
+        clearTimeout(voiceErrorTimer);
+        stopVoiceTimer();
+        voiceStrip.classList.toggle('show', state !== 'idle');
+        voiceStrip.classList.toggle('listening', state === 'listening');
+        voiceStrip.classList.toggle('error', state === 'error');
+        micBtn.classList.toggle('listening', state === 'listening');
+        micBtn.disabled = state === 'starting' || state === 'processing';
+        micBtn.setAttribute('aria-pressed', state === 'listening' ? 'true' : 'false');
+        micBtn.title =
+          state === 'listening'
+            ? 'Stop recording and transcribe'
+            : 'Dictate a note (voice input)';
+        if (state === 'listening') {
+          voiceDot.className = 'voice-dot';
+          voiceLabel.textContent = 'Listening…';
+          voiceStartTs = Date.now();
+          voiceTimerEl.textContent = '0:00';
+          voiceTimerInt = setInterval(function () {
+            var s = Math.floor((Date.now() - voiceStartTs) / 1000);
+            voiceTimerEl.textContent = Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+          }, 500);
+        } else if (state === 'starting') {
+          voiceDot.className = 'spinner';
+          voiceLabel.textContent = 'Starting microphone…';
+          // Safety net: if the host never confirms, re-enable the button.
+          voiceFallbackTimer = setTimeout(function () {
+            if (voiceState === 'starting') setVoiceState('idle');
+          }, 10000);
+        } else if (state === 'processing') {
+          voiceDot.className = 'spinner';
+          voiceLabel.textContent = 'Transcribing…';
+        } else if (state === 'error') {
+          voiceLabel.textContent = text || 'Voice input failed.';
+          voiceErrorTimer = setTimeout(function () {
+            if (voiceState === 'error') setVoiceState('idle');
+          }, 6000);
+        }
+      }
+
+      // Newest sample on the right — the bars read as a scrolling waveform.
+      function pushVoiceLevel(level) {
+        levelHistory.push(Math.max(0, Math.min(1, level)));
+        if (levelHistory.length > VU_BARS) levelHistory.shift();
+        for (var i = 0; i < VU_BARS; i++) {
+          var idx = levelHistory.length - VU_BARS + i;
+          var lv = idx >= 0 ? levelHistory[idx] : 0;
+          vuBars[i].style.height = Math.max(8, Math.round(lv * 100)) + '%';
+        }
+      }
+
+      micBtn.addEventListener('click', function () {
+        if (voiceState === 'listening') {
+          setVoiceState('processing');
+          vscode.postMessage({ type: 'voiceStop' });
+        } else if (voiceState === 'idle') {
+          levelHistory = [];
+          for (var i = 0; i < VU_BARS; i++) vuBars[i].style.height = '8%';
+          setVoiceState('starting');
+          vscode.postMessage({ type: 'voiceStart' });
+        }
+      });
+
+      function handleVoiceMessage(msg) {
+        if (msg.type === 'voiceStarted') {
+          setVoiceState('listening');
+        } else if (msg.type === 'voiceLevel') {
+          if (voiceState === 'listening' && typeof msg.level === 'number') {
+            pushVoiceLevel(msg.level);
+          }
+        } else if (msg.type === 'voiceText') {
+          setVoiceState('idle');
+          var t = typeof msg.text === 'string' ? msg.text.trim() : '';
+          if (t) {
+            var cur = inputEl.value;
+            inputEl.value = cur ? (cur.replace(/\s$/, '') + ' ' + t) : t;
+            inputEl.focus();
+            inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+            autosize();
+          }
+        } else if (msg.type === 'voiceError') {
+          setVoiceState('error', msg.error);
+        }
+      }
+
       sendBtn.innerHTML = icon('send') + '<span>Send</span>';
 
       var PREFIXES = ['task: ', 'remind me to '];
@@ -925,6 +1097,13 @@ export function getNotePanelHtml(
             entry.classList.add('selected');
             entry.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
+        } else if (
+          msg.type === 'voiceStarted' ||
+          msg.type === 'voiceLevel' ||
+          msg.type === 'voiceText' ||
+          msg.type === 'voiceError'
+        ) {
+          handleVoiceMessage(msg);
         }
       });
 

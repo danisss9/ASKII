@@ -16,10 +16,13 @@ import {
   getOpenCodeGoChat,
   getOpenCodeGoChatStreaming,
   OPENCODE_GO_URL,
+  getOpenCodeGoHeaders,
   getAskiiCloudResponse,
   getAskiiCloudChat,
   getAskiiCloudChatStreaming,
   ASKII_CLOUD_URL,
+  transcribeAudio,
+  lmStudioRestBase,
   type ChatMessage,
 } from '@common/providers';
 import { loadWikiIndex, searchWikiRaw } from '@common/wiki';
@@ -179,6 +182,53 @@ export async function getExtensionChatStreaming(
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
     return getOllamaChatStreaming(messages, url, mdl, onChunk);
+  }
+}
+
+/**
+ * Transcribes a voice-note recording (webm/opus bytes) to text using the
+ * `askii.sttPlatform` / `askii.sttModel` settings via OpenAI-compatible
+ * /audio/transcriptions endpoints.
+ */
+export async function getExtensionTranscription(audio: Buffer): Promise<string> {
+  const config = vscode.workspace.getConfiguration('askii');
+  const platform = config.get<string>('sttPlatform') || 'askiicloud';
+  const model = config.get<string>('sttModel') || 'whisper-1';
+
+  if (platform === 'openai') {
+    const apiKey = await getProviderApiKey('openai');
+    const baseURL = config.get<string>('openaiUrl') || undefined;
+    return transcribeAudio(audio, 'note.webm', 'audio/webm', apiKey, model, baseURL);
+  } else if (platform === 'lmstudio') {
+    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
+    // LM Studio's REST server accepts any bearer token; the SDK key is unused locally.
+    return transcribeAudio(
+      audio,
+      'note.webm',
+      'audio/webm',
+      'lm-studio',
+      model,
+      lmStudioRestBase(url),
+    );
+  } else if (platform === 'opencodego') {
+    const apiKey = await getProviderApiKey('opencodego');
+    return transcribeAudio(
+      audio,
+      'note.webm',
+      'audio/webm',
+      apiKey,
+      model,
+      OPENCODE_GO_URL,
+      getOpenCodeGoHeaders(),
+    );
+  } else if (platform === 'askiicloud') {
+    const apiKey = await getProviderApiKey('askiicloud');
+    return transcribeAudio(audio, 'note.webm', 'audio/webm', apiKey, model, ASKII_CLOUD_URL);
+  } else {
+    throw new Error(
+      `Speech-to-text is not available on ${platform}. ` +
+        'Set askii.sttPlatform to a transcription-capable platform (openai, askiicloud, lmstudio or opencodego).',
+    );
   }
 }
 

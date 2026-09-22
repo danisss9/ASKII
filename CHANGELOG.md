@@ -6,7 +6,15 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-23
+
 ### Added
+
+- **Voice input for ASKII Note**: The Note composer gains a microphone button next to the screenshot toggle — click it, speak, and click again to transcribe. Because VS Code webviews cannot access `getUserMedia`, the microphone is captured by an `ffmpeg` process in the extension host (auto-detected from PATH / winget / Chocolatey, or set explicitly via `askii.ffmpegPath`; the Windows input device is auto-picked from DirectShow's device list). While recording, a listening strip above the composer shows a pulsing indicator, a live elapsed timer and a scrolling volume-meter animation driven by the microphone's momentary loudness (ebur128), streamed to the webview ~10×/second. The finished recording (16 kHz mono Opus/WebM, capped at 10 minutes) is transcribed through an OpenAI-compatible `/audio/transcriptions` endpoint — configured by the new `askii.sttPlatform` (`askiicloud`, `openai`, `lmstudio` or `opencodego`) and `askii.sttModel` (default `whisper-1`) settings — and the text lands in the composer, ready to combine with typed input and the screenshot toggle. Recordings stop cleanly when the panel closes, and device or transcription failures surface as an inline error strip instead of a dead button.
+
+- **Commit messages learn your style**: The ASKII Git commit-message generator now includes the repository's last 10 commit messages in the prompt as style examples (each capped in length, and the section is skipped silently when the log is unavailable or the repository has no commits), so generated messages match your existing habits. Applies to the extension and the CLI `askii commit` command.
+
+- **Ask panel conversation history**: The ASKII Response panel gains a history button (clock icon, next to the follow-up and copy buttons) that toggles between the current response and the panel's full conversation transcript — every question you asked (styled as a quoted block) with its markdown-rendered answer, separated by rules. Clicking again returns to the latest response; the toggle resets automatically when a new follow-up starts streaming.
 
 - **ASKII Note panel redesign & new controls**: The ASKII Note panel was redesigned with theme-native styling, inline SVG icons, and a grouped list (**Pinned** / Today / Yesterday / This week / Earlier). The toolbar gains a search box with a clear button, kind filter chips (notes / tasks / reminders — combinable with search), and a task progress counter. New per-entry actions: **pin**, **inline edit** (with an explicit AI **Re-classify**), and **snooze** / **dismiss** for reminders — the same actions the reminder notification offers. The composer is now compact and smart: an auto-growing input where **Enter** sends (`Shift+Enter` for a new line), a camera-icon screenshot toggle, and clickable kind-hint chips. Reminder due times tick live, and relative "created" timestamps / clickable tag chips / expandable context blocks round out the entries.
 

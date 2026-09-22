@@ -218,6 +218,8 @@ ASKII can write your Git commit messages for you. A **sparkle (✦)** button is 
 3. Click the **✦** button in the Source Control view toolbar.
 4. ASKII reads the staged diff (falling back to the working-tree diff when nothing is staged), sends it to the LLM, and writes the generated commit message straight into the input box — ready for you to review and commit.
 
+The generator also includes the repository's **last 10 commit messages** in the prompt as style examples, so generated messages tend to match your existing habits (multi-line bodies are supported; the section is skipped when the repository has no history yet).
+
 The generator uses the **inline** LLM platform and model (`askii.llmInlinePlatform` / `askii.llmInlineModel`), so it can run on a different provider than your main Ask / Edit / Do commands. Set `askii.commitMessageInstructions` to a `.md` file with your own style rules (e.g. "always use Conventional Commits with a `feat`/`fix`/`chore` prefix and reference the Jira ticket in the body") and its contents are appended to the built-in system prompt. The path may be absolute or relative to the workspace root.
 
 ### Per-Feature Platform & Model

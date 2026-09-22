@@ -1763,6 +1763,12 @@ async function main() {
     const workDir = getFlagValue(flags, '--dir') || process.cwd();
 
     const MAX_DIFF_CHARS = 12_000;
+    // The repository's recent commit messages are sent to the model as style
+    // examples so generated messages match the user's existing habits.
+    const MAX_RECENT_COMMITS = 10;
+    // Cap each example message so huge commit bodies don't dominate the prompt.
+    const MAX_EXAMPLE_MESSAGE_CHARS = 500;
+
     const COMMIT_SYSTEM_PROMPT = `You are an expert at writing Git commit messages.
 Given a list of changed files and a unified diff, write a single, well-formed Git commit message.
 Rules:
@@ -1792,6 +1798,40 @@ Rules:
       } catch {
         return '';
       }
+    }
+
+    /**
+     * Formats one example commit message: caps its length and indents wrapped
+     * lines so multi-line messages stay nested under their numbered bullet.
+     */
+    function formatExampleMessage(message: string): string {
+      const normalized = message.replace(/\r\n/g, '\n').trim();
+      const capped =
+        normalized.length > MAX_EXAMPLE_MESSAGE_CHARS
+          ? `${normalized.slice(0, MAX_EXAMPLE_MESSAGE_CHARS)}…`
+          : normalized;
+      return capped.replace(/\n/g, '\n   ');
+    }
+
+    // Recent commit messages give the model concrete style examples. Returns
+    // '' when the log is unavailable (no commits yet) so the prompt omits it.
+    function collectRecentCommitMessages(): string {
+      const raw = git(['log', '-n', String(MAX_RECENT_COMMITS), '-z', '--format=%B']);
+      if (!raw.trim()) {
+        return '';
+      }
+      const messages = raw
+        .split('\0')
+        .map((m) => m.trim())
+        .filter(Boolean)
+        .map(formatExampleMessage);
+      if (messages.length === 0) {
+        return '';
+      }
+      return (
+        'Recent commit messages (style examples from this repository):\n' +
+        messages.map((m, i) => `${i + 1}. ${m}`).join('\n')
+      );
     }
 
     try {
@@ -1831,10 +1871,14 @@ Rules:
       const scope = hasStaged ? 'staged' : 'working-tree';
       const fileSummary =
         changedFiles.length > 0 ? changedFiles.join('\n') : '(no file list available)';
+      const examples = collectRecentCommitMessages();
       const userPrompt =
         `Changed files (${scope}):\n${fileSummary}\n\n` +
         `Unified diff (${scope}):\n${diff || '(empty)'}\n\n` +
-        `Write the commit message now.`;
+        (examples ? `${examples}\n\n` : '') +
+        (examples
+          ? 'Write the commit message now, matching the style of the example messages above.'
+          : 'Write the commit message now.');
 
       console.error(`ASKII is generating a commit message... ${getRandomThinkingKaomoji()}`);
       const response = await getResponse(config, userPrompt, COMMIT_SYSTEM_PROMPT);
