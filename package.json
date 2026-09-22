@@ -22,6 +22,11 @@
   "contributes": {
     "keybindings": [
       {
+        "command": "askii.openSetup",
+        "key": "ctrl+shift+a s",
+        "mac": "cmd+shift+a s"
+      },
+      {
         "command": "askii.askQuestion",
         "key": "ctrl+shift+k a",
         "mac": "cmd+shift+k a",
@@ -44,19 +49,9 @@
         "mac": "cmd+shift+k c"
       },
       {
-        "command": "askii.browseTask",
-        "key": "ctrl+shift+k b",
-        "mac": "cmd+shift+k b"
-      },
-      {
         "command": "askii.reloadWiki",
         "key": "ctrl+shift+k w",
         "mac": "cmd+shift+k w"
-      },
-      {
-        "command": "askii.generate",
-        "key": "ctrl+shift+k r",
-        "mac": "cmd+shift+k r"
       },
       {
         "command": "askii.noteTask",
@@ -67,15 +62,14 @@
         "command": "askii.clearCache",
         "key": "ctrl+shift+k x",
         "mac": "cmd+shift+k x"
-      },
-      {
-        "command": "askii.generateCommitMessage",
-        "key": "ctrl+shift+k g",
-        "mac": "cmd+shift+k g",
-        "when": "scmRepository && scmProvider == git"
       }
     ],
     "commands": [
+      {
+        "command": "askii.openSetup",
+        "title": "ASKII: Open Setup",
+        "category": "ASKII"
+      },
       {
         "command": "askii.clearCache",
         "title": "ASKII: Clear Cache",
@@ -102,20 +96,9 @@
         "category": "ASKII"
       },
       {
-        "command": "askii.browseTask",
-        "title": "ASKII Browse",
-        "category": "ASKII"
-      },
-      {
         "command": "askii.reloadWiki",
         "title": "ASKII: Reload Wiki",
         "category": "ASKII"
-      },
-      {
-        "command": "askii.generate",
-        "title": "ASKII Generate",
-        "category": "ASKII",
-        "icon": "$(new-file)"
       },
       {
         "command": "askii.generateCommitMessage",
@@ -137,6 +120,12 @@
           "group": "navigation",
           "when": "scmProvider == git"
         }
+      ],
+      "commandPalette": [
+        {
+          "command": "askii.generateCommitMessage",
+          "when": "false"
+        }
       ]
     },
     "configuration": {
@@ -153,12 +142,12 @@
             "askiicloud"
           ],
           "default": "askiicloud",
-          "description": "LLM platform to use for ASKII Ask, Edit, Do and Generate (ollama, lmstudio, openai, anthropic, opencodego, or askiicloud)"
+          "description": "LLM platform to use for ASKII Ask, Edit and Do (ollama, lmstudio, openai, anthropic, opencodego, or askiicloud)"
         },
         "askii.llmModel": {
           "type": "string",
           "default": "askii-smart",
-          "description": "Model id to use for ASKII Ask, Edit, Do and Generate. Set to a model id supported by askii.llmPlatform (e.g. askii-smart, gpt-5-mini, claude-sonnet-4-6, glm-5.2, gemma4:e4b)."
+          "description": "Model id to use for ASKII Ask, Edit and Do. Set to a model id supported by askii.llmPlatform (e.g. askii-smart, gpt-5-mini, claude-sonnet-4-6, glm-5.2, gemma4:e4b)."
         },
         "askii.llmInlinePlatform": {
           "type": "string",
@@ -189,12 +178,12 @@
             "askiicloud"
           ],
           "default": "askiicloud",
-          "description": "LLM platform to use for ASKII Browse, Control and Note (vision-capable features)."
+          "description": "LLM platform to use for ASKII Control (screen and browser) and Note (vision-capable features)."
         },
         "askii.llmVisionModel": {
           "type": "string",
           "default": "askii-smart",
-          "description": "Model id to use for ASKII Browse, Control and Note (vision-capable features)."
+          "description": "Model id to use for ASKII Control (screen and browser) and Note (vision-capable features)."
         },
         "askii.ollamaUrl": {
           "type": "string",
@@ -206,30 +195,10 @@
           "default": "ws://localhost:1234",
           "description": "URL of the LM Studio API server"
         },
-        "askii.openaiApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "OpenAI API key (used when an llm*Platform is openai)"
-        },
         "askii.openaiUrl": {
           "type": "string",
           "default": "",
           "description": "OpenAI-compatible base URL (leave empty for api.openai.com). Use this for Azure OpenAI or other compatible APIs."
-        },
-        "askii.anthropicApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "Anthropic API key (used when an llm*Platform is anthropic)"
-        },
-        "askii.opencodegoApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "opencode Go API key (used when an llm*Platform is opencodego). Get it from https://opencode.ai/go"
-        },
-        "askii.askiicloudApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "ASKII Cloud API key (used when an llm*Platform is askiicloud)."
         },
         "askii.inlineHelperMode": {
           "type": "string",
@@ -267,12 +236,12 @@
         "askii.browserHeadless": {
           "type": "boolean",
           "default": false,
-          "description": "Launch the Puppeteer browser in headless mode for ASKII Browse (set to false to show the browser window)"
+          "description": "Launch the Puppeteer browser in headless mode for ASKII Control browser mode (set to false to show the browser window)"
         },
         "askii.chromePath": {
           "type": "string",
           "default": "",
-          "description": "Path to the Chrome/Chromium executable for ASKII Browse (e.g. C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe). Leave empty to use the system default."
+          "description": "Path to the Chrome/Chromium executable for ASKII Control browser mode (e.g. C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe). Leave empty to use the system default."
         },
         "askii.wikiEnabled": {
           "type": "boolean",

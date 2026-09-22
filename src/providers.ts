@@ -24,6 +24,8 @@ import {
   type ChatMessage,
 } from '@common/providers';
 import { loadWikiIndex, searchWikiRaw } from '@common/wiki';
+import { getProviderApiKey, isProviderStructurallyConfigured } from './providerSecrets';
+import { getProviderDefinition, isProviderId } from './setupCore';
 
 /**
  * Resolves the model id to use, honouring an optional per-feature model
@@ -55,17 +57,17 @@ export async function getExtensionResponseWithImage(
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     return getLMStudioResponse(prompt, url, model, undefined, imageBase64);
   } else if (platform === 'openai') {
-    const apiKey = config.get<string>('openaiApiKey') || '';
+    const apiKey = await getProviderApiKey('openai');
     const baseURL = config.get<string>('openaiUrl') || undefined;
     return getOpenAIResponse(prompt, apiKey, model, baseURL, undefined, imageBase64);
   } else if (platform === 'anthropic') {
-    const apiKey = config.get<string>('anthropicApiKey') || '';
+    const apiKey = await getProviderApiKey('anthropic');
     return getAnthropicResponse(prompt, apiKey, model, undefined, imageBase64);
   } else if (platform === 'opencodego') {
-    const apiKey = config.get<string>('opencodegoApiKey') || '';
+    const apiKey = await getProviderApiKey('opencodego');
     return getOpenCodeGoResponse(prompt, apiKey, model, OPENCODE_GO_URL, undefined, imageBase64);
   } else if (platform === 'askiicloud') {
-    const apiKey = config.get<string>('askiicloudApiKey') || '';
+    const apiKey = await getProviderApiKey('askiicloud');
     return getAskiiCloudResponse(prompt, apiKey, model, ASKII_CLOUD_URL, undefined, imageBase64);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
@@ -88,20 +90,20 @@ export async function getExtensionResponseStreaming(
     const result = await getLMStudioResponse(prompt, url, model, system);
     onChunk(result);
   } else if (platform === 'openai') {
-    const apiKey = config.get<string>('openaiApiKey') || '';
+    const apiKey = await getProviderApiKey('openai');
     const baseURL = config.get<string>('openaiUrl') || undefined;
     const result = await getOpenAIResponse(prompt, apiKey, model, baseURL, system);
     onChunk(result);
   } else if (platform === 'anthropic') {
-    const apiKey = config.get<string>('anthropicApiKey') || '';
+    const apiKey = await getProviderApiKey('anthropic');
     const result = await getAnthropicResponse(prompt, apiKey, model, system);
     onChunk(result);
   } else if (platform === 'opencodego') {
-    const apiKey = config.get<string>('opencodegoApiKey') || '';
+    const apiKey = await getProviderApiKey('opencodego');
     const result = await getOpenCodeGoResponse(prompt, apiKey, model, OPENCODE_GO_URL, system);
     onChunk(result);
   } else if (platform === 'askiicloud') {
-    const apiKey = config.get<string>('askiicloudApiKey') || '';
+    const apiKey = await getProviderApiKey('askiicloud');
     const result = await getAskiiCloudResponse(prompt, apiKey, model, ASKII_CLOUD_URL, system);
     onChunk(result);
   } else {
@@ -128,17 +130,17 @@ export async function getExtensionResponse(
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     return getLMStudioResponse(prompt, url, model, system, undefined, signal);
   } else if (platform === 'openai') {
-    const apiKey = config.get<string>('openaiApiKey') || '';
+    const apiKey = await getProviderApiKey('openai');
     const baseURL = config.get<string>('openaiUrl') || undefined;
     return getOpenAIResponse(prompt, apiKey, model, baseURL, system, undefined, signal);
   } else if (platform === 'anthropic') {
-    const apiKey = config.get<string>('anthropicApiKey') || '';
+    const apiKey = await getProviderApiKey('anthropic');
     return getAnthropicResponse(prompt, apiKey, model, system, undefined, undefined, signal);
   } else if (platform === 'opencodego') {
-    const apiKey = config.get<string>('opencodegoApiKey') || '';
+    const apiKey = await getProviderApiKey('opencodego');
     return getOpenCodeGoResponse(prompt, apiKey, model, OPENCODE_GO_URL, system, undefined, signal);
   } else if (platform === 'askiicloud') {
-    const apiKey = config.get<string>('askiicloudApiKey') || '';
+    const apiKey = await getProviderApiKey('askiicloud');
     return getAskiiCloudResponse(prompt, apiKey, model, ASKII_CLOUD_URL, system, undefined, signal);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
@@ -155,17 +157,17 @@ export async function getExtensionChat(messages: ChatMessage[]): Promise<string>
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     return getLMStudioChat(messages, url, mdl);
   } else if (platform === 'openai') {
-    const apiKey = config.get<string>('openaiApiKey') || '';
+    const apiKey = await getProviderApiKey('openai');
     const baseURL = config.get<string>('openaiUrl') || undefined;
     return getOpenAIChat(messages, apiKey, mdl, baseURL);
   } else if (platform === 'anthropic') {
-    const apiKey = config.get<string>('anthropicApiKey') || '';
+    const apiKey = await getProviderApiKey('anthropic');
     return getAnthropicChat(messages, apiKey, mdl);
   } else if (platform === 'opencodego') {
-    const apiKey = config.get<string>('opencodegoApiKey') || '';
+    const apiKey = await getProviderApiKey('opencodego');
     return getOpenCodeGoChat(messages, apiKey, mdl, OPENCODE_GO_URL);
   } else if (platform === 'askiicloud') {
-    const apiKey = config.get<string>('askiicloudApiKey') || '';
+    const apiKey = await getProviderApiKey('askiicloud');
     return getAskiiCloudChat(messages, apiKey, mdl, ASKII_CLOUD_URL);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
@@ -185,17 +187,17 @@ export async function getExtensionChatStreaming(
     const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
     return getLMStudioChatStreaming(messages, url, mdl, onChunk);
   } else if (platform === 'openai') {
-    const apiKey = config.get<string>('openaiApiKey') || '';
+    const apiKey = await getProviderApiKey('openai');
     const baseURL = config.get<string>('openaiUrl') || undefined;
     return getOpenAIChatStreaming(messages, apiKey, mdl, onChunk, baseURL);
   } else if (platform === 'anthropic') {
-    const apiKey = config.get<string>('anthropicApiKey') || '';
+    const apiKey = await getProviderApiKey('anthropic');
     return getAnthropicChatStreaming(messages, apiKey, mdl, onChunk);
   } else if (platform === 'opencodego') {
-    const apiKey = config.get<string>('opencodegoApiKey') || '';
+    const apiKey = await getProviderApiKey('opencodego');
     return getOpenCodeGoChatStreaming(messages, apiKey, mdl, onChunk, OPENCODE_GO_URL);
   } else if (platform === 'askiicloud') {
-    const apiKey = config.get<string>('askiicloudApiKey') || '';
+    const apiKey = await getProviderApiKey('askiicloud');
     return getAskiiCloudChatStreaming(messages, apiKey, mdl, onChunk, ASKII_CLOUD_URL);
   } else {
     const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
@@ -214,40 +216,23 @@ export async function getExtensionChatStreaming(
  */
 export async function validateProviderConfig(): Promise<string | null> {
   const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('llmPlatform') || 'askiicloud';
+  const roles = [
+    ['llmPlatform', 'general features'],
+    ['llmInlinePlatform', 'inline features'],
+    ['llmVisionPlatform', 'vision features'],
+  ] as const;
 
-  if (platform === 'openai') {
-    const apiKey = (config.get<string>('openaiApiKey') || '').trim();
-    if (!apiKey) {
-      return 'ASKII (openai): No API key configured. Set askii.openaiApiKey in Settings.';
+  for (const [setting, role] of roles) {
+    const platform = config.get<string>(setting) || 'askiicloud';
+    if (!isProviderId(platform)) {
+      return `ASKII has an unknown provider configured for ${role}.`;
     }
-  } else if (platform === 'anthropic') {
-    const apiKey = (config.get<string>('anthropicApiKey') || '').trim();
-    if (!apiKey) {
-      return 'ASKII (anthropic): No API key configured. Set askii.anthropicApiKey in Settings.';
-    }
-  } else if (platform === 'opencodego') {
-    const apiKey = (config.get<string>('opencodegoApiKey') || '').trim();
-    if (!apiKey) {
-      return 'ASKII (opencodego): No API key configured. Set askii.opencodegoApiKey in Settings.';
-    }
-  } else if (platform === 'askiicloud') {
-    const apiKey = (config.get<string>('askiicloudApiKey') || '').trim();
-    if (!apiKey) {
-      return 'ASKII (askiicloud): No API key configured. Set askii.askiicloudApiKey in Settings.';
-    }
-  } else if (platform === 'ollama') {
-    const url = (config.get<string>('ollamaUrl') || '').trim();
-    if (!url) {
-      return 'ASKII (ollama): No server URL configured. Set askii.ollamaUrl in Settings.';
-    }
-  } else if (platform === 'lmstudio') {
-    const url = (config.get<string>('lmStudioUrl') || '').trim();
-    if (!url) {
-      return 'ASKII (lmstudio): No server URL configured. Set askii.lmStudioUrl in Settings.';
+    if (!(await isProviderStructurallyConfigured(platform))) {
+      const provider = getProviderDefinition(platform);
+      const requirement = provider.connection === 'apiKey' ? 'API key' : 'server URL';
+      return `ASKII ${provider.label} needs a ${requirement} for ${role}. Run ASKII: Open Setup.`;
     }
   }
-
   return null;
 }
 
@@ -296,20 +281,20 @@ export async function getLLMExplanation(
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       return result || 'No explanation available.';
     } else if (platform === 'openai') {
-      const apiKey = config.get<string>('openaiApiKey') || '';
+      const apiKey = await getProviderApiKey('openai');
       const baseURL = config.get<string>('openaiUrl') || undefined;
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getOpenAIResponse(userPrompt, apiKey, model, baseURL, systemPrompt);
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       return result || 'No explanation available.';
     } else if (platform === 'anthropic') {
-      const apiKey = config.get<string>('anthropicApiKey') || '';
+      const apiKey = await getProviderApiKey('anthropic');
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getAnthropicResponse(userPrompt, apiKey, model, systemPrompt);
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       return result || 'No explanation available.';
     } else if (platform === 'opencodego') {
-      const apiKey = config.get<string>('opencodegoApiKey') || '';
+      const apiKey = await getProviderApiKey('opencodego');
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getOpenCodeGoResponse(
         userPrompt,
@@ -321,7 +306,7 @@ export async function getLLMExplanation(
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       return result || 'No explanation available.';
     } else if (platform === 'askiicloud') {
-      const apiKey = config.get<string>('askiicloudApiKey') || '';
+      const apiKey = await getProviderApiKey('askiicloud');
       if (abortSignal?.aborted) throw new Error('Request cancelled');
       const result = await getAskiiCloudResponse(
         userPrompt,

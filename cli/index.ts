@@ -5,7 +5,6 @@ import {
   executeViewAction,
   executeSearchAction,
   buildDoSystemPrompt,
-  buildGenerateSystemPrompt,
   writeBackup,
   recordCreatedFile,
   deleteAllBackups,
@@ -408,7 +407,6 @@ function replCompleter(line: string): [string[], string] {
     '/help',
     '/ask ',
     '/do ',
-    '/generate ',
     '/commit',
     '/note ',
     '/edit ',
@@ -434,7 +432,6 @@ REPL Commands:
   <message>                      Chat with ASKII (persistent history)
   /ask <question>                Explicit ask (same as bare text)
   /do <task> [--max-rounds N]    Run the Do agent (--yes/-y to auto-confirm)
-  /generate <type> <base>        Generate a file (type: test|doc|json) — agentic, can search & ask
   /commit                        Generate a commit message from staged/working-tree diff
   /note <subcommand>             Notes / tasks / reminders (add, list, search, done, delete, due)
   /edit --file <path> <instr>    Edit a file in place
@@ -753,243 +750,6 @@ async function runReplDo(
   }
 }
 
-// ── Generate agent (shared by CLI command + REPL) ────────────────────────────
-const GENERATE_TYPES = ['test', 'doc', 'json'] as const;
-type GenerateType = (typeof GENERATE_TYPES)[number];
-
-function normalizeGenerateType(input: string): GenerateType | undefined {
-  const lower = input.toLowerCase();
-  if (GENERATE_TYPES.includes(lower as GenerateType)) return lower as GenerateType;
-  return undefined;
-}
-
-async function runGenerate(
-  fileType: GenerateType,
-  baseName: string,
-  config: Config,
-  workDir: string,
-  rl: readline.Interface,
-  abortController: AbortController,
-  contextFile?: string,
-  instruction?: string,
-): Promise<void> {
-  deleteAllBackups(workDir);
-  console.error(`ASKII is generating... ${getRandomThinkingKaomoji()}`);
-  console.error(`Type: ${fileType} | Base name: ${baseName}`);
-  console.error('Press Ctrl+C to cancel.\n');
-
-  try {
-    const workspaceStructure = getWorkspaceStructure(workDir);
-    console.error(`Workspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
-
-    // Gather optional context from --file (acts as "current tab")
-    let currentTab = '';
-    let currentTabInfo = '';
-    if (contextFile) {
-      try {
-        const fullPath = path.resolve(workDir, contextFile);
-        const raw = fs.readFileSync(fullPath, 'utf-8');
-        const cap = 8000;
-        currentTab = raw.length > cap ? raw.substring(0, cap) + '\n…[truncated]' : raw;
-        currentTabInfo = `File: ${path.basename(fullPath)} (from --file)`;
-      } catch (e) {
-        console.error(
-          `Warning: could not read --file context: ${e instanceof Error ? e.message : 'unknown'}`,
-        );
-      }
-    }
-
-    const wikiAvailable = !!(config.wikiPath && loadWikiIndex(config.wikiPath));
-    const systemPrompt = buildGenerateSystemPrompt({
-      fileType: fileType === 'test' ? 'Test' : fileType === 'doc' ? 'Doc' : 'Json',
-      baseName,
-      workspaceStructure,
-      wikiAvailable,
-      currentTab: currentTabInfo ? `${currentTabInfo}\n${currentTab}` : '',
-      selectedText: '',
-    });
-
-    const userRequestParts = [
-      `Generate a ${fileType} file. Base name: "${baseName}".`,
-      currentTabInfo ? `Context file: ${currentTabInfo}` : '',
-      instruction ? `Extra instruction: ${instruction}` : '',
-      'Inspect the workspace as needed, ask clarifications if required, then create the file.',
-    ].filter(Boolean);
-    const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userRequestParts.join('\n\n') },
-    ];
-
-    let createdPath: string | undefined;
-    let roundCount = 0;
-
-    while (roundCount < config.maxRounds && !abortController.signal.aborted) {
-      console.error(`\n[Round ${roundCount + 1}/${config.maxRounds}]`);
-
-      process.stderr.write('AI: ');
-      const responseText = await retryLLMCall(
-        () => getChatResponseStreaming(config, messages, (chunk) => process.stderr.write(chunk)),
-        2,
-        (attempt, err) =>
-          console.error(`\nLLM call failed (attempt ${attempt}): ${err.message}. Retrying...`),
-      );
-      process.stderr.write('\n');
-
-      if (abortController.signal.aborted) break;
-      messages.push({ role: 'assistant', content: responseText });
-
-      const actions = parseWorkspaceActions(responseText);
-      if (actions.length === 0) {
-        console.error('No actions returned. Done.');
-        break;
-      }
-
-      const readActions = actions.filter(
-        (a) =>
-          a.type === 'view' || a.type === 'list' || a.type === 'search' || a.type === 'wiki_search',
-      );
-      const clarifyActions = actions.filter((a) => a.type === 'clarify');
-      const writeActions = actions.filter((a) => a.type === 'create' || a.type === 'write');
-
-      const feedbackParts: string[] = [];
-
-      // ── Read actions ──────────────────────────────────────────────────────
-      const viewResults: Record<string, string> = {};
-      for (const action of readActions) {
-        try {
-          if (action.type === 'wiki_search') {
-            const q = action.query ?? '';
-            console.error(`  → Wiki search: "${q}"`);
-            const wikiData = config.wikiPath ? loadWikiIndex(config.wikiPath) : null;
-            viewResults[`wiki_search:${q}`] = wikiData
-              ? searchWiki(q, wikiData) || 'No wiki results found'
-              : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
-          } else if (action.type === 'search') {
-            console.error(`  → Search: "${action.pattern}"`);
-            viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);
-          } else if (action.type === 'view' && action.paths) {
-            for (const p of action.paths) {
-              console.error(`  → Viewing: ${p}`);
-              try {
-                viewResults[p] = executeViewAction(
-                  { ...action, path: p, paths: undefined },
-                  workDir,
-                );
-              } catch (e) {
-                viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
-              }
-            }
-          } else {
-            console.error(`  → ${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`);
-            viewResults[action.path!] = executeViewAction(action, workDir);
-          }
-        } catch (e) {
-          viewResults[action.path ?? 'unknown'] =
-            `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
-        }
-      }
-      if (Object.keys(viewResults).length > 0) {
-        feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
-      }
-
-      // ── Clarify actions (prompt the user) ─────────────────────────────────
-      if (clarifyActions.length > 0) {
-        const answers: string[] = [];
-        for (const action of clarifyActions) {
-          const q = action.question ?? 'Please clarify';
-          console.error(`  → Clarify: ${q}`);
-          const answer = await new Promise<string>((resolve) => {
-            rl.question(`ASKII asks: ${q} (press Enter to skip) `, (a) => resolve(a.trim()));
-          });
-          answers.push(`Q: ${q}\nA: ${answer || '(no answer)'}`);
-        }
-        feedbackParts.push(`Clarification answers:\n${answers.join('\n\n')}`);
-      }
-
-      // ── Write action (create the file directly) ───────────────────────────
-      const actionResults: ActionResult[] = [];
-      for (const action of writeActions) {
-        let filePath: string;
-        try {
-          filePath = sandboxPath(workDir, action.path!);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : 'Path error';
-          console.error(`  ✗ BLOCKED: ${msg}`);
-          actionResults.push({
-            action: `${action.type}:${action.path}`,
-            status: 'error',
-            detail: msg,
-          });
-          continue;
-        }
-
-        try {
-          if (action.type === 'create') recordCreatedFile(workDir, action.path!);
-          const dir = path.dirname(filePath);
-          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-          const content = action.content ? unescapeJsonString(action.content) : '';
-          fs.writeFileSync(filePath, content);
-          createdPath = filePath;
-          console.error(`  ✓ Created: ${action.path}`);
-          actionResults.push({ action: `create:${action.path}`, status: 'ok' });
-        } catch (e) {
-          const detail = e instanceof Error ? e.message : 'Unknown error';
-          console.error(`  ✗ Failed: ${detail}`);
-          actionResults.push({
-            action: `${action.type}:${action.path}`,
-            status: 'error',
-            detail,
-          });
-        }
-      }
-      if (actionResults.length > 0) {
-        feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
-      }
-
-      if (writeActions.length > 0 && createdPath) break;
-      if (feedbackParts.length === 0) break;
-
-      messages.push({
-        role: 'user',
-        content:
-          feedbackParts.join('\n\n') +
-          '\n\nContinue. Use read/clarify actions to gather more context, then finish with a single create action, or respond with [] if done.',
-      });
-
-      roundCount++;
-    }
-
-    if (roundCount >= config.maxRounds && !createdPath) {
-      console.error(`\nMax rounds (${config.maxRounds}) reached.`);
-    }
-
-    if (createdPath) {
-      console.error(`\nGenerated ${path.relative(workDir, createdPath)}! ${getRandomKaomoji()}`);
-    } else {
-      console.error('\nNo file was generated.');
-    }
-
-    if (hasBackups(workDir)) {
-      const doUndo = await confirm(
-        rl,
-        'Undo all changes? (y = restore backups, n = keep changes and delete backups)',
-        false,
-      );
-      if (doUndo) {
-        const { restored, deleted } = restoreAllBackups(workDir);
-        deleteAllBackups(workDir);
-        console.error(
-          `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
-        );
-      } else {
-        deleteAllBackups(workDir);
-      }
-    }
-  } catch (error) {
-    console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
-}
-
 async function handleReplInput(
   line: string,
   config: Config,
@@ -1162,53 +922,6 @@ async function handleReplInput(
         });
 
         await runReplDo(task, doConfig, rl, abortController);
-
-        process.removeAllListeners('SIGINT');
-        process.on('SIGINT', replSigintHandler);
-        return false;
-      }
-
-      case '/generate': {
-        // /generate <type> <base-name> [--file <path>] [--instruction <text>]
-        const genTokens = rest.split(/\s+/).filter(Boolean);
-        const genType = normalizeGenerateType(genTokens[0] ?? '');
-        if (!genType) {
-          console.error(
-            'Usage: /generate <test|doc|json> <base-name> [--file <path>] [--instruction <text>]',
-          );
-          return false;
-        }
-        const genFlags = genTokens.filter((t) => t.startsWith('-'));
-        const genWords = genTokens.filter((t) => !t.startsWith('-'));
-        const genBaseName = genWords[1];
-        if (!genBaseName) {
-          console.error(
-            'Usage: /generate <test|doc|json> <base-name> [--file <path>] [--instruction <text>]',
-          );
-          return false;
-        }
-        const genConfig = mergeConfigOverride(config, genFlags);
-        const genContextFile = getFlagValue(genTokens, '--file', '-f');
-        const genInstruction = getFlagValue(genTokens, '--instruction', '-i');
-        const genWorkDir = path.resolve(process.cwd());
-
-        const abortController = new AbortController();
-        process.removeAllListeners('SIGINT');
-        process.once('SIGINT', () => {
-          abortController.abort();
-          console.error('\n\nCancelled (Ctrl+C). Returning to prompt...');
-        });
-
-        await runGenerate(
-          genType,
-          genBaseName,
-          genConfig,
-          genWorkDir,
-          rl,
-          abortController,
-          genContextFile,
-          genInstruction,
-        );
 
         process.removeAllListeners('SIGINT');
         process.on('SIGINT', replSigintHandler);
@@ -1389,7 +1102,6 @@ Commands:
   edit <instruction>    Edit code and print the result to stdout
   explain <line>        Explain a single line of code
   do <task>             Agentic task runner — creates, modifies, and deletes files
-  generate <type> <base>  Agentic file generator (type: test|doc|json) — searches workspace & asks clarifications
   commit                 Generate a commit message from staged/working-tree diff and print to stdout
   note <subcommand>      Notes / tasks / reminders (add, list, search, done, delete, due)
   control <instruction> Screen control — takes screenshots and drives mouse/keyboard
@@ -1413,11 +1125,11 @@ Options:
       --askiicloud-key <key> ASKII Cloud API key (env: ASKII_CLOUD_KEY)
       --askiicloud-model <m> ASKII Cloud model (default: askii-default)
       --mode <mode>          Response mode: helpful, funny (default: funny)
-      --max-rounds <n>       Max agent rounds for "do" / "generate" / "control" / "browse" (default: 5)
-      --dir <path>           Working directory for "do" / "generate" (default: cwd)
+      --max-rounds <n>       Max agent rounds for "do" / "control" / "browse" (default: 5)
+      --dir <path>           Working directory for "do" (default: cwd)
   -c, --code <code>          Code input (alternative to stdin)
       --lang <language>      Language of the code (e.g. typescript, python)
-      --file <filename>      Filename of the code (e.g. src/utils.ts) — also used as context file for "generate"
+      --file <filename>      Filename of the code (e.g. src/utils.ts)
       --headless             Run Puppeteer in headless mode for "browse" (default: visible)
       --chrome-path <path>   Path to Chrome/Chromium executable for "browse" (env: ASKII_CHROME_PATH)
       --wiki-path <path>     Path to folder with .md docs for wiki RAG (env: ASKII_WIKI_PATH)
@@ -1443,8 +1155,6 @@ Examples:
   askii explain "const x = arr.reduce((a, b) => a + b, 0)"
   askii do "create a Jest test file for src/utils.ts"
   askii do --yes "scaffold a README for this project"
-  askii generate test utils --file src/utils.ts --instruction "use Jest"
-  askii generate doc api --dir ./my-project
   askii commit                       # print a generated commit message to stdout
   askii commit --dir ./my-project    # generate for a different repo
   askii note add "fix the login bug, high priority"
@@ -2444,58 +2154,6 @@ Rules:
       rl.close();
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);
-    }
-  } else if (command === 'generate') {
-    // askii generate <type> <base-name> [--file <path>] [--instruction <text>] [--dir <path>]
-    const typeFlag = getFlagValue(flags, '--type');
-    const positionalType = positional[1];
-    const rawType = typeFlag || positionalType;
-    if (!rawType) {
-      console.error(
-        'Error: provide a file type (test, doc, json) — e.g. askii generate test myComponent',
-      );
-      process.exit(1);
-    }
-    const fileType = normalizeGenerateType(rawType);
-    if (!fileType) {
-      console.error(`Error: unknown type "${rawType}". Choose one of: test, doc, json`);
-      process.exit(1);
-    }
-    const baseName = typeFlag ? positional[1] : positional[2];
-    if (!baseName) {
-      console.error('Error: provide a base name — e.g. askii generate test myComponent');
-      process.exit(1);
-    }
-    const workDir = path.resolve(getFlagValue(flags, '--dir') || process.cwd());
-    const contextFile = getFlagValue(flags, '--file', '-f');
-    const instruction = getFlagValue(flags, '--instruction', '-i');
-
-    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
-    const abortController = new AbortController();
-
-    process.once('SIGINT', () => {
-      abortController.abort();
-      console.error('\n\nStopped by user (Ctrl+C).');
-      rl.close();
-      process.exit(0);
-    });
-
-    try {
-      await runGenerate(
-        fileType,
-        baseName,
-        config,
-        workDir,
-        rl,
-        abortController,
-        contextFile,
-        instruction,
-      );
-    } catch (error) {
-      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      process.exit(1);
-    } finally {
-      rl.close();
     }
   } else if (command === 'control') {
     const instruction = positional.slice(1).join(' ');

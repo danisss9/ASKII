@@ -9,14 +9,12 @@ A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-pow
 - **Inline Helper Modes**: Choose between `off`, `helpful`, `funny`, or `wiki` modes
 - **Wiki RAG**: Index your own `.md` documentation files and inject relevant snippets as context into any command — or display them inline as you navigate code
 - **Multi-Platform AI**: Support for Ollama (local), LM Studio (local with official SDK), OpenAI (cloud, or any OpenAI-compatible API), Anthropic (cloud, via official `@anthropic-ai/sdk`), opencode Go (cloud, hosted multi-model coding subscription), and ASKII Cloud (cloud, in-house OpenAI-compatible service)
-- **Five Command Modes**:
+- **Six Command Modes**:
   - **Ask ASKII**: Ask questions about your selected code
   - **ASKII Edit**: Have ASKII modify your selected code based on your request
   - **ASKII Do**: Agentic workspace agent — view, list, create, modify, rename, and delete files across multiple rounds until the task is complete
-  - **ASKII Control**: Give ASKII a screen instruction — it takes screenshots and drives your mouse and keyboard until the task is done
-  - **ASKII Browse**: Give ASKII a browser task — it launches a Puppeteer browser, takes page screenshots, and navigates the web until the task is done
+  - **ASKII Control**: Give ASKII an instruction — first pick whether it controls the **screen** (takes screenshots and drives your mouse and keyboard) or the **browser** (launches a Puppeteer browser and navigates the web), then describe the task and it loops until it's done
   - **ASKII Note**: A notes / tasks / reminders mode — type free text and the AI auto-classifies it (note, task with priority, or reminder with a time), can ask clarifying questions back, captures full-screen screenshots, and pings you with a notification + sound when a reminder is due. Notes are stored globally (tagged by workspace, searchable everywhere) and reminders fire while VS Code is running.
-  - **ASKII Generate**: An agentic file generator — pick a type (Test / Doc / Json), give a base name, and the agent searches the workspace, asks clarifying questions when needed, then creates the file (deciding the full path and extension itself). Reuses the Do-style loop with `view` / `list` / `search` / `wiki_search` and a new `clarify` action.
 - **Code Auto-completion**: Copilot-style ghost-text code suggestions inside any open code file — Tab to accept, Esc to dismiss.
 - **Codebase Wiki RAG**: Index your own workspace code files and inject relevant chunks as context into inline completion, Ask, Edit, and Do commands.
 - **Commit Message Generator**: A one-click button in the Source Control view toolbar that reads your staged (or working-tree) diff and writes a generated commit message straight into the commit-message input box — powered by the same LLM platform/model used for inline completion.
@@ -125,48 +123,31 @@ Search for "ASKII Inline Helper Mode" and select:
    - **DELETE**: Warning confirmation for deletions
    - **VIEW / LIST**: No confirmation needed (read-only)
 
-#### ASKII Generate (Agentic File Generator)
-
-1. Press `Ctrl+Shift+K R` (or `Cmd+Shift+K R`) — or open the command palette and search for "ASKII Generate"
-2. Pick a file type from the quick-pick: **Test**, **Doc**, or **Json**
-3. Enter a base name (e.g. `myComponent`) — the agent decides the full path and extension based on workspace conventions
-4. ASKII runs a Do-style loop, seeded with your current tab (capped at ~8k chars), selected text, and relevant wiki chunks:
-   - **Search & Read**: `view`, `list`, `search`, and `wiki_search` actions explore the workspace (no confirmation)
-   - **Clarify**: the agent can ask you clarifying questions via an input box when it needs more information
-   - **Generate**: finishes with a single `create` action that writes the file directly (no confirmation dialog)
-5. The generated file is opened in the editor; an **Undo** option restores any overwritten files and deletes the created file
-6. Progress streams to the **ASKII Generate** output channel; cancel via the progress notification
-
-> Tip: Reload Wiki moved to `Ctrl+Shift+K W` / `Cmd+Shift+K W`.
-
-#### ASKII Control (Screen Agent)
+#### ASKII Control (Screen & Browser Agent)
 
 1. Open command palette
 2. Search for **"ASKII Control"**
-3. Describe what you want done on screen (e.g., "Open Notepad and type hello world")
-4. ASKII takes a screenshot and proposes the next action (mouse move, click, or keyboard input) with its reasoning
-5. **Confirm each action** before it executes — or enable `askii.doAutoConfirm` to run unattended
-6. After each action a new screenshot is taken and the loop repeats until ASKII returns **DONE** or `askii.doMaxRounds` is reached
+3. Pick whether ASKII should control the **Screen** or the **Browser**
+4. Describe what you want done (e.g., "Open Notepad and type hello world")
+5. ASKII takes a screenshot and proposes the next action (mouse move, click, or keyboard input) with its reasoning
+6. **Confirm each action** before it executes — or enable `askii.doAutoConfirm` to run unattended
+7. After each action a new screenshot is taken and the loop repeats until ASKII returns **DONE** or `askii.doMaxRounds` is reached
 
 > **Requires a vision-capable model** such as `llava` or `moondream2`.
 
----
+In **Browser** mode instead:
 
-#### ASKII Browse (Browser Agent)
-
-1. Open command palette
-2. Search for **"ASKII Browse"**
-3. Describe what you want done in a browser (e.g., "Go to https://example.com and click Learn more")
-4. ASKII launches a Puppeteer browser (visible by default), takes a screenshot of the current page and its URL, then proposes the next action with its reasoning. Supported actions:
+1. Pick **Browser** in the quick pick, then describe what you want done in a browser (e.g., "Go to https://example.com and click Learn more")
+2. ASKII launches a Puppeteer browser (visible by default), takes a screenshot of the current page and its URL, then proposes the next action with its reasoning. Supported actions:
    - **goto**: Navigate to a URL
    - **click**: Click an element by CSS selector
    - **type**: Type text into an element by CSS selector
    - **wait_for**: Wait until a CSS selector appears in the DOM
    - **back / forward**: Navigate the browser history
    - **DONE**: Returned when the task is complete
-5. **Confirm each action** before it executes — or enable `askii.doAutoConfirm` to run unattended
-6. After each action a new screenshot is taken and the loop repeats until ASKII returns **DONE** or `askii.doMaxRounds` is reached
-7. The browser is closed automatically when the loop ends
+3. **Confirm each action** before it executes — or enable `askii.doAutoConfirm` to run unattended
+4. After each action a new screenshot is taken and the loop repeats until ASKII returns **DONE** or `askii.doMaxRounds` is reached
+5. The browser is closed automatically when the loop ends
 
 > **Requires a vision-capable model**. Set `askii.browserHeadless` to `false` (default) to watch the browser window while ASKII works.
 >
@@ -213,7 +194,6 @@ Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickl
 - ASKII Edit
 - ASKII Do
 - ASKII Control
-- ASKII Browse
 - Reload Wiki
 - Clear Cache
 
@@ -234,18 +214,18 @@ ASKII can write your Git commit messages for you. A **sparkle (✦)** button is 
 
 1. Make some changes in a Git repository (staged or unstaged).
 2. Open the **Source Control** view (`Ctrl+Shift+G` / `Cmd+Shift+G`).
-3. Click the **✦** button in the Source Control view toolbar (or run **ASKII: Generate Commit Message** from the command palette, or press `Ctrl+Shift+K G` / `Cmd+Shift+K G`).
+3. Click the **✦** button in the Source Control view toolbar.
 4. ASKII reads the staged diff (falling back to the working-tree diff when nothing is staged), sends it to the LLM, and writes the generated commit message straight into the input box — ready for you to review and commit.
 
 The generator uses the **inline** LLM platform and model (`askii.llmInlinePlatform` / `askii.llmInlineModel`), so it can run on a different provider than your main Ask / Edit / Do commands. Set `askii.commitMessageInstructions` to a `.md` file with your own style rules (e.g. "always use Conventional Commits with a `feat`/`fix`/`chore` prefix and reference the Jira ticket in the body") and its contents are appended to the built-in system prompt. The path may be absolute or relative to the workspace root.
 
 ### Per-Feature Platform & Model
 
-ASKII splits its LLM usage into three feature groups, each with its own platform and model settings. This lets you run a fast model for inline completions, a strong model for chat/edit/do, and a vision-capable model for browse/control — all independently.
+ASKII splits its LLM usage into three feature groups, each with its own platform and model settings. This lets you run a fast model for inline completions, a strong model for chat/edit/do, and a vision-capable model for control — all independently.
 
-- **Ask / Edit / Do / Generate** — `askii.llmPlatform` (default: `askiicloud`) and `askii.llmModel` (default: `askii-smart`)
+- **Ask / Edit / Do** — `askii.llmPlatform` (default: `askiicloud`) and `askii.llmModel` (default: `askii-smart`)
 - **Inline suggestions / inline completion / git commit message** — `askii.llmInlinePlatform` (default: `askiicloud`) and `askii.llmInlineModel` (default: `askii-fast`)
-- **Browse / Control / Note (vision)** — `askii.llmVisionPlatform` (default: `askiicloud`) and `askii.llmVisionModel` (default: `askii-smart`)
+- **Control / Note (vision)** — `askii.llmVisionPlatform` (default: `askiicloud`) and `askii.llmVisionModel` (default: `askii-smart`)
 
 Each `llm*Platform` accepts the same values: `askiicloud`, `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`. API keys are shared per provider across all feature groups (e.g. `askii.openaiApiKey` is used whether `openai` is selected for `llmPlatform`, `llmInlinePlatform`, or `llmVisionPlatform`).
 
@@ -255,12 +235,12 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 
 **LLM platforms & models (per feature group):**
 
-- `askii.llmPlatform`: Platform for Ask / Edit / Do / Generate (`askiicloud` | `ollama` | `lmstudio` | `openai` | `anthropic` | `opencodego`, default: `askiicloud`)
-- `askii.llmModel`: Model id for Ask / Edit / Do / Generate (default: `askii-smart`)
+- `askii.llmPlatform`: Platform for Ask / Edit / Do (`askiicloud` | `ollama` | `lmstudio` | `openai` | `anthropic` | `opencodego`, default: `askiicloud`)
+- `askii.llmModel`: Model id for Ask / Edit / Do (default: `askii-smart`)
 - `askii.llmInlinePlatform`: Platform for inline suggestions, inline completion and git commit message generation (same enum as `llmPlatform`, default: `askiicloud`)
 - `askii.llmInlineModel`: Model id for inline suggestions, inline completion and git commit message generation (default: `askii-fast`)
-- `askii.llmVisionPlatform`: Platform for Browse / Control / Note — vision-capable features (same enum as `llmPlatform`, default: `askiicloud`)
-- `askii.llmVisionModel`: Model id for Browse / Control / Note (default: `askii-smart`)
+- `askii.llmVisionPlatform`: Platform for Control / Note — vision-capable features (same enum as `llmPlatform`, default: `askiicloud`)
+- `askii.llmVisionModel`: Model id for Control / Note (default: `askii-smart`)
 
 **Provider API keys & URLs (shared across all feature groups):**
 
@@ -284,11 +264,11 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 **Agent & misc:**
 
 - `askii.commitMessageInstructions`: Path to a `.md` file with custom instructions for the commit message generator (appended to the built-in system prompt). Absolute or relative to the workspace root. Leave empty to use the built-in prompt (default: `""`)
-- `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control / Browse commands (default: 5)
-- `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control / Browse (default: `false`)
+- `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control commands (default: 5)
+- `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control (default: `false`)
 - `askii.formatAfterEdit`: Auto-format files after ASKII Edit or Do (default: `false`)
-- `askii.browserHeadless`: Run the Puppeteer browser headlessly for ASKII Browse (default: `false` — browser window is visible)
-- `askii.chromePath`: Path to the Chrome/Chromium executable for ASKII Browse (e.g. `C:\Program Files\Google\Chrome\Application\chrome.exe`). Leave empty to use the system default
+- `askii.browserHeadless`: Run the Puppeteer browser headlessly for ASKII Control browser mode (default: `false` — browser window is visible)
+- `askii.chromePath`: Path to the Chrome/Chromium executable for ASKII Control browser mode (e.g. `C:\Program Files\Google\Chrome\Application\chrome.exe`). Leave empty to use the system default
 
 ## Keybindings
 
@@ -298,10 +278,8 @@ You can invoke ASKII commands using the following default keybindings:
 - **ASKII Edit**: `Ctrl+Shift+K E` (Mac: `Cmd+Shift+K E`)
 - **ASKII Do**: `Ctrl+Shift+K D` (Mac: `Cmd+Shift+K D`)
 - **ASKII Control**: `Ctrl+Shift+K C` (Mac: `Cmd+Shift+K C`)
-- **ASKII Browse**: `Ctrl+Shift+K B` (Mac: `Cmd+Shift+K B`)
-- **ASKII: Reload Wiki**: `Ctrl+Shift+K R` (Mac: `Cmd+Shift+K R`)
+- **ASKII: Reload Wiki**: `Ctrl+Shift+K W` (Mac: `Cmd+Shift+K W`)
 - **ASKII: Clear Cache**: `Ctrl+Shift+K X` (Mac: `Cmd+Shift+K X`)
-- **ASKII: Generate Commit Message**: `Ctrl+Shift+K G` (Mac: `Cmd+Shift+K G`) — available when a Git repository is open in the Source Control view
 
 ## Default Mode Examples
 

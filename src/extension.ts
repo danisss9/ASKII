@@ -11,7 +11,6 @@ import {
   askiiEditCommand,
   askiiDoCommand,
   askiiControlCommand,
-  askiiBrowseCommand,
   askiiReloadWikiCommand,
   askiiDiffProvider,
 } from './commands';
@@ -20,9 +19,30 @@ import { AskiiInlineCompletionProvider, INLINE_ACCEPT_COMMAND } from './inlineCo
 import { generateCommitMessageCommand } from './commitMessage';
 import { askiiNoteCommand } from './notesPanel';
 import { startNoteScheduler, stopNoteScheduler } from './notesScheduler';
-import { askiiGenerateCommand } from './generate';
+import { initializeProviderSecrets, migrateLegacyApiKeys } from './providerSecrets';
+import { openSetupPanel, shouldOpenSetupAutomatically } from './setupPanel';
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
+  initializeProviderSecrets(context.secrets);
+  const migrationProblems = await migrateLegacyApiKeys(context);
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('askii.openSetup', () => openSetupPanel(context)),
+  );
+
+  if (migrationProblems.length > 0) {
+    vscode.window
+      .showWarningMessage(
+        `ASKII could not securely migrate every legacy API key: ${migrationProblems.join('; ')}`,
+        'Open Setup',
+      )
+      .then((choice) => {
+        if (choice === 'Open Setup') {
+          vscode.commands.executeCommand('askii.openSetup');
+        }
+      });
+  }
+
   // Register the in-memory content provider for diff previews
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider('askii-diff', askiiDiffProvider),
@@ -68,16 +88,10 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('askii.controlTask', askiiControlCommand),
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand('askii.browseTask', askiiBrowseCommand),
-  );
-  context.subscriptions.push(
     vscode.commands.registerCommand('askii.reloadWiki', askiiReloadWikiCommand),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.generateCommitMessage', generateCommitMessageCommand),
-  );
-  context.subscriptions.push(
-    vscode.commands.registerCommand('askii.generate', askiiGenerateCommand),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.noteTask', (args?: { selectId?: string }) =>
@@ -101,11 +115,12 @@ export function activate(context: vscode.ExtensionContext) {
         { label: '$(comment) Ask ASKII', command: 'askii.askQuestion' },
         { label: '$(edit) ASKII Edit', command: 'askii.editCode' },
         { label: '$(files) ASKII Do', command: 'askii.doTask' },
-        { label: '$(screen-full) ASKII Control', command: 'askii.controlTask' },
-        { label: '$(browser) ASKII Browse', command: 'askii.browseTask' },
+        {
+          label: '$(screen-full) ASKII Control',
+          description: 'Screen or browser',
+          command: 'askii.controlTask',
+        },
         { label: '$(note) ASKII Note', command: 'askii.noteTask' },
-        { label: '$(new-file) ASKII Generate', command: 'askii.generate' },
-        { label: '$(sparkle) ASKII Git', command: 'askii.generateCommitMessage' },
         { label: '$(book) Reload Wiki', command: 'askii.reloadWiki' },
         { label: '$(refresh) Clear Cache', command: 'askii.clearCache' },
       ]);
@@ -151,9 +166,9 @@ export function activate(context: vscode.ExtensionContext) {
   function runValidation() {
     validateProviderConfig().then((problem) => {
       if (problem) {
-        vscode.window.showWarningMessage(problem, 'Open Settings').then((choice) => {
-          if (choice === 'Open Settings') {
-            vscode.commands.executeCommand('workbench.action.openSettings', '@ext:danisss9.askii');
+        vscode.window.showWarningMessage(problem, 'Open Setup').then((choice) => {
+          if (choice === 'Open Setup') {
+            vscode.commands.executeCommand('askii.openSetup');
           }
         });
       }
@@ -182,6 +197,10 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(decorationType);
+
+  if (await shouldOpenSetupAutomatically(context)) {
+    await openSetupPanel(context);
+  }
 }
 
 export function deactivate() {

@@ -4,6 +4,16 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [Unreleased]
+
+### Changed
+
+- **ASKII Control & ASKII Browse merged**: `askii.browseTask` and its `Ctrl+Shift+K B` / `Cmd+Shift+K B` keybinding were removed. `askii.controlTask` now shows a quick pick (**Screen** or **Browser**) before asking for the task. Browser mode keeps the Puppeteer flow (`askii.browserHeadless` and `askii.chromePath` still apply) and streams to the `ASKII Control (Browser)` output channel. The CLI `askii browse` command is unchanged.
+
+### Removed
+
+- **ASKII Generate agent**: Removed the agentic file generator — the `askii.generate` command (with its `Ctrl+Shift+K R` / `Cmd+Shift+K R` keybinding and status-bar menu entry), `src/generate.ts`, the CLI `askii generate` command and `/generate` REPL slash-command, the shared `buildGenerateSystemPrompt` helper and the `clarify` workspace action in `common/workspace.ts`. `Ctrl+Shift+K R` is now unbound; **Reload Wiki** remains on `Ctrl+Shift+K W` / `Cmd+Shift+K W`.
+
 ## [0.4.2] - 2026-07-10
 
 ### Added

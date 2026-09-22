@@ -739,30 +739,27 @@ export async function askiiDoCommand() {
   );
 }
 
-export async function askiiBrowseCommand() {
-  const task = await vscode.window.showInputBox({
-    prompt: 'Give ASKII a browser task',
-    placeHolder: 'e.g., Go to https://example.com and click Learn more',
-  });
-
-  if (!task) return;
-
+async function runBrowserTask(task: string) {
   const config = vscode.workspace.getConfiguration('askii');
   const maxRounds = config.get<number>('doMaxRounds') ?? 5;
   const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
   const headless = config.get<boolean>('browserHeadless') ?? false;
   const chromePath = config.get<string>('chromePath') || undefined;
 
-  const outputChannel = vscode.window.createOutputChannel('ASKII Browse');
+  const outputChannel = vscode.window.createOutputChannel('ASKII Control (Browser)');
   outputChannel.show(true);
-  outputChannel.appendLine(`ASKII Browse started ${getRandomThinkingKaomoji()}`);
+  outputChannel.appendLine(`ASKII Control (Browser) started ${getRandomThinkingKaomoji()}`);
   outputChannel.appendLine(`Task: ${task}`);
   outputChannel.appendLine('');
 
   const abortController = new AbortController();
 
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: 'ASKII Browse', cancellable: true },
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'ASKII Control (Browser)',
+      cancellable: true,
+    },
     async (_progress, token) => {
       token.onCancellationRequested(() => {
         abortController.abort();
@@ -828,7 +825,7 @@ export async function askiiBrowseCommand() {
 
           if (!autoConfirm) {
             const choice = await vscode.window.showInformationMessage(
-              `ASKII Browse: ${description}`,
+              `ASKII Control (Browser): ${description}`,
               { modal: false },
               'Execute',
               'Stop',
@@ -856,7 +853,7 @@ export async function askiiBrowseCommand() {
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         outputChannel.appendLine(`Error: ${errorMsg}`);
-        vscode.window.showErrorMessage(`ASKII Browse failed: ${errorMsg}`);
+        vscode.window.showErrorMessage(`ASKII Control (Browser) failed: ${errorMsg}`);
       }
     },
   );
@@ -1035,13 +1032,50 @@ export async function askiiReloadWikiCommand() {
 }
 
 export async function askiiControlCommand() {
+  // First: pick what ASKII should control — the screen or the browser
+  const mode = await vscode.window.showQuickPick<
+    vscode.QuickPickItem & { target: 'screen' | 'browser' }
+  >(
+    [
+      {
+        label: '$(screen-full) Screen',
+        description: 'Control the whole screen with mouse & keyboard',
+        target: 'screen',
+      },
+      {
+        label: '$(browser) Browser',
+        description: 'Launch and control a Chrome browser',
+        target: 'browser',
+      },
+    ],
+    { placeHolder: 'What should ASKII control?' },
+  );
+
+  if (!mode) return;
+
+  // Then: ask for the task
   const instruction = await vscode.window.showInputBox({
-    prompt: 'Give ASKII a screen control instruction',
-    placeHolder: 'e.g., Open Notepad and type hello world',
+    prompt:
+      mode.target === 'browser'
+        ? 'Give ASKII a browser task'
+        : 'Give ASKII a screen control instruction',
+    placeHolder:
+      mode.target === 'browser'
+        ? 'e.g., Go to https://example.com and click Learn more'
+        : 'e.g., Open Notepad and type hello world',
   });
 
   if (!instruction) return;
 
+  if (mode.target === 'browser') {
+    await runBrowserTask(instruction);
+    return;
+  }
+
+  await runScreenControlTask(instruction);
+}
+
+async function runScreenControlTask(instruction: string) {
   const missingDeps = checkControlDependencies();
   if (missingDeps.length > 0) {
     vscode.window.showErrorMessage(
