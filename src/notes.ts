@@ -29,6 +29,44 @@ export function genId(): string {
   return randomBytes(8).toString('hex') + Date.now().toString(36);
 }
 
+// ── Mutations (used by the Note panel) ────────────────────────────────────────
+
+/**
+ * Update an entry's text in place. Returns true if the entry was found and
+ * the new text was non-empty. Callers are responsible for refreshing any UI.
+ */
+export function updateNoteText(
+  context: vscode.ExtensionContext,
+  id: string,
+  text: string,
+): boolean {
+  const clean = text.trim();
+  if (!id || !clean) return false;
+  const notes = loadNotes(context);
+  const i = notes.findIndex((n) => n.id === id);
+  if (i === -1) return false;
+  notes[i].text = clean;
+  saveNotes(context, notes);
+  return true;
+}
+
+/**
+ * Snooze a reminder by N minutes: un-fires it and pushes dueAt into the
+ * future. Does NOT re-arm the scheduler — the caller must call
+ * `rescheduleAll(loadNotes(context))` afterwards.
+ */
+export function snoozeNote(context: vscode.ExtensionContext, id: string, minutes: number): boolean {
+  if (!id || !(minutes > 0)) return false;
+  const notes = loadNotes(context);
+  const i = notes.findIndex((n) => n.id === id);
+  if (i === -1 || notes[i].kind !== 'reminder') return false;
+  notes[i].fired = false;
+  notes[i].missed = false;
+  notes[i].dueAt = new Date(Date.now() + minutes * 60_000).toISOString();
+  saveNotes(context, notes);
+  return true;
+}
+
 function currentWorkspaceTag(): string | undefined {
   const folder = vscode.workspace.workspaceFolders?.[0];
   return folder ? folder.name : undefined;

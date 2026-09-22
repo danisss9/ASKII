@@ -3,7 +3,9 @@ import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { Ollama } from 'ollama';
 import { LMStudioClient } from '@lmstudio/sdk';
-import { ASKII_CLOUD_URL, OPENCODE_GO_URL } from '@common/providers';
+// Relative (not the `@common` alias) so the tsc-compiled test output can resolve it at
+// runtime — tsc does not rewrite path aliases, and only esbuild bundles understand `@common`.
+import { ASKII_CLOUD_URL, OPENCODE_GO_URL, getOpenCodeGoHeaders } from '../common/providers';
 import {
   PROVIDERS,
   type ProviderId,
@@ -86,17 +88,11 @@ export async function getSavedCredentialStatus(): Promise<Record<ProviderId, boo
   return Object.fromEntries(entries) as Record<ProviderId, boolean>;
 }
 
-export function getLegacyCredentialValue(
-  inspected: InspectedStringSetting | undefined,
-): string {
+export function getLegacyCredentialValue(inspected: InspectedStringSetting | undefined): string {
   if (!inspected) {
     return '';
   }
-  const values = [
-    inspected.workspaceFolderValue,
-    inspected.workspaceValue,
-    inspected.globalValue,
-  ];
+  const values = [inspected.workspaceFolderValue, inspected.workspaceValue, inspected.globalValue];
   return values.find((value) => typeof value === 'string' && value.trim())?.trim() ?? '';
 }
 
@@ -132,9 +128,7 @@ async function clearLegacySetting(
   }
 }
 
-export async function migrateLegacyApiKeys(
-  context: vscode.ExtensionContext,
-): Promise<string[]> {
+export async function migrateLegacyApiKeys(context: vscode.ExtensionContext): Promise<string[]> {
   const config = vscode.workspace.getConfiguration('askii');
   const problems: string[] = [];
 
@@ -198,7 +192,10 @@ export function withDiscoveryTimeout<T>(
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new ProviderConnectionError('The provider did not respond within 10 seconds.', 'timeout')),
+      () =>
+        reject(
+          new ProviderConnectionError('The provider did not respond within 10 seconds.', 'timeout'),
+        ),
       timeoutMs,
     );
   });
@@ -209,8 +206,16 @@ export function withDiscoveryTimeout<T>(
   });
 }
 
-async function listOpenAIModels(apiKey: string, baseURL?: string): Promise<string[]> {
-  const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+async function listOpenAIModels(
+  apiKey: string,
+  baseURL?: string,
+  extraHeaders?: Record<string, string>,
+): Promise<string[]> {
+  const client = new OpenAI({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    ...(extraHeaders ? { defaultHeaders: extraHeaders } : {}),
+  });
   const page = await client.models.list();
   return page.data.map((model) => model.id);
 }
@@ -269,7 +274,9 @@ export async function discoverProviderModels(
     } else if (provider === 'anthropic') {
       ids = await withDiscoveryTimeout(listAnthropicModels(apiKey));
     } else if (provider === 'opencodego') {
-      ids = await withDiscoveryTimeout(listOpenAIModels(apiKey, OPENCODE_GO_URL));
+      ids = await withDiscoveryTimeout(
+        listOpenAIModels(apiKey, OPENCODE_GO_URL, getOpenCodeGoHeaders()),
+      );
     } else if (provider === 'ollama') {
       ids = await withDiscoveryTimeout(listOllamaModels(serverUrl));
     } else {

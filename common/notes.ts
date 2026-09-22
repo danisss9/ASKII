@@ -20,6 +20,7 @@ export interface NoteEntry {
   tags: string[];
   createdAt: string; // ISO8601
   workspaceTag?: string;
+  pinned?: boolean;
   // task-specific
   priority?: TaskPriority;
   done?: boolean;

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { randomBytes } from 'crypto';
 import {
   discoverProviderModels,
@@ -20,7 +21,7 @@ import {
 export const SETUP_COMPLETE_KEY = 'askii.setup.completed';
 const SETUP_PROGRESS_KEY = 'askii.setup.progress';
 
-type SetupStep = 'provider' | 'models' | 'options';
+type SetupStep = 'provider' | 'models' | 'options' | 'wiki';
 
 interface SetupProgress {
   step: Exclude<SetupStep, 'provider'>;
@@ -37,6 +38,11 @@ interface OptionalSettings {
   inlineHelperMode: 'off' | 'helpful' | 'funny' | 'wiki';
   formatAfterEdit: boolean;
   doAutoConfirm: boolean;
+  wikiEnabled: boolean;
+  wikiPath: string;
+  wikiAutoReload: boolean;
+  chromePath: string;
+  commitMessageInstructions: string;
 }
 
 interface SetupState {
@@ -66,6 +72,11 @@ function getOptionalSettings(config: vscode.WorkspaceConfiguration): OptionalSet
         : 'off',
     formatAfterEdit: config.get<boolean>('formatAfterEdit') ?? false,
     doAutoConfirm: config.get<boolean>('doAutoConfirm') ?? false,
+    wikiEnabled: config.get<boolean>('wikiEnabled') ?? false,
+    wikiPath: config.get<string>('wikiPath') ?? '',
+    wikiAutoReload: config.get<boolean>('wikiAutoReload') ?? false,
+    chromePath: config.get<string>('chromePath') ?? '',
+    commitMessageInstructions: config.get<string>('commitMessageInstructions') ?? '',
   };
 }
 
@@ -302,7 +313,62 @@ function parseOptionalSettings(message: Record<string, unknown>): OptionalSettin
     inlineHelperMode: helperMode,
     formatAfterEdit: message.formatAfterEdit === true,
     doAutoConfirm: message.doAutoConfirm === true,
+    wikiEnabled: message.wikiEnabled === true,
+    wikiPath: messageString(message, 'wikiPath'),
+    wikiAutoReload: message.wikiAutoReload === true,
+    chromePath: messageString(message, 'chromePath'),
+    commitMessageInstructions: messageString(message, 'commitMessageInstructions'),
   };
+}
+
+function defaultPickerUri(current: string, folder: boolean): vscode.Uri | undefined {
+  if (!current || !path.isAbsolute(current)) {
+    return undefined;
+  }
+  return vscode.Uri.file(folder ? current : path.dirname(current));
+}
+
+async function handlePathPick(
+  panel: vscode.WebviewPanel,
+  message: Record<string, unknown>,
+): Promise<void> {
+  const target = message.target;
+  const wiki = target === 'wikiPath';
+  const chrome = target === 'chromePath';
+  if (!wiki && !chrome && target !== 'commitMessageInstructions') {
+    throw new Error('Unknown path setting.');
+  }
+  const current = messageString(message, 'current');
+  const picked = await vscode.window.showOpenDialog(
+    wiki
+      ? {
+          title: 'Select the ASKII wiki folder (.md documentation)',
+          canSelectFiles: false,
+          canSelectFolders: true,
+          canSelectMany: false,
+          defaultUri: defaultPickerUri(current, true),
+        }
+      : chrome
+        ? {
+            title: 'Select the Chrome/Chromium executable',
+            canSelectFiles: true,
+            canSelectFolders: false,
+            canSelectMany: false,
+            defaultUri: defaultPickerUri(current, false),
+          }
+        : {
+            title: 'Select the ASKII commit rules Markdown file',
+            canSelectFiles: true,
+            canSelectFolders: false,
+            canSelectMany: false,
+            filters: { Markdown: ['md'], 'All Files': ['*'] },
+            defaultUri: defaultPickerUri(current, false),
+          },
+  );
+  if (!picked || picked.length === 0) {
+    return;
+  }
+  await panel.webview.postMessage({ type: 'pathPicked', target, path: picked[0].fsPath });
 }
 
 async function completeSetup(context: vscode.ExtensionContext): Promise<void> {
@@ -322,6 +388,8 @@ async function handleSetupMessage(
   try {
     if (message.type === 'validateProvider') {
       await handleProviderValidation(panel, context, message);
+    } else if (message.type === 'pickPath') {
+      await handlePathPick(panel, message);
     } else if (message.type === 'saveModels') {
       await handleModelSave(panel, context, message);
     } else if (message.type === 'finish') {
@@ -404,6 +472,9 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
     .btn.secondary { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
     .btn.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
     .btn:disabled { opacity: .5; cursor: default; }
+    .btn.small { padding: 7px 12px; font-size: 12px; white-space: nowrap; }
+    .pick-row { display: flex; gap: 8px; margin-top: 8px; }
+    .pick-row input { flex: 1; min-width: 0; }
     .loader { display: none; align-items: center; gap: 10px; margin-right: auto; color: var(--vscode-descriptionForeground); }
     .loader.show { display: flex; }
     .spinner { width: 20px; height: 20px; border: 2px solid var(--vscode-progressBar-background); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
@@ -423,7 +494,7 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
       <h1>Welcome to ASKII</h1>
       <p class="subtitle">Connect a provider, choose your models, and tune the experience.</p>
     </header>
-    <div class="steps" aria-label="Setup progress"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+    <div class="steps" aria-label="Setup progress"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
 
     <section id="providerScreen" class="screen panel">
       <h2>Choose a provider</h2><p class="lead">Your API key is encrypted by VS Code and never stored in settings.</p>
@@ -449,21 +520,32 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
     </section>
 
     <section id="optionsScreen" class="screen panel">
-      <h2>Optional settings</h2><p class="lead">Finish applies these globally. Ignore keeps their current values.</p>
+      <h2>Optional settings</h2><p class="lead">Applied globally when you finish setup. Ignore keeps their current values.</p>
       <div class="option"><input id="inlineCompletionEnabled" type="checkbox"><div class="option-body"><label for="inlineCompletionEnabled">Inline code completion</label><span class="hint">Show Copilot-style ghost-text suggestions.</span><select id="inlineCompletionEagerness"><option value="low">Low — 1200 ms</option><option value="medium">Medium — 500 ms</option><option value="high">High — 200 ms</option></select></div></div>
       <div class="option"><div class="option-body"><label for="inlineHelperMode">Inline helper mode</label><span class="hint">Add concise explanations, jokes, or wiki context beside code.</span><select id="inlineHelperMode"><option value="off">Off</option><option value="helpful">Helpful</option><option value="funny">Funny</option><option value="wiki">Wiki</option></select></div></div>
       <div class="option"><input id="formatAfterEdit" type="checkbox"><div class="option-body"><label for="formatAfterEdit">Format after edits</label><span class="hint">Run the configured formatter after ASKII changes a file.</span></div></div>
       <div class="option"><input id="doAutoConfirm" type="checkbox"><div class="option-body"><label for="doAutoConfirm">Automatically confirm actions</label><span class="hint danger">ASKII may create, modify, or delete files without asking first.</span></div></div>
+      <div class="option"><div class="option-body"><label for="chromePathInput">Browser executable</label><span class="hint">Optional — Chromium-based browser used by ASKII Control browser mode (Chrome, Edge, Chromium, Brave). Leave empty to auto-detect.</span><div class="pick-row"><input id="chromePathInput" type="text" spellcheck="false" placeholder="C:\Program Files\Google\Chrome\Application\chrome.exe"><button id="chromePathBrowse" class="btn secondary small" type="button">Browse…</button></div></div></div>
       <div id="optionsError" class="error" role="alert"></div>
-      <div class="actions"><button id="optionsBack" class="btn secondary">Back</button><span class="spacer"></span><button id="ignore" class="btn secondary">Ignore</button><button id="finish" class="btn">Finish</button></div>
+      <div class="actions"><button id="optionsBack" class="btn secondary">Back</button><span class="spacer"></span><button id="optionsIgnore" class="btn secondary">Ignore</button><button id="optionsNext" class="btn">Next</button></div>
+    </section>
+
+    <section id="wikiScreen" class="screen panel">
+      <h2>Wiki &amp; commit rules</h2><p class="lead">Finish applies these globally. Ignore keeps their current values.</p>
+      <div class="option"><input id="wikiEnabled" type="checkbox"><div class="option-body"><label for="wikiEnabled">Enable wiki RAG</label><span class="hint">Use the wiki as retrieval context for Ask, Edit, and Do. Requires a wiki folder and an index built via ASKII: Reload Wiki.</span></div></div>
+      <div class="option"><div class="option-body"><label for="wikiPathInput">Wiki folder</label><span class="hint">Folder of .md documentation files used for wiki RAG context. Run ASKII: Reload Wiki to index it.</span><div class="pick-row"><input id="wikiPathInput" type="text" spellcheck="false" placeholder="Absolute path to your wiki folder"><button id="wikiPathBrowse" class="btn secondary small" type="button">Browse…</button></div></div></div>
+      <div class="option"><input id="wikiAutoReload" type="checkbox"><div class="option-body"><label for="wikiAutoReload">Auto-reload wiki on startup</label><span class="hint">Rebuild and reload the wiki index whenever the extension starts. Requires wiki RAG and a wiki folder.</span></div></div>
+      <div class="option"><div class="option-body"><label for="commitRulesInput">Commit rules file</label><span class="hint">.md file with custom instructions appended to the commit message prompt. Absolute or workspace-relative. Leave empty for the built-in rules.</span><div class="pick-row"><input id="commitRulesInput" type="text" spellcheck="false" placeholder="Absolute or workspace-relative .md path"><button id="commitRulesBrowse" class="btn secondary small" type="button">Browse…</button></div></div></div>
+      <div id="wikiError" class="error" role="alert"></div>
+      <div class="actions"><button id="wikiBack" class="btn secondary">Back</button><span class="spacer"></span><button id="ignore" class="btn secondary">Ignore</button><button id="finish" class="btn">Finish</button></div>
     </section>
   </main>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const state = ${initialState};
-    const screens = { provider: document.getElementById('providerScreen'), models: document.getElementById('modelsScreen'), options: document.getElementById('optionsScreen') };
+    const screens = { provider: document.getElementById('providerScreen'), models: document.getElementById('modelsScreen'), options: document.getElementById('optionsScreen'), wiki: document.getElementById('wikiScreen') };
     const dots = Array.from(document.querySelectorAll('.dot'));
-    const stepIndex = { provider: 0, models: 1, options: 2 };
+    const stepIndex = { provider: 0, models: 1, options: 2, wiki: 3 };
     let selectedProvider = state.provider;
     let currentStep = state.step;
 
@@ -507,6 +589,11 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
     document.getElementById('inlineHelperMode').value = state.options.inlineHelperMode;
     document.getElementById('formatAfterEdit').checked = state.options.formatAfterEdit;
     document.getElementById('doAutoConfirm').checked = state.options.doAutoConfirm;
+    document.getElementById('wikiEnabled').checked = state.options.wikiEnabled;
+    document.getElementById('wikiPathInput').value = state.options.wikiPath;
+    document.getElementById('wikiAutoReload').checked = state.options.wikiAutoReload;
+    document.getElementById('chromePathInput').value = state.options.chromePath;
+    document.getElementById('commitRulesInput').value = state.options.commitMessageInstructions;
 
     document.getElementById('providerNext').addEventListener('click', () => {
       const definition = providerDefinition(); const apiKey = document.getElementById('apiKey').value.trim(); const serverUrl = document.getElementById('serverUrl').value.trim();
@@ -522,8 +609,18 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
       state.selections = values; showError('modelsError', ''); document.getElementById('modelsNext').disabled = true; vscode.postMessage({ type: 'saveModels', provider: selectedProvider, ...values });
     });
     document.getElementById('optionsBack').addEventListener('click', () => showStep('models'));
-    document.getElementById('ignore').addEventListener('click', () => { document.getElementById('ignore').disabled = true; document.getElementById('finish').disabled = true; vscode.postMessage({ type: 'ignore' }); });
-    document.getElementById('finish').addEventListener('click', () => { document.getElementById('ignore').disabled = true; document.getElementById('finish').disabled = true; vscode.postMessage({ type: 'finish', inlineCompletionEnabled: document.getElementById('inlineCompletionEnabled').checked, inlineCompletionEagerness: document.getElementById('inlineCompletionEagerness').value, inlineHelperMode: document.getElementById('inlineHelperMode').value, formatAfterEdit: document.getElementById('formatAfterEdit').checked, doAutoConfirm: document.getElementById('doAutoConfirm').checked }); });
+    document.getElementById('optionsNext').addEventListener('click', () => showStep('wiki'));
+    document.getElementById('wikiBack').addEventListener('click', () => showStep('options'));
+    function setFinalActions(disabled) { document.getElementById('optionsIgnore').disabled = disabled; document.getElementById('ignore').disabled = disabled; document.getElementById('finish').disabled = disabled; }
+    function requestIgnore() { setFinalActions(true); vscode.postMessage({ type: 'ignore' }); }
+    document.getElementById('optionsIgnore').addEventListener('click', requestIgnore);
+    document.getElementById('ignore').addEventListener('click', requestIgnore);
+    function wirePathPicker(inputId, buttonId, target) { document.getElementById(buttonId).addEventListener('click', () => vscode.postMessage({ type: 'pickPath', target, current: document.getElementById(inputId).value.trim() })); }
+    wirePathPicker('wikiPathInput', 'wikiPathBrowse', 'wikiPath');
+    wirePathPicker('chromePathInput', 'chromePathBrowse', 'chromePath');
+    wirePathPicker('commitRulesInput', 'commitRulesBrowse', 'commitMessageInstructions');
+    function finishPayload() { return { inlineCompletionEnabled: document.getElementById('inlineCompletionEnabled').checked, inlineCompletionEagerness: document.getElementById('inlineCompletionEagerness').value, inlineHelperMode: document.getElementById('inlineHelperMode').value, formatAfterEdit: document.getElementById('formatAfterEdit').checked, doAutoConfirm: document.getElementById('doAutoConfirm').checked, wikiEnabled: document.getElementById('wikiEnabled').checked, wikiPath: document.getElementById('wikiPathInput').value.trim(), wikiAutoReload: document.getElementById('wikiAutoReload').checked, chromePath: document.getElementById('chromePathInput').value.trim(), commitMessageInstructions: document.getElementById('commitRulesInput').value.trim() }; }
+    document.getElementById('finish').addEventListener('click', () => { setFinalActions(true); vscode.postMessage({ type: 'finish', ...finishPayload() }); });
 
     window.addEventListener('message', (event) => {
       const message = event.data; if (!message || typeof message !== 'object') return;
@@ -531,10 +628,11 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
         document.getElementById('providerLoader').classList.remove('show'); document.getElementById('providerNext').disabled = false; document.getElementById('apiKey').value = '';
         state.savedCredentials[selectedProvider] = message.savedCredential || state.savedCredentials[selectedProvider]; state.models = message.models; state.manualModels = message.manual; state.modelWarning = message.warning; state.selections = message.selections; renderModels(); showStep('models');
       } else if (message.type === 'modelsSaved') { document.getElementById('modelsNext').disabled = false; showStep('options'); }
+      else if (message.type === 'pathPicked') { const inputIds = { wikiPath: 'wikiPathInput', chromePath: 'chromePathInput', commitMessageInstructions: 'commitRulesInput' }; const input = document.getElementById(inputIds[message.target]); if (input && message.path) input.value = message.path; }
       else if (message.type === 'setupError') {
         if (message.operation === 'validateProvider') { document.getElementById('providerLoader').classList.remove('show'); document.getElementById('providerNext').disabled = false; showError('providerError', message.message); }
         else if (message.operation === 'saveModels') { document.getElementById('modelsNext').disabled = false; showError('modelsError', message.message); }
-        else { document.getElementById('ignore').disabled = false; document.getElementById('finish').disabled = false; showError('optionsError', message.message); }
+        else { setFinalActions(false); showError(currentStep === 'options' ? 'optionsError' : 'wikiError', message.message); }
       }
     });
     selectProvider(selectedProvider); renderModels(); showStep(currentStep);

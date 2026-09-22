@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Ollama } from 'ollama';
 import { type ChatMessageInput, LMStudioClient } from '@lmstudio/sdk';
 import OpenAI from 'openai';
@@ -18,6 +19,32 @@ export const ASKII_CLOUD_URL = 'https://api.askii.dev/v1';
 // every other model uses the OpenAI-compatible /chat/completions endpoint.
 export function isOpenCodeGoAnthropicModel(model: string): boolean {
   return /^(qwen|minimax)/i.test((model || '').trim());
+}
+
+// opencode Go requires clients to identify themselves: a client-specific user agent plus a
+// stable `x-opencode-session` id that groups requests into conversations so the service can
+// route them and prime prompt caches. See https://opencode.ai/docs/go/#where-can-i-use-it.
+let opencodeGoSessionId: string | undefined;
+
+function getOpenCodeGoSessionId(): string {
+  // One id per process: a CLI run is a single conversation, and the extension host reuses it
+  // across its many short requests (which also maximises opencode Go prompt-cache hits).
+  opencodeGoSessionId ??= randomUUID();
+  return opencodeGoSessionId;
+}
+
+export function getOpenCodeGoHeaders(): Record<string, string> {
+  let version = 'unknown';
+  try {
+    // Inlined into the bundles at build time by esbuild; may be missing from compiled tests.
+    version = (require('../package.json') as { version?: string }).version || version;
+  } catch {
+    // Keep the fallback version.
+  }
+  return {
+    'User-Agent': `askii/${version}`,
+    'x-opencode-session': getOpenCodeGoSessionId(),
+  };
 }
 
 export async function getOllamaResponse(
@@ -81,7 +108,10 @@ export async function getOllamaChatStreaming(
   let full = '';
   for await (const chunk of stream) {
     const text = chunk.message.content;
-    if (text) { onChunk(text); full += text; }
+    if (text) {
+      onChunk(text);
+      full += text;
+    }
   }
   return full;
 }
@@ -123,8 +153,13 @@ export async function getOpenAIResponse(
   system?: string,
   imageBase64?: string,
   signal?: AbortSignal,
+  extraHeaders?: Record<string, string>,
 ): Promise<string> {
-  const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  const client = new OpenAI({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    ...(extraHeaders ? { defaultHeaders: extraHeaders } : {}),
+  });
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
   if (system) messages.push({ role: 'system', content: system });
   if (imageBase64) {
@@ -147,8 +182,13 @@ export async function getOpenAIChat(
   apiKey: string,
   model: string,
   baseURL?: string,
+  extraHeaders?: Record<string, string>,
 ): Promise<string> {
-  const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  const client = new OpenAI({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    ...(extraHeaders ? { defaultHeaders: extraHeaders } : {}),
+  });
   const oaiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = messages.map((m) => ({
     role: m.role,
     content: m.content,
@@ -163,17 +203,29 @@ export async function getOpenAIChatStreaming(
   model: string,
   onChunk: (chunk: string) => void,
   baseURL?: string,
+  extraHeaders?: Record<string, string>,
 ): Promise<string> {
-  const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  const client = new OpenAI({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    ...(extraHeaders ? { defaultHeaders: extraHeaders } : {}),
+  });
   const oaiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = messages.map((m) => ({
     role: m.role,
     content: m.content,
   }));
-  const stream = await client.chat.completions.create({ model, messages: oaiMessages, stream: true });
+  const stream = await client.chat.completions.create({
+    model,
+    messages: oaiMessages,
+    stream: true,
+  });
   let full = '';
   for await (const chunk of stream) {
     const text = chunk.choices[0]?.delta?.content ?? '';
-    if (text) { onChunk(text); full += text; }
+    if (text) {
+      onChunk(text);
+      full += text;
+    }
   }
   return full;
 }
@@ -218,8 +270,13 @@ export async function getAnthropicResponse(
   imageBase64?: string,
   baseURL?: string,
   signal?: AbortSignal,
+  extraHeaders?: Record<string, string>,
 ): Promise<string> {
-  const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  const client = new Anthropic({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    ...(extraHeaders ? { defaultHeaders: extraHeaders } : {}),
+  });
   const userContent: Anthropic.MessageParam['content'] = imageBase64
     ? [
         { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imageBase64 } },
@@ -244,8 +301,13 @@ export async function getAnthropicChat(
   apiKey: string,
   model: string,
   baseURL?: string,
+  extraHeaders?: Record<string, string>,
 ): Promise<string> {
-  const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  const client = new Anthropic({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    ...(extraHeaders ? { defaultHeaders: extraHeaders } : {}),
+  });
   const systemMsg = messages.find((m) => m.role === 'system');
   const filtered = messages.filter((m) => m.role !== 'system');
   const response = await client.messages.create({
@@ -264,8 +326,13 @@ export async function getAnthropicChatStreaming(
   model: string,
   onChunk: (chunk: string) => void,
   baseURL?: string,
+  extraHeaders?: Record<string, string>,
 ): Promise<string> {
-  const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  const client = new Anthropic({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    ...(extraHeaders ? { defaultHeaders: extraHeaders } : {}),
+  });
   const systemMsg = messages.find((m) => m.role === 'system');
   const filtered = messages.filter((m) => m.role !== 'system');
   const stream = client.messages.stream({
@@ -299,9 +366,19 @@ export async function getOpenCodeGoResponse(
   imageBase64?: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  const headers = getOpenCodeGoHeaders();
   return isOpenCodeGoAnthropicModel(model)
-    ? getAnthropicResponse(prompt, apiKey, model, system, imageBase64, opencodeGoAnthropicBase(baseURL), signal)
-    : getOpenAIResponse(prompt, apiKey, model, baseURL, system, imageBase64, signal);
+    ? getAnthropicResponse(
+        prompt,
+        apiKey,
+        model,
+        system,
+        imageBase64,
+        opencodeGoAnthropicBase(baseURL),
+        signal,
+        headers,
+      )
+    : getOpenAIResponse(prompt, apiKey, model, baseURL, system, imageBase64, signal, headers);
 }
 
 export async function getOpenCodeGoChat(
@@ -310,9 +387,10 @@ export async function getOpenCodeGoChat(
   model: string,
   baseURL: string = OPENCODE_GO_URL,
 ): Promise<string> {
+  const headers = getOpenCodeGoHeaders();
   return isOpenCodeGoAnthropicModel(model)
-    ? getAnthropicChat(messages, apiKey, model, opencodeGoAnthropicBase(baseURL))
-    : getOpenAIChat(messages, apiKey, model, baseURL);
+    ? getAnthropicChat(messages, apiKey, model, opencodeGoAnthropicBase(baseURL), headers)
+    : getOpenAIChat(messages, apiKey, model, baseURL, headers);
 }
 
 export async function getOpenCodeGoChatStreaming(
@@ -322,9 +400,17 @@ export async function getOpenCodeGoChatStreaming(
   onChunk: (chunk: string) => void,
   baseURL: string = OPENCODE_GO_URL,
 ): Promise<string> {
+  const headers = getOpenCodeGoHeaders();
   return isOpenCodeGoAnthropicModel(model)
-    ? getAnthropicChatStreaming(messages, apiKey, model, onChunk, opencodeGoAnthropicBase(baseURL))
-    : getOpenAIChatStreaming(messages, apiKey, model, onChunk, baseURL);
+    ? getAnthropicChatStreaming(
+        messages,
+        apiKey,
+        model,
+        onChunk,
+        opencodeGoAnthropicBase(baseURL),
+        headers,
+      )
+    : getOpenAIChatStreaming(messages, apiKey, model, onChunk, baseURL, headers);
 }
 
 // ASKII Cloud is purely OpenAI-compatible, so these are thin wrappers over the OpenAI calls

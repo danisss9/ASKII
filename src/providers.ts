@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import {
   getOllamaResponse,
-  getOllamaResponseStreaming,
   getOllamaChat,
   getOllamaChatStreaming,
   getLMStudioResponse,
@@ -79,37 +78,15 @@ export async function getExtensionResponseStreaming(
   prompt: string,
   onChunk: (chunk: string) => void,
   system?: string,
-): Promise<void> {
-  const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('llmPlatform') || 'askiicloud';
-  const model = config.get<string>('llmModel') || 'askii-smart';
-
-  if (platform === 'lmstudio') {
-    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
-    // LMStudio SDK does not expose a simple streaming interface; deliver as one chunk
-    const result = await getLMStudioResponse(prompt, url, model, system);
-    onChunk(result);
-  } else if (platform === 'openai') {
-    const apiKey = await getProviderApiKey('openai');
-    const baseURL = config.get<string>('openaiUrl') || undefined;
-    const result = await getOpenAIResponse(prompt, apiKey, model, baseURL, system);
-    onChunk(result);
-  } else if (platform === 'anthropic') {
-    const apiKey = await getProviderApiKey('anthropic');
-    const result = await getAnthropicResponse(prompt, apiKey, model, system);
-    onChunk(result);
-  } else if (platform === 'opencodego') {
-    const apiKey = await getProviderApiKey('opencodego');
-    const result = await getOpenCodeGoResponse(prompt, apiKey, model, OPENCODE_GO_URL, system);
-    onChunk(result);
-  } else if (platform === 'askiicloud') {
-    const apiKey = await getProviderApiKey('askiicloud');
-    const result = await getAskiiCloudResponse(prompt, apiKey, model, ASKII_CLOUD_URL, system);
-    onChunk(result);
-  } else {
-    const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
-    await getOllamaResponseStreaming(prompt, url, model, onChunk, system);
+): Promise<string> {
+  // Delegate to the chat APIs — unlike the plain completion endpoints, they stream on
+  // every provider (LM Studio is the one exception and delivers a single chunk).
+  const messages: ChatMessage[] = [];
+  if (system) {
+    messages.push({ role: 'system', content: system });
   }
+  messages.push({ role: 'user', content: prompt });
+  return getExtensionChatStreaming(messages, onChunk);
 }
 
 export async function getExtensionResponse(

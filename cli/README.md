@@ -379,33 +379,33 @@ Without `--yes`, each proposed action is shown with its reasoning and requires `
 
 ## Options
 
-| Flag                 | Short | Description                                                                           | Default                         |
-| -------------------- | ----- | ------------------------------------------------------------------------------------- | ------------------------------- |
-| `--platform`         | `-p`  | LLM platform: `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`, `askiicloud` | `ollama`                        |
-| `--ollama-url`       |       | Ollama server URL                                                                     | `http://localhost:11434`        |
-| `--lmstudio-url`     |       | LM Studio server URL                                                                  | `ws://localhost:1234`           |
-| `--ollama-model`     |       | Ollama model                                                                          | `gemma4:e4b`                    |
-| `--lmstudio-model`   |       | LM Studio model                                                                       | `qwen/qwen3-coder-30b`          |
-| `--openai-key`       |       | OpenAI API key (env: `ASKII_OPENAI_KEY`)                                              |                                 |
-| `--openai-model`     |       | OpenAI model                                                                          | `gpt-5-mini`                    |
-| `--openai-url`       |       | OpenAI-compatible base URL (env: `ASKII_OPENAI_URL`)                                  |                                 |
-| `--anthropic-key`    |       | Anthropic API key (env: `ASKII_ANTHROPIC_KEY`)                                        |                                 |
-| `--anthropic-model`  |       | Anthropic model (env: `ASKII_ANTHROPIC_MODEL`)                                        | `claude-sonnet-4-6`             |
-| `--opencodego-key`   |       | opencode Go API key (env: `ASKII_OPENCODEGO_KEY`)                                     |                                 |
-| `--opencodego-model` |       | opencode Go model (env: `ASKII_OPENCODEGO_MODEL`)                                     | `glm-5.2`                       |
-| `--opencodego-url`   |       | opencode Go base URL (env: `ASKII_OPENCODEGO_URL`)                                    | `https://opencode.ai/zen/go/v1` |
-| `--askiicloud-key`   |       | ASKII Cloud API key (env: `ASKII_CLOUD_KEY`)                                          |                                 |
-| `--askiicloud-model` |       | ASKII Cloud model (env: `ASKII_CLOUD_MODEL`)                                          | `askii-default`                 |
-| `--mode`             |       | Response style: `helpful`, `funny`                                                    | `funny`                         |
-| `--max-rounds`       |       | Max agent rounds for `do` / `control` / `browse`                                      | `5`                             |
-| `--dir`              |       | Working directory for `do`                                                            | cwd                             |
-| `--code`             | `-c`  | Code input (alternative to stdin)                                                     |                                 |
-| `--file`             |       | Filename of the code (e.g. src/utils.ts)                                              |                                 |
-| `--yes`              | `-y`  | Auto-confirm all actions                                                              |                                 |
-| `--headless`         |       | Run Puppeteer headlessly for `browse`                                                 | `false` (visible)               |
-| `--chrome-path`      |       | Path to Chrome/Chromium executable for `browse`                                       |                                 |
-| `--wiki-path`        |       | Path to folder with `.md` docs for wiki RAG (env: `ASKII_WIKI_PATH`)                  |                                 |
-| `--use-wiki`         |       | Inject wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_WIKI=1`)              |                                 |
+| Flag                 | Short | Description                                                                                                          | Default                         |
+| -------------------- | ----- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `--platform`         | `-p`  | LLM platform: `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`, `askiicloud`                                | `ollama`                        |
+| `--ollama-url`       |       | Ollama server URL                                                                                                    | `http://localhost:11434`        |
+| `--lmstudio-url`     |       | LM Studio server URL                                                                                                 | `ws://localhost:1234`           |
+| `--ollama-model`     |       | Ollama model                                                                                                         | `gemma4:e4b`                    |
+| `--lmstudio-model`   |       | LM Studio model                                                                                                      | `qwen/qwen3-coder-30b`          |
+| `--openai-key`       |       | OpenAI API key (env: `ASKII_OPENAI_KEY`)                                                                             |                                 |
+| `--openai-model`     |       | OpenAI model                                                                                                         | `gpt-5-mini`                    |
+| `--openai-url`       |       | OpenAI-compatible base URL (env: `ASKII_OPENAI_URL`)                                                                 |                                 |
+| `--anthropic-key`    |       | Anthropic API key (env: `ASKII_ANTHROPIC_KEY`)                                                                       |                                 |
+| `--anthropic-model`  |       | Anthropic model (env: `ASKII_ANTHROPIC_MODEL`)                                                                       | `claude-sonnet-4-6`             |
+| `--opencodego-key`   |       | opencode Go API key (env: `ASKII_OPENCODEGO_KEY`)                                                                    |                                 |
+| `--opencodego-model` |       | opencode Go model (env: `ASKII_OPENCODEGO_MODEL`)                                                                    | `glm-5.2`                       |
+| `--opencodego-url`   |       | opencode Go base URL (env: `ASKII_OPENCODEGO_URL`)                                                                   | `https://opencode.ai/zen/go/v1` |
+| `--askiicloud-key`   |       | ASKII Cloud API key (env: `ASKII_CLOUD_KEY`)                                                                         |                                 |
+| `--askiicloud-model` |       | ASKII Cloud model (env: `ASKII_CLOUD_MODEL`)                                                                         | `askii-default`                 |
+| `--mode`             |       | Response style: `helpful`, `funny`                                                                                   | `funny`                         |
+| `--max-rounds`       |       | Max agent rounds for `do` / `control` / `browse`                                                                     | `5`                             |
+| `--dir`              |       | Working directory for `do`                                                                                           | cwd                             |
+| `--code`             | `-c`  | Code input (alternative to stdin)                                                                                    |                                 |
+| `--file`             |       | Filename of the code (e.g. src/utils.ts)                                                                             |                                 |
+| `--yes`              | `-y`  | Auto-confirm all actions                                                                                             |                                 |
+| `--headless`         |       | Run Puppeteer headlessly for `browse`                                                                                | `false` (visible)               |
+| `--chrome-path`      |       | Path to a Chromium-based browser executable for `browse` (Chrome, Edge, Chromium, Brave; auto-detected when omitted) |                                 |
+| `--wiki-path`        |       | Path to folder with `.md` docs for wiki RAG (env: `ASKII_WIKI_PATH`)                                                 |                                 |
+| `--use-wiki`         |       | Inject wiki context into `ask` / `edit` / `do` (env: `ASKII_USE_WIKI=1`)                                             |                                 |
 
 ## Environment Variables
 

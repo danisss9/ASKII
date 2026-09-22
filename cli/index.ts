@@ -50,10 +50,11 @@ import {
 } from '@common/control';
 import {
   buildBrowserSystemPrompt,
-  parseBrowserAction,
+  parseBrowserResponse,
   describeBrowserAction,
   executeBrowserAction,
   takePageScreenshot,
+  detectBrowserExecutable,
 } from '@common/browser';
 import {
   type NoteEntry,
@@ -2387,9 +2388,18 @@ Rules:
       console.error('(Make sure your model supports vision/images)');
       console.error('Press Ctrl+C to stop at any time.\n');
 
+      const executablePath = config.chromePath || detectBrowserExecutable();
+      if (!executablePath) {
+        console.error(
+          'Error: no Chromium-based browser found. Install Chrome or Edge, or pass --chrome-path / set ASKII_CHROME_PATH to your browser executable.',
+        );
+        process.exit(1);
+      }
+      console.error(`Browser executable: ${executablePath}`);
+
       browser = await puppeteer.launch({
         headless: config.headless ? true : false,
-        executablePath: config.chromePath,
+        executablePath,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
       });
 
@@ -2421,37 +2431,47 @@ Rules:
 
         if (abortController.signal.aborted) break;
 
-        const action = parseBrowserAction(rawResponse);
+        const parsed = parseBrowserResponse(rawResponse);
 
-        if (!action) {
+        if (!parsed) {
           console.error('Error: could not parse AI response.');
           console.error(`Raw response: ${rawResponse}`);
           break;
         }
 
-        if (action.action === 'DONE') {
+        if (parsed.type === 'done') {
           console.error(`\nDone! ${getRandomKaomoji()}`);
+          console.error(`Reasoning: ${parsed.reasoning}`);
+          break;
+        }
+
+        let stopped = false;
+        for (const action of parsed.actions) {
+          if (abortController.signal.aborted) {
+            stopped = true;
+            break;
+          }
+
+          console.error(`\nAction:    ${describeBrowserAction(action)}`);
           console.error(`Reasoning: ${action.reasoning}`);
-          break;
-        }
 
-        console.error(`\nAction:    ${describeBrowserAction(action)}`);
-        console.error(`Reasoning: ${action.reasoning}`);
+          const ok = await confirm(rl, 'Execute this action?', config.yes);
+          if (!ok || abortController.signal.aborted) {
+            console.error('Stopped.');
+            stopped = true;
+            break;
+          }
 
-        const ok = await confirm(rl, 'Execute this action?', config.yes);
-        if (!ok || abortController.signal.aborted) {
-          console.error('Stopped.');
-          break;
+          try {
+            await executeBrowserAction(action, page);
+            console.error('Executed.\n');
+          } catch (execErr) {
+            console.error(
+              `Action failed: ${execErr instanceof Error ? execErr.message : 'Unknown error'}`,
+            );
+          }
         }
-
-        try {
-          await executeBrowserAction(action, page);
-          console.error('Executed.\n');
-        } catch (execErr) {
-          console.error(
-            `Action failed: ${execErr instanceof Error ? execErr.message : 'Unknown error'}`,
-          );
-        }
+        if (stopped) break;
 
         round++;
       }

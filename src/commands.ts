@@ -64,10 +64,11 @@ import {
 } from '@common/control';
 import {
   buildBrowserSystemPrompt,
-  parseBrowserAction,
+  parseBrowserResponse,
   describeBrowserAction,
   executeBrowserAction,
   takePageScreenshot,
+  detectBrowserExecutable,
 } from '@common/browser';
 import { buildWikiIndex, saveWikiIndex, loadWikiIndex, searchWiki } from '@common/wiki';
 
@@ -161,6 +162,19 @@ export async function askAskiiCommand() {
     }
     .icon-btn:hover { opacity: 1; }
     #copyBtn.copied { opacity: 1; color: var(--vscode-terminal-ansiGreen, #4ec9b0); }
+    #copyBtn .icon-check { display: none; }
+    #copyBtn.copied .icon-copy { display: none; }
+    #copyBtn.copied .icon-check { display: inline-block; animation: check-pop 0.25s ease-out; }
+    @keyframes check-pop {
+      from { transform: scale(0.4); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .stream-cursor {
+      display: inline-block;
+      opacity: 0.7;
+      animation: blink 1s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
   `;
 
   const panelHtml = `<!DOCTYPE html>
@@ -174,15 +188,18 @@ export async function askAskiiCommand() {
   <div class="header-row">
     <h2 id="title">ASKII is thinking... (๑•﹏•)</h2>
     <div class="btn-group">
-      <button id="followUpBtn" class="icon-btn" title="Ask a follow-up" onclick="sendFollowUp()">
+      <button id="followUpBtn" class="icon-btn" title="Ask a follow-up">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
         </svg>
       </button>
-      <button id="copyBtn" class="icon-btn" title="Copy response" onclick="copyResponse()">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <button id="copyBtn" class="icon-btn" title="Copy response">
+        <svg class="icon-copy" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+        <svg class="icon-check" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"></polyline>
         </svg>
       </button>
     </div>
@@ -190,58 +207,79 @@ export async function askAskiiCommand() {
   <div id="content"><p class="thinking">Waiting for response...</p></div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+    const contentEl = document.getElementById('content');
+    const titleEl = document.getElementById('title');
+    const copyBtn = document.getElementById('copyBtn');
+    const followUpBtn = document.getElementById('followUpBtn');
     let rawText = '';
     function showBtns(visible) {
       const d = visible ? 'inline-flex' : 'none';
-      document.getElementById('copyBtn').style.display = d;
-      document.getElementById('followUpBtn').style.display = d;
+      copyBtn.style.display = d;
+      followUpBtn.style.display = d;
+    }
+    function flashCopied() {
+      copyBtn.classList.add('copied');
+      setTimeout(() => copyBtn.classList.remove('copied'), 1500);
+    }
+    function showCopyError() {
+      copyBtn.title = 'Copy failed';
+      copyBtn.style.color = 'var(--vscode-errorForeground, #f48771)';
+      copyBtn.style.opacity = '1';
+      setTimeout(() => {
+        copyBtn.title = 'Copy response';
+        copyBtn.style.color = '';
+        copyBtn.style.opacity = '';
+      }, 2000);
     }
     window.addEventListener('message', event => {
       const msg = event.data;
       if (typeof msg !== 'object' || msg === null) return;
       const safeHtml = typeof msg.html === 'string' ? msg.html : '';
       if (msg.type === 'update') {
-        document.getElementById('content').innerHTML = safeHtml;
+        contentEl.innerHTML = safeHtml;
+        const cursor = document.createElement('span');
+        cursor.className = 'stream-cursor';
+        cursor.textContent = '▍';
+        contentEl.appendChild(cursor);
       } else if (msg.type === 'done') {
         rawText = typeof msg.text === 'string' ? msg.text : '';
-        document.getElementById('content').innerHTML = safeHtml;
-        document.getElementById('title').textContent = 'ASKII Says: (⌐■_■)';
+        contentEl.innerHTML = safeHtml;
+        titleEl.textContent = 'ASKII Says: (⌐■_■)';
         showBtns(true);
       } else if (msg.type === 'thinking') {
+        rawText = '';
         showBtns(false);
-        document.getElementById('title').textContent = 'ASKII is thinking... (๑•﹏•)';
-        document.getElementById('content').innerHTML = '<p class="thinking">Waiting for response...</p>';
+        titleEl.textContent = 'ASKII is thinking... (๑•﹏•)';
+        contentEl.innerHTML = '<p class="thinking">Waiting for response...</p>';
+      } else if (msg.type === 'cancelled') {
+        titleEl.textContent = 'ASKII Says: (⌐■_■)';
+        showBtns(true);
+      } else if (msg.type === 'copied') {
+        flashCopied();
+      } else if (msg.type === 'copyFailed') {
+        showCopyError();
       } else if (msg.type === 'error') {
-        document.getElementById('title').textContent = 'Error';
-        document.getElementById('content').innerHTML = safeHtml;
+        titleEl.textContent = 'Error';
+        contentEl.innerHTML = safeHtml;
         showBtns(false);
       }
     });
-    function sendFollowUp() {
+    // Inline onclick attributes are blocked by this page's CSP (script-src 'nonce-...'),
+    // so the buttons are wired up here from the nonce'd script instead.
+    followUpBtn.addEventListener('click', () => {
       showBtns(false);
       vscode.postMessage({ type: 'followup' });
-    }
-    function copyResponse() {
-      navigator.clipboard.writeText(rawText).then(() => {
-        const btn = document.getElementById('copyBtn');
-        btn.classList.add('copied');
-        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-        setTimeout(() => {
-          btn.classList.remove('copied');
-          btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
-        }, 1500);
-      }).catch(() => {
-        const btn = document.getElementById('copyBtn');
-        btn.title = 'Copy failed';
-        btn.style.color = 'var(--vscode-errorForeground, #f48771)';
-        btn.style.opacity = '1';
-        setTimeout(() => {
-          btn.title = 'Copy response';
-          btn.style.color = '';
-          btn.style.opacity = '';
-        }, 2000);
-      });
-    }
+    });
+    copyBtn.addEventListener('click', () => {
+      if (rawText === '') return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(rawText).then(flashCopied, () => {
+          vscode.postMessage({ type: 'copy', text: rawText });
+        });
+      } else {
+        vscode.postMessage({ type: 'copy', text: rawText });
+      }
+    });
   </script>
 </body>
 </html>`;
@@ -254,6 +292,22 @@ export async function askAskiiCommand() {
   );
 
   panel.webview.html = panelHtml;
+
+  // Copy requests are honored for the whole panel lifetime — the webview falls back to
+  // this path when its own clipboard access is unavailable (e.g. unfocused webview).
+  panel.webview.onDidReceiveMessage((msg) => {
+    if (typeof msg !== 'object' || msg === null) return;
+    if (msg.type === 'copy' && typeof msg.text === 'string') {
+      void vscode.env.clipboard.writeText(msg.text).then(
+        () => {
+          if (!panelDisposed) panel.webview.postMessage({ type: 'copied' });
+        },
+        () => {
+          if (!panelDisposed) panel.webview.postMessage({ type: 'copyFailed' });
+        },
+      );
+    }
+  });
 
   const codeContext = hasSelection
     ? `File: ${fileName}\nLanguage: ${languageId}\nCode:\n\`\`\`${languageId}\n${selectedText}\n\`\`\`\n\n`
@@ -271,56 +325,82 @@ export async function askAskiiCommand() {
     const fullPrompt = wikiSection + codeContext + history + `Question: ${currentQuestion}`;
     let accumulated = '';
 
+    const renderAccumulated = (): string => {
+      try {
+        return md.render(accumulated);
+      } catch {
+        return `<pre>${escapeHtml(accumulated)}</pre>`;
+      }
+    };
+
     try {
+      // Markdown re-parses are expensive, so bursts of chunks that arrive within the
+      // flush interval are batched into a single render + postMessage.
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
       await getExtensionResponseStreaming(
         fullPrompt,
         (chunk) => {
           if (panelDisposed) return;
           accumulated += chunk;
-          let renderedHtml: string;
-          try {
-            renderedHtml = md.render(accumulated);
-          } catch {
-            renderedHtml = `<pre>${escapeHtml(accumulated)}</pre>`;
+          if (flushTimer === null) {
+            flushTimer = setTimeout(() => {
+              flushTimer = null;
+              if (!panelDisposed) {
+                panel.webview.postMessage({ type: 'update', html: renderAccumulated() });
+              }
+            }, 50);
           }
-          panel.webview.postMessage({ type: 'update', html: renderedHtml });
         },
         'You are ASKII, a precise coding assistant. Answer concisely.',
       );
+      if (flushTimer !== null) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
 
       history += `Question: ${currentQuestion}\n\nAnswer: ${accumulated}\n\n`;
-      let doneHtml: string;
-      try {
-        doneHtml = md.render(accumulated);
-      } catch {
-        doneHtml = `<pre>${escapeHtml(accumulated)}</pre>`;
-      }
-      panel.webview.postMessage({ type: 'done', html: doneHtml, text: accumulated });
+      panel.webview.postMessage({ type: 'done', html: renderAccumulated(), text: accumulated });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       panel.webview.postMessage({ type: 'error', html: `<p>${escapeHtml(errorMsg)}</p>` });
       break;
     }
 
-    // Wait for a follow-up request or panel close
-    const nextQuestion = await new Promise<string | null>((resolve) => {
-      const msgDisp = panel.webview.onDidReceiveMessage(async (msg) => {
-        if (typeof msg !== 'object' || msg === null) return;
-        if (msg.type === 'followup') {
+    // Wait for a follow-up request or panel close. An empty answer means the user
+    // dismissed the input box — go back to waiting instead of dead-ending the panel.
+    let nextQuestion: string | null = null;
+    while (nextQuestion === null) {
+      const answer = await new Promise<string | null>((resolve) => {
+        let settled = false;
+        const settle = (value: string | null): void => {
+          if (settled) return;
+          settled = true;
           msgDisp.dispose();
           dispDisp.dispose();
-          const q = await vscode.window.showInputBox({
-            prompt: 'Ask a follow-up question',
-            placeHolder: 'What else would you like to know?',
-          });
-          resolve(q || null);
-        }
+          resolve(value);
+        };
+        const msgDisp = panel.webview.onDidReceiveMessage(async (msg) => {
+          if (typeof msg !== 'object' || msg === null) return;
+          if (msg.type === 'followup') {
+            settle(
+              (await vscode.window.showInputBox({
+                prompt: 'Ask a follow-up question',
+                placeHolder: 'What else would you like to know?',
+              })) ?? '',
+            );
+          }
+        });
+        const dispDisp = panel.onDidDispose(() => settle(null));
       });
-      const dispDisp = panel.onDidDispose(() => {
-        msgDisp.dispose();
-        resolve(null);
-      });
-    });
+      if (answer === null) {
+        break; // panel closed while waiting
+      }
+      if (answer === '') {
+        panel.webview.postMessage({ type: 'cancelled' });
+        continue;
+      }
+      nextQuestion = answer;
+    }
 
     if (nextQuestion === null) {
       break;
@@ -744,7 +824,7 @@ async function runBrowserTask(task: string) {
   const maxRounds = config.get<number>('doMaxRounds') ?? 5;
   const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
   const headless = config.get<boolean>('browserHeadless') ?? false;
-  const chromePath = config.get<string>('chromePath') || undefined;
+  const chromePath = config.get<string>('chromePath') || detectBrowserExecutable();
 
   const outputChannel = vscode.window.createOutputChannel('ASKII Control (Browser)');
   outputChannel.show(true);
@@ -771,7 +851,15 @@ async function runBrowserTask(task: string) {
       let browser: import('puppeteer-core').Browser | undefined;
 
       try {
+        if (!chromePath) {
+          const msg =
+            'No Chromium-based browser found. Install Chrome or Edge, or set askii.chromePath to your browser executable (e.g. C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe).';
+          outputChannel.appendLine(`Error: ${msg}`);
+          vscode.window.showErrorMessage(`ASKII Control (Browser) failed: ${msg}`);
+          return;
+        }
         outputChannel.appendLine('Launching browser...');
+        outputChannel.appendLine(`Browser executable: ${chromePath}`);
         browser = await puppeteer.launch({
           headless: headless ? true : false,
           executablePath: chromePath,
@@ -805,44 +893,57 @@ async function runBrowserTask(task: string) {
 
           if (abortController.signal.aborted) break;
 
-          const action = parseBrowserAction(rawResponse);
+          const parsed = parseBrowserResponse(rawResponse);
 
-          if (!action) {
+          if (!parsed) {
             outputChannel.appendLine('Error: could not parse AI response.');
             outputChannel.appendLine(`Raw: ${rawResponse}`);
             break;
           }
 
-          if (action.action === 'DONE') {
+          if (parsed.type === 'done') {
             outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
-            outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
+            outputChannel.appendLine(`Reasoning: ${parsed.reasoning}`);
             break;
           }
 
-          const description = describeBrowserAction(action);
-          outputChannel.appendLine(`Action: ${description}`);
-          outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
-
-          if (!autoConfirm) {
-            const choice = await vscode.window.showInformationMessage(
-              `ASKII Control (Browser): ${description}`,
-              { modal: false },
-              'Execute',
-              'Stop',
-            );
-            if (choice !== 'Execute' || abortController.signal.aborted) {
-              outputChannel.appendLine('Stopped by user.');
+          let stopped = false;
+          for (const action of parsed.actions) {
+            if (abortController.signal.aborted) {
+              stopped = true;
               break;
             }
-          }
 
-          try {
-            await executeBrowserAction(action, page);
-            outputChannel.appendLine('Done.\n');
-          } catch (execErr) {
-            const msg = execErr instanceof Error ? execErr.message : 'Unknown error';
-            outputChannel.appendLine(`Action failed: ${msg}`);
+            const description = describeBrowserAction(action);
+            outputChannel.appendLine(`Action: ${description}`);
+            outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
+
+            if (!autoConfirm) {
+              const choice = await vscode.window.showInformationMessage(
+                `ASKII Control (Browser): ${description}`,
+                { modal: false },
+                'Execute',
+                'Stop',
+              );
+              if (choice !== 'Execute' || abortController.signal.aborted) {
+                outputChannel.appendLine('Stopped by user.');
+                stopped = true;
+                break;
+              }
+            }
+
+            try {
+              await executeBrowserAction(action, page);
+              outputChannel.appendLine('Done.\n');
+            } catch (execErr) {
+              const msg = execErr instanceof Error ? execErr.message : 'Unknown error';
+              outputChannel.appendLine(`Action failed: ${msg}`);
+              vscode.window.showWarningMessage(
+                `ASKII Control (Browser): ${description} failed — ${msg}`,
+              );
+            }
           }
+          if (stopped) break;
 
           round++;
         }

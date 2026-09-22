@@ -241,7 +241,7 @@
         "askii.chromePath": {
           "type": "string",
           "default": "",
-          "description": "Path to the Chrome/Chromium executable for ASKII Control browser mode (e.g. C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe). Leave empty to use the system default."
+          "description": "Path to a Chromium-based browser executable for ASKII Control browser mode (e.g. C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe or C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe). Leave empty to auto-detect Chrome, Edge, Chromium or Brave."
         },
         "askii.wikiEnabled": {
           "type": "boolean",

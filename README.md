@@ -151,20 +151,21 @@ In **Browser** mode instead:
 
 > **Requires a vision-capable model**. Set `askii.browserHeadless` to `false` (default) to watch the browser window while ASKII works.
 >
-> **Requires Chrome or Chromium** to be installed. Set `askii.chromePath` to the executable path if it is not detected automatically.
+> **Requires a Chromium-based browser** — Chrome, Edge, Chromium or Brave. The first one found is auto-detected; set `askii.chromePath` to pick a specific executable (e.g. `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`).
 
 #### ASKII Note (Notes / Tasks / Reminders)
 
 1. Press `Ctrl+Shift+K N` (or `Cmd+Shift+K N`) — or pick **ASKII Note** from the command palette / status-bar menu
-2. The ASKII Note panel opens. Type free text in the box at the bottom and hit **Send** (or `Ctrl+Enter`):
+2. The ASKII Note panel opens. Type free text in the box at the bottom and press **Enter** to save (`Shift+Enter` adds a new line):
    - A plain note: `the API rate limit is 100 req/min`
    - A task with priority: `task: fix the login bug, high priority`
    - A reminder: `remind me to check the build in 30 minutes` or `remind me tomorrow 9am`
 3. The AI auto-classifies your text into a **note**, **task** (with `low` / `medium` / `high` priority), or **reminder** (with a due time). If the intent or time is ambiguous it asks a clarifying question in a small dialog — answer it and the entry is saved.
-4. Click **📎 Shot** before sending to attach a full-screen screenshot to the entry (reuses the ASKII Control capture pipeline). Thumbnails appear in the list and click-to-open.
-5. Use the **search box** at the top to full-text search across all notes, tasks and reminders.
-6. **Reminders** fire as VS Code notifications with a sound while VS Code is running, including the context that was open when you created the note (open file, selected text, workspace). Choose **Open** (reveals the entry), **Snooze** (reschedules by `askii.noteSnoozeMinutes`), or **Dismiss**.
-7. Notes are stored **globally** (survive across workspaces), tagged with their origin workspace, and searchable everywhere. Tasks can be toggled done; any entry can be deleted.
+4. Toggle the **camera** icon before sending to attach a full-screen screenshot to the entry (reuses the ASKII Control capture pipeline). Thumbnails appear in the list and click-to-open.
+5. Use the **search box** at the top to full-text search across all notes, tasks and reminders, or the **filter chips** to show only notes, tasks or reminders (they combine with search). A task counter shows completed/total tasks.
+6. Entries are grouped by age (**Pinned**, Today, Yesterday, This week, Earlier). Hover an entry for its actions: **pin**, **edit** (with an optional AI **Re-classify**), **mark done** (tasks), **snooze** / **dismiss** (reminders), and **delete**. Tag chips and the captured-selection context block are clickable.
+7. **Reminders** fire as VS Code notifications with a sound while VS Code is running, including the context that was open when you created the note (open file, selected text, workspace). Choose **Open** (reveals the entry), **Snooze** (reschedules by `askii.noteSnoozeMinutes`), or **Dismiss** — the same snooze/dismiss actions are available on the entry in the panel.
+8. Notes are stored **globally** (survive across workspaces), tagged with their origin workspace, and searchable everywhere. Tasks can be toggled done; any entry can be deleted.
 
 > Reminders only fire while VS Code is running. Reminders that were missed while VS Code was closed are flagged **missed** and fire once on the next startup.
 >
@@ -268,7 +269,7 @@ All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
 - `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control (default: `false`)
 - `askii.formatAfterEdit`: Auto-format files after ASKII Edit or Do (default: `false`)
 - `askii.browserHeadless`: Run the Puppeteer browser headlessly for ASKII Control browser mode (default: `false` — browser window is visible)
-- `askii.chromePath`: Path to the Chrome/Chromium executable for ASKII Control browser mode (e.g. `C:\Program Files\Google\Chrome\Application\chrome.exe`). Leave empty to use the system default
+- `askii.chromePath`: Path to a Chromium-based browser executable for ASKII Control browser mode (e.g. `C:\Program Files\Google\Chrome\Application\chrome.exe` or `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`). Leave empty to auto-detect Chrome, Edge, Chromium or Brave
 
 ## Keybindings
 

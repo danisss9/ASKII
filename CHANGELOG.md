@@ -6,13 +6,32 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Added
+
+- **ASKII Note panel redesign & new controls**: The ASKII Note panel was redesigned with theme-native styling, inline SVG icons, and a grouped list (**Pinned** / Today / Yesterday / This week / Earlier). The toolbar gains a search box with a clear button, kind filter chips (notes / tasks / reminders — combinable with search), and a task progress counter. New per-entry actions: **pin**, **inline edit** (with an explicit AI **Re-classify**), and **snooze** / **dismiss** for reminders — the same actions the reminder notification offers. The composer is now compact and smart: an auto-growing input where **Enter** sends (`Shift+Enter` for a new line), a camera-icon screenshot toggle, and clickable kind-hint chips. Reminder due times tick live, and relative "created" timestamps / clickable tag chips / expandable context blocks round out the entries.
+
+- **Browser auto-detection for ASKII Control (Browser)**: when `askii.chromePath` is empty, ASKII now auto-detects an installed Chromium-based browser (Chrome, Edge, Chromium or Brave — Edge on Windows works out of the box) instead of failing with "Could not find Chrome". The resolved executable is logged to the `ASKII Control (Browser)` output channel, and a clear error with a sample Edge path is shown when no browser is found. The CLI `askii browse` command gets the same detection via `--chrome-path` / `ASKII_CHROME_PATH` fallback.
+
+- **Inline completion cache**: Auto-complete suggestions are now cached per cursor context, like the inline explanations — re-triggers with identical context replay the cached completion instantly instead of calling the LLM again. The cache is bounded (100 entries, oldest evicted first), invalidated on document edits, and cleared by the **Clear Cache** command (`Ctrl+Shift+K X` / `Cmd+Shift+K X`).
+- **Setup wizard path pickers**: The ASKII setup panel now includes fields for `askii.wikiPath` and `askii.commitMessageInstructions`, each with an editable path input plus a **Browse…** button that opens a native folder picker (wiki) or `.md` file picker (commit rules). Values are applied globally on **Finish**.
+- **Setup wizard wiki & browser options**: The setup wizard also offers checkboxes for `askii.wikiEnabled` (wiki RAG context) and `askii.wikiAutoReload` (rebuild the index on startup), plus an optional `askii.chromePath` field with a **Browse…** executable picker for ASKII Control browser mode. All values hydrate from stored settings and are applied globally on **Finish**.
+
 ### Changed
 
+- **Setup wizard fourth step**: The wiki settings (`askii.wikiEnabled`, `askii.wikiPath`, `askii.wikiAutoReload`) and the commit rules file (`askii.commitMessageInstructions`) moved from the optional-settings step to a new **Wiki & commit rules** step. The optional-settings step now ends with **Next**; the new step ends with **Ignore** / **Finish**, which still apply (or skip) all wizard options globally.
 - **ASKII Control & ASKII Browse merged**: `askii.browseTask` and its `Ctrl+Shift+K B` / `Cmd+Shift+K B` keybinding were removed. `askii.controlTask` now shows a quick pick (**Screen** or **Browser**) before asking for the task. Browser mode keeps the Puppeteer flow (`askii.browserHeadless` and `askii.chromePath` still apply) and streams to the `ASKII Control (Browser)` output channel. The CLI `askii browse` command is unchanged.
 
 ### Removed
 
 - **ASKII Generate agent**: Removed the agentic file generator — the `askii.generate` command (with its `Ctrl+Shift+K R` / `Cmd+Shift+K R` keybinding and status-bar menu entry), `src/generate.ts`, the CLI `askii generate` command and `/generate` REPL slash-command, the shared `buildGenerateSystemPrompt` helper and the `clarify` workspace action in `common/workspace.ts`. `Ctrl+Shift+K R` is now unbound; **Reload Wiki** remains on `Ctrl+Shift+K W` / `Cmd+Shift+K W`.
+
+### Fixed
+
+- **Browser mode "goto does nothing"**: when the model returned a URL without a scheme (`example.com`, `www.wikipedia.org`) or a relative path (`/page`), `page.goto` threw `Cannot navigate to invalid URL` — the failure was only logged to the output channel, so the browser visibly did nothing. URLs are now normalized before navigation: schemes are added to scheme-less hosts, `localhost`/bare-IP hosts get `http://`, relative paths resolve against the current page, and wrapping quotes / markdown link syntax are stripped. Browser mode also now accepts JSON **arrays of actions** per round (like screen control — previously an array response ended the loop as unparseable), and failed actions surface a warning notification instead of only an output-channel line. Applies to the extension and the CLI `askii browse` command.
+- **Ask panel buttons now work (CSP fix)**: The follow-up and copy buttons in the ASKII Response panel used inline `onclick` handlers, which the panel's Content-Security-Policy (`script-src 'nonce-…'`) silently blocked — neither button did anything. They are now wired up from the nonce'd script.
+- **Ask panel streams replies**: `getExtensionResponseStreaming` now delegates to the chat streaming APIs, so responses stream token-by-token on every provider (previously only Ollama streamed; all others delivered the full answer as one chunk after a long wait). The panel shows a blinking cursor while streaming and batches chunk renders to keep updates smooth.
+- **Ask panel copy feedback & follow-up UX**: Copying a response animates a green check mark and falls back to the extension host clipboard when the webview's clipboard is unavailable (with an error tint on failure). Dismissing the follow-up input box no longer dead-ends the panel — it returns to the answer view and keeps waiting for the next follow-up.
+- **opencode Go requests now send `x-opencode-session`**: opencode Go rejects traffic it cannot attribute to a conversation (`400 Request is missing x-opencode-session and cannot be routed efficiently`). All opencode Go calls — chat completions (OpenAI-compatible and Anthropic-compatible paths) and model discovery — now send a stable per-session `x-opencode-session` id and an `askii/<version>` user agent, as required by the [opencode Go client guidelines](https://opencode.ai/docs/go/#where-can-i-use-it).
 
 ## [0.4.2] - 2026-07-10
 

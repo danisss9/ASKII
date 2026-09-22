@@ -15,7 +15,11 @@ import {
   askiiDiffProvider,
 } from './commands';
 import { validateProviderConfig } from './providers';
-import { AskiiInlineCompletionProvider, INLINE_ACCEPT_COMMAND } from './inlineCompletion';
+import {
+  AskiiInlineCompletionProvider,
+  INLINE_ACCEPT_COMMAND,
+  completionCache,
+} from './inlineCompletion';
 import { generateCommitMessageCommand } from './commitMessage';
 import { askiiNoteCommand } from './notesPanel';
 import { startNoteScheduler, stopNoteScheduler } from './notesScheduler';
@@ -71,9 +75,11 @@ export async function activate(context: vscode.ExtensionContext) {
     ),
   );
 
+  const inlineProvider = new AskiiInlineCompletionProvider();
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.clearCache', () => {
       explanationCache.clear();
+      inlineProvider.clearCache();
       vscode.window.showInformationMessage('ASKII cache cleared! (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧');
       if (vscode.window.activeTextEditor) {
         updateDecorations(vscode.window.activeTextEditor);
@@ -112,17 +118,41 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.showCommandMenu', async () => {
       const selected = await vscode.window.showQuickPick([
-        { label: '$(comment) Ask ASKII', command: 'askii.askQuestion' },
-        { label: '$(edit) ASKII Edit', command: 'askii.editCode' },
-        { label: '$(files) ASKII Do', command: 'askii.doTask' },
+        {
+          label: '$(comment) Ask ASKII',
+          description: 'Ask anything or about selection',
+          command: 'askii.askQuestion',
+        },
+        {
+          label: '$(edit) ASKII Edit',
+          description: 'Edit code with AI',
+          command: 'askii.editCode',
+        },
+        {
+          label: '$(files) ASKII Do',
+          description: 'Run multi-file tasks',
+          command: 'askii.doTask',
+        },
         {
           label: '$(screen-full) ASKII Control',
           description: 'Screen or browser',
           command: 'askii.controlTask',
         },
-        { label: '$(note) ASKII Note', command: 'askii.noteTask' },
-        { label: '$(book) Reload Wiki', command: 'askii.reloadWiki' },
-        { label: '$(refresh) Clear Cache', command: 'askii.clearCache' },
+        {
+          label: '$(note) ASKII Note',
+          description: 'Notes & reminders',
+          command: 'askii.noteTask',
+        },
+        {
+          label: '$(book) Reload Wiki',
+          description: 'Reindex wiki docs',
+          command: 'askii.reloadWiki',
+        },
+        {
+          label: '$(refresh) Clear Cache',
+          description: 'Reset explanation & completion caches',
+          command: 'askii.clearCache',
+        },
       ]);
 
       if (selected) {
@@ -154,6 +184,11 @@ export async function activate(context: vscode.ExtensionContext) {
             explanationCache.delete(key);
           }
         }
+        for (const key of completionCache.keys()) {
+          if (key.startsWith(uri)) {
+            completionCache.delete(key);
+          }
+        }
       }
     }),
   );
@@ -183,7 +218,6 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  const inlineProvider = new AskiiInlineCompletionProvider();
   context.subscriptions.push(
     vscode.commands.registerCommand(INLINE_ACCEPT_COMMAND, (id: number) => {
       inlineProvider.notifyAccepted(id);
@@ -205,5 +239,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
   cleanupDecorations();
+  completionCache.clear();
   stopNoteScheduler();
 }

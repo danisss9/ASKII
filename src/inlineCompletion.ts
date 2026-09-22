@@ -30,6 +30,24 @@ interface LastSuggestion {
   accepted: boolean;
 }
 
+// Reusable completions keyed by the same context key as the on-screen suggestion — the inline-completion
+// counterpart of `explanationCache` in decorations.ts. Cleared by the `askii.clearCache` command.
+export const completionCache = new Map<string, string>();
+
+// Inline completion triggers on nearly every keystroke; without a bound the cache would grow all session.
+const MAX_CACHE_ENTRIES = 100;
+
+function cacheCompletion(key: string, text: string): void {
+  // Delete first so refreshing the same context moves it to the newest end of the insertion order.
+  completionCache.delete(key);
+  completionCache.set(key, text);
+  while (completionCache.size > MAX_CACHE_ENTRIES) {
+    const oldest = completionCache.keys().next().value;
+    if (oldest === undefined) break;
+    completionCache.delete(oldest);
+  }
+}
+
 // Cheap context computed on every invocation (no RAG/LLM work) — also yields the cache key.
 interface BaseContext {
   offset: number;
@@ -81,6 +99,12 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
     }
   }
 
+  // `askii.clearCache` — drops the on-screen-suggestion tracker and the reusable completion cache.
+  public clearCache(): void {
+    this.lastSuggestion = null;
+    completionCache.clear();
+  }
+
   public async provideInlineCompletionItems(
     document: vscode.TextDocument,
     position: vscode.Position,
@@ -102,6 +126,14 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
     // that would needlessly supersede/cancel the valid one.
     if (this.lastSuggestion && this.lastSuggestion.contextKey === ctx.contextKey) {
       return [this.makeItem(this.lastSuggestion.text, position, this.lastSuggestion.id)];
+    }
+
+    // Previously computed completion for this exact context — replay it without an LLM round-trip.
+    const cachedText = completionCache.get(ctx.contextKey);
+    if (cachedText !== undefined) {
+      const id = ++this.latestRequestId;
+      this.lastSuggestion = { id, text: cachedText, contextKey: ctx.contextKey, accepted: false };
+      return [this.makeItem(cachedText, position, id)];
     }
 
     const id = ++this.latestRequestId;
@@ -221,6 +253,7 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
 
     // Track this suggestion as shown-but-not-yet-accepted, keyed by the context that produced it.
     this.lastSuggestion = { id, text: cleaned, contextKey: ctx.contextKey, accepted: false };
+    cacheCompletion(ctx.contextKey, cleaned);
 
     return [this.makeItem(cleaned, position, id)];
   }
