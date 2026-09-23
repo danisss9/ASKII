@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write # create GitHub releases and upload assets
-  id-token: write # npm provenance attestation
+  id-token: write # OIDC token for npm trusted publishing + provenance
 
 jobs:
   release:
@@ -56,11 +56,17 @@ jobs:
 
       # ── npm (askii-cli) ───────────────────────────────────────────────────
 
+      # Uses npm Trusted Publishing (OIDC) — no NPM_TOKEN needed. Configure the
+      # trusted publisher on npmjs.com: askii-cli → Settings → Trusted Publisher
+      # (GitHub Actions, repo danisss9/ASKII, workflow release.yml).
+      # Provenance attestations are generated automatically.
+
+      - name: Update npm (trusted publishing requires npm >= 11.5.1)
+        run: npm install -g npm@latest
+
       - name: Publish CLI to npm
         working-directory: ./cli
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
 
       # ── VS Code Marketplace ───────────────────────────────────────────────
       # Requires a MARKETPLACE_PAT secret: a Personal Access Token from
