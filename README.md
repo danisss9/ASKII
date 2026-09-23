@@ -1,319 +1,161 @@
-# ASKII
+# ASKII ( •*•)>⌐■-■ (⌐■*■)
 
-A fun VS Code extension that adds random kaomoji (Japanese emoticons) and AI-powered explanations to your code lines. Choose between Ollama, LM Studio, OpenAI, Anthropic, opencode Go, or ASKII Cloud as your AI provider, and toggle between humorous comments and helpful code advice!
+An AI code assistant for VS Code with style — ask about your code, have it edited for you, run agentic tasks, drive your screen or a browser, and keep AI-classified notes, tasks and reminders. Bring your own LLM: ASKII Cloud, Ollama, LM Studio, OpenAI, Anthropic, or opencode Go.
 
-## Features
+## Quick start
 
-- **Random Kaomoji**: Adds a random kaomoji emoticon after the current line
-- **AI Explanations**: Uses Ollama, LM Studio, OpenAI, Anthropic, opencode Go, or ASKII Cloud to generate concise explanations of your code
-- **Inline Helper Modes**: Choose between `off`, `helpful`, `funny`, or `wiki` modes
-- **Wiki RAG**: Index your own `.md` documentation files and inject relevant snippets as context into any command — or display them inline as you navigate code
-- **Multi-Platform AI**: Support for Ollama (local), LM Studio (local with official SDK), OpenAI (cloud, or any OpenAI-compatible API), Anthropic (cloud, via official `@anthropic-ai/sdk`), opencode Go (cloud, hosted multi-model coding subscription), and ASKII Cloud (cloud, in-house OpenAI-compatible service)
-- **Six Command Modes**:
-  - **Ask ASKII**: Ask questions about your selected code
-  - **ASKII Edit**: Have ASKII modify your selected code based on your request
-  - **ASKII Do**: Agentic workspace agent — view, list, create, modify, rename, and delete files across multiple rounds until the task is complete
-  - **ASKII Control**: Give ASKII an instruction — first pick whether it controls the **screen** (takes screenshots and drives your mouse and keyboard) or the **browser** (launches a Puppeteer browser and navigates the web), then describe the task and it loops until it's done
-  - **ASKII Note**: A notes / tasks / reminders mode — type free text and the AI auto-classifies it (note, task with priority, or reminder with a time), can ask clarifying questions back, captures full-screen screenshots, and pings you with a notification + sound when a reminder is due. Notes are stored globally (tagged by workspace, searchable everywhere) and reminders fire while VS Code is running.
-- **Code Auto-completion**: Copilot-style ghost-text code suggestions inside any open code file — Tab to accept, Esc to dismiss.
-- **Codebase Wiki RAG**: Index your own workspace code files and inject relevant chunks as context into inline completion, Ask, Edit, and Do commands.
-- **Commit Message Generator**: A one-click button in the Source Control view toolbar that reads your staged (or working-tree) diff and writes a generated commit message straight into the commit-message input box — powered by the same LLM platform/model used for inline completion.
-- **CLI Interactive Mode**: The `askii` CLI now starts a persistent REPL session when run with no arguments — chat with persistent history, run Do/Edit/Explain agents, and switch platforms/models live, all with Tab-autocomplete slash-commands (`/do`, `/edit`, `/platform`, `/clear`, …).
+1. Install ASKII from the VS Code Marketplace — or build it from source (see [Development](#development))
+2. Run **ASKII: Open Setup** (`Ctrl+Shift+A S` / `Cmd+Shift+A S`) — a short wizard that walks you through provider, models, options and wiki setup
+3. Select some code and run **Ask ASKII** (`Ctrl+Shift+K A`)
 
-## Requirements
+## Commands
 
-### Option 1: ASKII Cloud (Default)
+| Command            | Keybinding       | What it does                                                                                                        |
+| ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Ask ASKII          | `Ctrl+Shift+K A` | Ask about the selected code (or anything) — answers stream into a markdown panel with follow-ups and a history view |
+| ASKII Edit         | `Ctrl+Shift+K E` | Replace the selection with an AI-edited version; review the diff and undo if needed                                 |
+| ASKII Do           | `Ctrl+Shift+K D` | Agentic workspace agent — explores, creates, modifies, renames and deletes files over multiple rounds               |
+| ASKII Control      | `Ctrl+Shift+K C` | Screen or browser agent — screenshot-driven mouse/keyboard control, or Puppeteer web automation                     |
+| ASKII Note         | `Ctrl+Shift+K N` | Notes / tasks / reminders panel with search, screenshots and voice input                                            |
+| ASKII: Reload Wiki | `Ctrl+Shift+K W` | Rebuild the wiki RAG index                                                                                          |
+| ASKII: Clear Cache | `Ctrl+Shift+K X` | Clear cached inline explanations and completions                                                                    |
+| ASKII: Open Setup  | `Ctrl+Shift+A S` | Re-run the setup wizard                                                                                             |
 
-- An **ASKII Cloud API key** (in-house, OpenAI-compatible inference service at [https://api.askii.dev](https://api.askii.dev))
-- Set your API key in `askii.askiicloudApiKey`
-- `askii.llmPlatform` defaults to `askiicloud`, so you're ready to go once the key is set
-- The default model is `askii-smart` (`askii.llmModel`)
+On macOS swap `Ctrl` for `Cmd`. The **(⌐■_■)** status-bar button opens a quick-access menu for all of these.
 
-### Option 2: Ollama
+### Ask ASKII
 
-- **Ollama**: Download and install from [https://ollama.ai](https://ollama.ai)
-- Pull a model, e.g., `ollama pull gemma4:e4b`
-- Make sure Ollama is running (default: `http://localhost:11434`)
-- Select `ollama` in the `askii.llmPlatform` setting and set the model in `askii.llmModel`
+Select some code and ask about it, or ask a general question with nothing selected — the file name, language and selection are included as context automatically (plus matching wiki chunks when wiki RAG is on). Answers stream into the markdown panel with syntax-highlighted code blocks, and the panel header gives you **copy**, **follow-up** (previous questions and answers are kept as conversation context) and a **history view** to re-read the whole session.
 
-### Option 3: LM Studio
+### ASKII Edit
 
-- **LM Studio**: Download from [https://lmstudio.ai](https://lmstudio.ai)
-- Start LM Studio and load your preferred model
-- Select `lmstudio` in the `askii.llmPlatform` setting and set the model in `askii.llmModel`
+Describe the change you want and ASKII rewrites your selection — or the whole file if nothing is selected, using the full file as context either way. The edit is applied immediately, then a side-by-side diff of original vs. proposed code opens beside it so you can review it, with a one-click **Undo** offer to revert. Optional `askii.formatAfterEdit` formats the document after the edit.
 
-### Option 4: OpenAI
-
-- An **OpenAI API key** (or any OpenAI-compatible API key)
-- Select `openai` in the `askii.llmPlatform` setting
-- Set your API key in `askii.openaiApiKey`
-- Set the model in `askii.llmModel` (e.g. `gpt-5-mini`, `gpt-4o`)
-- Optionally set a custom `askii.openaiUrl` for Azure OpenAI or other compatible APIs (leave empty for `api.openai.com`)
-
-### Option 5: Anthropic
-
-- An **Anthropic API key** from [console.anthropic.com](https://console.anthropic.com)
-- Select `anthropic` in the `askii.llmPlatform` setting
-- Set your API key in `askii.anthropicApiKey`
-- Set the model in `askii.llmModel` (e.g. `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`)
-
-### Option 6: opencode Go
-
-- An **opencode Go API key** from [https://opencode.ai/go](https://opencode.ai/go) (a hosted, multi-model coding subscription)
-- Select `opencodego` in the `askii.llmPlatform` setting
-- Set your API key in `askii.opencodegoApiKey`
-- Set the model in `askii.llmModel` (e.g. `glm-5.2`, `kimi-k2.7-code`, `deepseek-v4-pro`, `qwen3.7-max`, `minimax-m3`). See the full list at [opencode.ai/zen/go/v1/models](https://opencode.ai/zen/go/v1/models)
-
-## Usage
-
-Inline decorations are disabled by default. Enable them by setting `askii.inlineHelperMode` to `helpful`, `funny`, or `wiki`.
-
-### Choose Your LLM Platform
-
-Open VS Code Settings (`Ctrl+,` or `Cmd+,`) and search for "ASKII LLM Platform" to choose:
-
-- `askiicloud` (default)
-- `ollama`
-- `lmstudio`
-- `openai`
-- `anthropic`
-- `opencodego`
-
-### Choose Your Inline Helper Mode
-
-Search for "ASKII Inline Helper Mode" and select:
-
-- `off` — No inline decorations
-- `helpful` — Practical coding advice
-- `funny` — Humorous comments
-- `wiki` — Shows a one-sentence explanation informed by your indexed wiki docs. Searches the wiki index for the current line and passes the top matching chunks as context to the LLM. Requires `askii.wikiPath` to be set and indexed
-
-### Commands
+### ASKII Do
 
-#### Ask ASKII
+Describe a task — ASKII prints the top-level workspace structure, then loops until the task is done or `askii.doMaxRounds` (default 5) is reached. Read-only actions (`list`, `view`, `search`, `wiki_search`) run freely; write actions (`create`, `write`, `modify`, `rename`, `copy`, `mkdir`, `delete`) and shell `run` ask for confirmation (skip with `askii.doAutoConfirm`). Files are backed up before destructive changes, and the whole run can be undone with one click when it finishes.
 
-1. Select code in your editor
-2. Open command palette (`Ctrl+Shift+P` or `Cmd+Shift+P`)
-3. Search for "Ask ASKII"
-4. Type your question
-5. View the formatted markdown response in a side panel with VS Code theme-aware styling
-
-#### ASKII Edit
-
-1. Select code in your editor
-2. Open command palette
-3. Search for "ASKII Edit"
-4. Describe the changes you want
-5. The selected code will be replaced with the updated version
-
-#### ASKII Do (AI Workspace Agent)
-
-1. Open command palette
-2. Search for "ASKII Do"
-3. Describe what you want ASKII to do (e.g., "Create a unit test file for src/utils.ts")
-4. ASKII shows the top-level workspace structure, then runs in a loop until the task is done or `doMaxRounds` is reached:
-   - **List Folder**: ASKII can list any folder's contents (`[file]` / `[folder]` labels) to explore the workspace
-   - **View File**: ASKII can read file contents to understand your codebase before acting
-   - **Analyze & Act**: Based on what it reads, ASKII issues create, modify, rename, or delete actions
-   - **Continuous Loop**: After each round ASKII is asked "what next?" — it keeps going until it returns `[]`
-5. **Confirm each action** before it's applied:
-   - **CREATE**: Confirmation to create new files
-   - **MODIFY**: Confirmation to modify existing files
-   - **RENAME**: Confirmation to rename or move files
-   - **DELETE**: Warning confirmation for deletions
-   - **VIEW / LIST**: No confirmation needed (read-only)
-
-#### ASKII Control (Screen & Browser Agent)
-
-1. Open command palette
-2. Search for **"ASKII Control"**
-3. Pick whether ASKII should control the **Screen** or the **Browser**
-4. Describe what you want done (e.g., "Open Notepad and type hello world")
-5. ASKII takes a screenshot and proposes the next action (mouse move, click, or keyboard input) with its reasoning
-6. **Confirm each action** before it executes — or enable `askii.doAutoConfirm` to run unattended
-7. After each action a new screenshot is taken and the loop repeats until ASKII returns **DONE** or `askii.doMaxRounds` is reached
+### ASKII Control
 
-> **Requires a vision-capable model** such as `llava` or `moondream2`.
+Pick **Screen** or **Browser**, then describe the task. ASKII screenshots the current state each round and proposes the next action with its reasoning:
 
-In **Browser** mode instead:
+- **Screen** — `mouse_move`, `mouse_left_click`, `mouse_right_click`, `keyboard_input`, `DONE`
+- **Browser** — `goto`, `click`, `type`, `wait_for`, `back`, `forward`, `DONE` (Puppeteer)
 
-1. Pick **Browser** in the quick pick, then describe what you want done in a browser (e.g., "Go to https://example.com and click Learn more")
-2. ASKII launches a Puppeteer browser (visible by default), takes a screenshot of the current page and its URL, then proposes the next action with its reasoning. Supported actions:
-   - **goto**: Navigate to a URL
-   - **click**: Click an element by CSS selector
-   - **type**: Type text into an element by CSS selector
-   - **wait_for**: Wait until a CSS selector appears in the DOM
-   - **back / forward**: Navigate the browser history
-   - **DONE**: Returned when the task is complete
-3. **Confirm each action** before it executes — or enable `askii.doAutoConfirm` to run unattended
-4. After each action a new screenshot is taken and the loop repeats until ASKII returns **DONE** or `askii.doMaxRounds` is reached
-5. The browser is closed automatically when the loop ends
+Requires a **vision-capable model** (e.g. `llava`, `moondream2`). Browser mode auto-detects Chrome / Edge / Chromium / Brave (or set `askii.chromePath`) and is visible by default (`askii.browserHeadless` hides it); the browser closes when the loop ends. Screen control uses shell commands — Linux needs `xdotool`.
 
-> **Requires a vision-capable model**. Set `askii.browserHeadless` to `false` (default) to watch the browser window while ASKII works.
->
-> **Requires a Chromium-based browser** — Chrome, Edge, Chromium or Brave. The first one found is auto-detected; set `askii.chromePath` to pick a specific executable (e.g. `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`).
+### ASKII Note
 
-#### ASKII Note (Notes / Tasks / Reminders)
+Type free text — the AI classifies it as a **note**, a **task** (`low` / `medium` / `high` priority) or a **reminder** (with a due time), and asks a clarifying question when the intent or time is ambiguous. Entries are stored globally, tagged by workspace, full-text searchable, and grouped by age (Pinned, Today, Yesterday, This week, Earlier). Hover an entry to pin, edit (with AI re-classify), mark done, snooze / dismiss, or delete it.
 
-1. Press `Ctrl+Shift+K N` (or `Cmd+Shift+K N`) — or pick **ASKII Note** from the command palette / status-bar menu
-2. The ASKII Note panel opens. Type free text in the box at the bottom and press **Enter** to save (`Shift+Enter` adds a new line):
-   - A plain note: `the API rate limit is 100 req/min`
-   - A task with priority: `task: fix the login bug, high priority`
-   - A reminder: `remind me to check the build in 30 minutes` or `remind me tomorrow 9am`
-3. The AI auto-classifies your text into a **note**, **task** (with `low` / `medium` / `high` priority), or **reminder** (with a due time). If the intent or time is ambiguous it asks a clarifying question in a small dialog — answer it and the entry is saved.
-4. Toggle the **camera** icon before sending to attach a full-screen screenshot to the entry (reuses the ASKII Control capture pipeline). Thumbnails appear in the list and click-to-open.
-5. Use the **search box** at the top to full-text search across all notes, tasks and reminders, or the **filter chips** to show only notes, tasks or reminders (they combine with search). A task counter shows completed/total tasks.
-6. Entries are grouped by age (**Pinned**, Today, Yesterday, This week, Earlier). Hover an entry for its actions: **pin**, **edit** (with an optional AI **Re-classify**), **mark done** (tasks), **snooze** / **dismiss** (reminders), and **delete**. Tag chips and the captured-selection context block are clickable.
-7. **Reminders** fire as VS Code notifications with a sound while VS Code is running, including the context that was open when you created the note (open file, selected text, workspace). Choose **Open** (reveals the entry), **Snooze** (reschedules by `askii.noteSnoozeMinutes`), or **Dismiss** — the same snooze/dismiss actions are available on the entry in the panel.
-8. Notes are stored **globally** (survive across workspaces), tagged with their origin workspace, and searchable everywhere. Tasks can be toggled done; any entry can be deleted.
+- **Reminders** fire as VS Code notifications with a sound while VS Code is running; ones missed while it was closed re-fire on the next startup
+- **Screenshots** — toggle the camera icon to attach a full-screen capture to the entry
+- **Voice input** — click the mic icon, speak, click again; the recording is transcribed straight into the composer (needs `ffmpeg`)
 
-> Reminders only fire while VS Code is running. Reminders that were missed while VS Code was closed are flagged **missed** and fire once on the next startup.
->
-> New settings: `askii.noteReminderSound` (default `true`) and `askii.noteSnoozeMinutes` (default `10`).
+### Inline completion & decorations
 
----
-
-### Wiki RAG (Documentation Context)
-
-Point ASKII at a folder of `.md` files and it will index them into a local vector database (powered by [MiniSearch](https://github.com/lucaong/minisearch) — pure JS, no native dependencies). The relevant chunks are automatically prepended as context when you Ask, Edit, or Do tasks.
-
-1. Set `askii.wikiPath` to the folder containing your `.md` docs
-2. Run **ASKII: Reload Wiki** from the command palette (or status-bar menu) to build the index — a progress spinner shows while indexing and a notification confirms when done
-3. Enable `askii.wikiEnabled` to inject wiki context into Ask / Edit / Do commands
-4. Optionally set `askii.inlineHelperMode` to `wiki` for inline decorations that show LLM explanations enriched by your docs
-5. Optionally enable `askii.wikiAutoReload` to have the index rebuilt automatically each time VS Code starts
-
-The index is cached in memory after the first load — no disk reads on subsequent queries.
-
----
-
-### Quick Access with Status Bar Button
-
-Click the ASKII **(⌐■_■)** button in the bottom right status bar to quickly access:
-
-- Ask ASKII
-- ASKII Edit
-- ASKII Do
-- ASKII Control
-- Reload Wiki
-- Clear Cache
-
-### Code Auto-completion
-
-ASKII provides Copilot-style ghost-text completions inside any code file open in the editor.
-
-1. Enable `askii.inlineCompletionEnabled` — ghost text appears after a short delay as you type.
-2. Press **Tab** to accept the suggestion or **Esc** to dismiss it (standard VS Code inline-suggest behaviour, no custom keybindings needed).
-3. Set `askii.inlineCompletionEagerness` to control responsiveness:
-   - `low` — triggers after 1 200 ms with a wide code context window
-   - `medium` — 500 ms (default)
-   - `high` — 200 ms with a narrower context window for speed
-
-### Commit Message Generator
-
-ASKII can write your Git commit messages for you. A **sparkle (✦)** button is added to the Source Control view title toolbar (the toolbar at the top of the Source Control view, visible when a Git repository is open).
-
-1. Make some changes in a Git repository (staged or unstaged).
-2. Open the **Source Control** view (`Ctrl+Shift+G` / `Cmd+Shift+G`).
-3. Click the **✦** button in the Source Control view toolbar.
-4. ASKII reads the staged diff (falling back to the working-tree diff when nothing is staged), sends it to the LLM, and writes the generated commit message straight into the input box — ready for you to review and commit.
-
-The generator also includes the repository's **last 10 commit messages** in the prompt as style examples, so generated messages tend to match your existing habits (multi-line bodies are supported; the section is skipped when the repository has no history yet).
-
-The generator uses the **inline** LLM platform and model (`askii.llmInlinePlatform` / `askii.llmInlineModel`), so it can run on a different provider than your main Ask / Edit / Do commands. Set `askii.commitMessageInstructions` to a `.md` file with your own style rules (e.g. "always use Conventional Commits with a `feat`/`fix`/`chore` prefix and reference the Jira ticket in the body") and its contents are appended to the built-in system prompt. The path may be absolute or relative to the workspace root.
-
-### Per-Feature Platform & Model
-
-ASKII splits its LLM usage into three feature groups, each with its own platform and model settings. This lets you run a fast model for inline completions, a strong model for chat/edit/do, and a vision-capable model for control — all independently.
-
-- **Ask / Edit / Do** — `askii.llmPlatform` (default: `askiicloud`) and `askii.llmModel` (default: `askii-smart`)
-- **Inline suggestions / inline completion / git commit message** — `askii.llmInlinePlatform` (default: `askiicloud`) and `askii.llmInlineModel` (default: `askii-fast`)
-- **Control / Note (vision)** — `askii.llmVisionPlatform` (default: `askiicloud`) and `askii.llmVisionModel` (default: `askii-smart`)
-
-Each `llm*Platform` accepts the same values: `askiicloud`, `ollama`, `lmstudio`, `openai`, `anthropic`, `opencodego`. API keys are shared per provider across all feature groups (e.g. `askii.openaiApiKey` is used whether `openai` is selected for `llmPlatform`, `llmInlinePlatform`, or `llmVisionPlatform`).
-
-## Configuration
-
-All settings can be customized in VS Code Settings (`Ctrl+,` or `Cmd+,`):
-
-**LLM platforms & models (per feature group):**
-
-- `askii.llmPlatform`: Platform for Ask / Edit / Do (`askiicloud` | `ollama` | `lmstudio` | `openai` | `anthropic` | `opencodego`, default: `askiicloud`)
-- `askii.llmModel`: Model id for Ask / Edit / Do (default: `askii-smart`)
-- `askii.llmInlinePlatform`: Platform for inline suggestions, inline completion and git commit message generation (same enum as `llmPlatform`, default: `askiicloud`)
-- `askii.llmInlineModel`: Model id for inline suggestions, inline completion and git commit message generation (default: `askii-fast`)
-- `askii.llmVisionPlatform`: Platform for Control / Note — vision-capable features (same enum as `llmPlatform`, default: `askiicloud`)
-- `askii.llmVisionModel`: Model id for Control / Note (default: `askii-smart`)
-
-**Provider API keys & URLs (shared across all feature groups):**
-
-- `askii.askiicloudApiKey`: ASKII Cloud API key (used when any `llm*Platform` is `askiicloud`). ASKII Cloud always uses `https://api.askii.dev/v1`
-- `askii.openaiApiKey`: OpenAI API key (used when any `llm*Platform` is `openai`)
-- `askii.openaiUrl`: OpenAI-compatible base URL — leave empty for `api.openai.com`, or use for Azure OpenAI / other compatible APIs
-- `askii.anthropicApiKey`: Anthropic API key (used when any `llm*Platform` is `anthropic`)
-- `askii.opencodegoApiKey`: opencode Go API key (used when any `llm*Platform` is `opencodego`). opencode Go always uses `https://opencode.ai/zen/go/v1`
-- `askii.ollamaUrl`: URL for Ollama API server (default: `http://localhost:11434`)
-- `askii.lmStudioUrl`: URL for LM Studio API server (default: `ws://localhost:1234`)
-
-**Inline & wiki:**
-
-- `askii.inlineHelperMode`: Inline helper mode (`off` | `helpful` | `funny` | `wiki`, default: `off`)
-- `askii.inlineCompletionEnabled`: Enable ASKII inline code completion — ghost text in code files, Tab to accept, Esc to dismiss (default: `false`)
-- `askii.inlineCompletionEagerness`: Completion trigger speed — `low` (1 200 ms), `medium` (500 ms, default), `high` (200 ms)
-- `askii.wikiEnabled`: Enable wiki RAG context for Ask / Edit / Do commands (default: `false`)
-- `askii.wikiPath`: Path to a folder containing `.md` documentation files to index for wiki RAG. Run **ASKII: Reload Wiki** after changing this or updating the docs
-- `askii.wikiAutoReload`: Automatically rebuild and reload the wiki index on extension startup (default: `false`). Requires `askii.wikiEnabled` and `askii.wikiPath` to be configured
-
-**Agent & misc:**
-
-- `askii.commitMessageInstructions`: Path to a `.md` file with custom instructions for the commit message generator (appended to the built-in system prompt). Absolute or relative to the workspace root. Leave empty to use the built-in prompt (default: `""`)
-- `askii.doMaxRounds`: Maximum interaction rounds for ASKII Do / Control commands (default: 5)
-- `askii.doAutoConfirm`: Skip confirmation prompts in ASKII Do / Control (default: `false`)
-- `askii.formatAfterEdit`: Auto-format files after ASKII Edit or Do (default: `false`)
-- `askii.browserHeadless`: Run the Puppeteer browser headlessly for ASKII Control browser mode (default: `false` — browser window is visible)
-- `askii.chromePath`: Path to a Chromium-based browser executable for ASKII Control browser mode (e.g. `C:\Program Files\Google\Chrome\Application\chrome.exe` or `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`). Leave empty to auto-detect Chrome, Edge, Chromium or Brave
-
-## Keybindings
-
-You can invoke ASKII commands using the following default keybindings:
-
-- **Ask ASKII**: `Ctrl+Shift+K A` (Mac: `Cmd+Shift+K A`)
-- **ASKII Edit**: `Ctrl+Shift+K E` (Mac: `Cmd+Shift+K E`)
-- **ASKII Do**: `Ctrl+Shift+K D` (Mac: `Cmd+Shift+K D`)
-- **ASKII Control**: `Ctrl+Shift+K C` (Mac: `Cmd+Shift+K C`)
-- **ASKII: Reload Wiki**: `Ctrl+Shift+K W` (Mac: `Cmd+Shift+K W`)
-- **ASKII: Clear Cache**: `Ctrl+Shift+K X` (Mac: `Cmd+Shift+K X`)
-
-## Default Mode Examples
-
-### Funny Mode
-
-```javascript
-const sum = a + b; (◕‿◕) The age-old tradition of making numbers hang out together!
-```
-
-### Helpful Mode
+- `askii.inlineCompletionEnabled` — Copilot-style ghost text; **Tab** accepts, **Esc** dismisses. Tune the trigger with `askii.inlineCompletionEagerness` (`low` 1200 ms / `medium` 500 ms / `high` 200 ms). Suggestions are cached per context
+- `askii.inlineHelperMode` — adds a kaomoji decoration after the current line: `helpful`, `funny`, or `wiki` (explanations enriched by your indexed docs). Example:
 
 ```javascript
 const sum = a + b; (◕‿◕) Adds two variables; prefer const for variables that won't be reassigned.
 ```
 
-### Wiki Mode
+### Wiki RAG
 
-```javascript
-connectToDatabase(config); (⌐■_■) [docs/database.md — Connection] Pass the config object returned by loadConfig(); see the Connection section for supported options.
+1. Point `askii.wikiPath` at a folder of `.md` docs
+2. Run **ASKII: Reload Wiki** — builds a local [MiniSearch](https://github.com/lucaong/minisearch) BM25 index
+3. Enable `askii.wikiEnabled` — matching chunks are injected into Ask / Edit / Do as context
+4. Optional: `askii.wikiAutoReload` rebuilds the index on startup
+
+### Commit messages
+
+A **✦** button in the Source Control view toolbar generates a commit message from your staged (or working-tree) diff straight into the input box. It styles the message after your repo's last 10 commits, honors `askii.commitMessageStyle` (`oneliner` / `brief` / `descriptive`), and appends your own rules from the `.md` file in `askii.commitMessageInstructions`.
+
+## LLM platforms
+
+| Platform                              | Type  | Setup                                                                                 |
+| ------------------------------------- | ----- | ------------------------------------------------------------------------------------- |
+| **ASKII Cloud** (default)             | Cloud | API key in `askii.askiicloudApiKey` — base URL is fixed to `https://api.askii.dev/v1` |
+| [Ollama](https://ollama.com)          | Local | Install + pull a model (e.g. `gemma4:e4b`), runs at `http://localhost:11434`          |
+| [LM Studio](https://lmstudio.ai)      | Local | Enable the local server (`ws://localhost:1234`) and load a model                      |
+| OpenAI or compatible                  | Cloud | `askii.openaiApiKey`; set `askii.openaiUrl` for Azure etc. (empty = `api.openai.com`) |
+| Anthropic                             | Cloud | `askii.anthropicApiKey`                                                               |
+| [opencode Go](https://opencode.ai/go) | Cloud | `askii.opencodegoApiKey`                                                              |
+
+Each feature group picks its own platform and model, so you can mix providers:
+
+| Feature group                                   | Platform                  | Model                  | Default model |
+| ----------------------------------------------- | ------------------------- | ---------------------- | ------------- |
+| Ask / Edit / Do                                 | `askii.llmPlatform`       | `askii.llmModel`       | `askii-smart` |
+| Inline suggestions, completion, commit messages | `askii.llmInlinePlatform` | `askii.llmInlineModel` | `askii-fast`  |
+| Control / Note (vision)                         | `askii.llmVisionPlatform` | `askii.llmVisionModel` | `askii-smart` |
+
+API keys and server URLs are shared per provider across all groups.
+
+## Configuration
+
+All settings live in VS Code Settings under the `askii.*` namespace.
+
+**Notes & voice**
+
+| Setting                   | Default      | Description                                             |
+| ------------------------- | ------------ | ------------------------------------------------------- |
+| `askii.noteReminderSound` | `true`       | Play a sound when a reminder fires                      |
+| `askii.noteSnoozeMinutes` | `10`         | Minutes added by **Snooze**                             |
+| `askii.sttPlatform`       | `askiicloud` | Platform used to transcribe voice input                 |
+| `askii.sttModel`          | `whisper-1`  | Speech-to-text model                                    |
+| `askii.ffmpegPath`        | _(empty)_    | ffmpeg executable for voice input (empty = auto-detect) |
+
+**Agents & browser**
+
+| Setting                 | Default   | Description                              |
+| ----------------------- | --------- | ---------------------------------------- |
+| `askii.doMaxRounds`     | `5`       | Max rounds for Do / Control              |
+| `askii.doAutoConfirm`   | `false`   | Skip write confirmations                 |
+| `askii.formatAfterEdit` | `false`   | Format files after Edit / Do             |
+| `askii.browserHeadless` | `false`   | Hide the Puppeteer browser window        |
+| `askii.chromePath`      | _(empty)_ | Browser executable (empty = auto-detect) |
+
+**Git**
+
+| Setting                           | Default    | Description                        |
+| --------------------------------- | ---------- | ---------------------------------- |
+| `askii.commitMessageStyle`        | `oneliner` | Generated message style            |
+| `askii.commitMessageInstructions` | _(empty)_  | `.md` file with extra commit rules |
+
+## CLI
+
+ASKII also ships as a terminal CLI with an interactive REPL and the same ask / edit / do / control / browse / note commands:
+
+```bash
+npm install -g askii-cli
 ```
 
-## Technical Details
+See [cli/README.md](cli/README.md).
 
-- **Markdown Rendering**: Ask ASKII responses are rendered using markdown-it with syntax highlighting and VS Code theme integration
-- **Confirmation Dialogs**: ASKII Do command requires confirmation for all write operations (CREATE, MODIFY, DELETE) to prevent accidental changes
-- **Smart Caching**: Inline explanations are cached to minimize API calls
-- **Debouncing**: Requests are debounced for optimal performance
-- **Mouse/Keyboard Control**: ASKII Control uses platform shell commands (PowerShell on Windows, AppleScript on macOS, `xdotool` on Linux) instead of native Node modules, so the extension bundles cleanly with no native `.node` files. Linux users need `xdotool` installed (`sudo apt install xdotool` or equivalent)
+## Requirements
 
-## Contributing
+- VS Code **1.108+**
+- Control requires a **vision-capable model**; screen control needs `xdotool` on Linux; browser mode needs a Chromium-based browser
+- Voice input requires **ffmpeg** on PATH (auto-detected, or set `askii.ffmpegPath`)
 
-Love ASKII? Feel free to contribute to the project on GitHub!
+## Development
 
-**Enjoy! (づ｡◕‿‿◕｡)づ**
+```bash
+git clone https://github.com/danisss9/ASKII.git
+cd ASKII && npm install
+
+npm run watch     # tsc + esbuild watchers — then F5 to launch the extension
+npm run compile   # type-check + lint + bundle
+npm run package   # production bundle (for vsce)
+npm test          # integration tests (@vscode/test-electron)
+```
+
+- `src/` — extension host code
+- `common/` — pure Node code shared with the CLI (never imports `vscode`)
+- `cli/` — the CLI package (`npm run build` / `npm run dev`)
+
+## License
+
+[MIT](LICENSE)
