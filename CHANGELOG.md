@@ -26,6 +26,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Changed
 
+- **CLI control target selection**: `askii control` now supports both screen and browser control, matching the extension's unified ASKII Control command. Screen control is the default; use `--target browser` or `ASKII_CONTROL_TARGET=browser` for browser control. The existing `askii browse` command remains as a browser alias.
+
 - **Setup wizard fourth step**: The wiki settings (`askii.wikiEnabled`, `askii.wikiPath`, `askii.wikiAutoReload`) and the commit rules file (`askii.commitMessageInstructions`) moved from the optional-settings step to a new **Wiki & commit rules** step. The optional-settings step now ends with **Next**; the new step ends with **Ignore** / **Finish**, which still apply (or skip) all wizard options globally.
 - **ASKII Control & ASKII Browse merged**: `askii.browseTask` and its `Ctrl+Shift+K B` / `Cmd+Shift+K B` keybinding were removed. `askii.controlTask` now shows a quick pick (**Screen** or **Browser**) before asking for the task. Browser mode keeps the Puppeteer flow (`askii.browserHeadless` and `askii.chromePath` still apply) and streams to the `ASKII Control (Browser)` output channel. The CLI `askii browse` command is unchanged.
 

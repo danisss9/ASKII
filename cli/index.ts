@@ -84,6 +84,7 @@ interface Config {
   maxRounds: number;
   yes: boolean;
   headless: boolean;
+  controlTarget: 'screen' | 'browser';
   chromePath: string | undefined;
   wikiPath: string | undefined;
   useWiki: boolean;
@@ -101,6 +102,45 @@ function getFlagValue(flags: string[], ...names: string[]): string | undefined {
 
 function hasFlag(flags: string[], ...names: string[]): boolean {
   return names.some((n) => flags.includes(n));
+}
+
+const CONTROL_VALUE_FLAGS = new Set([
+  '-p',
+  '--platform',
+  '--ollama-url',
+  '--ollama-model',
+  '--lmstudio-url',
+  '--lmstudio-model',
+  '--openai-key',
+  '--openai-model',
+  '--openai-url',
+  '--anthropic-key',
+  '--anthropic-model',
+  '--opencodego-key',
+  '--opencodego-model',
+  '--opencodego-url',
+  '--askiicloud-key',
+  '--askiicloud-model',
+  '--mode',
+  '--max-rounds',
+  '--target',
+  '--chrome-path',
+]);
+
+function getControlTaskArgs(argv: string[], command: string): string[] {
+  const commandIndex = argv.indexOf(command);
+  if (commandIndex === -1) return [];
+
+  const args: string[] = [];
+  for (let i = commandIndex + 1; i < argv.length; i++) {
+    const token = argv[i];
+    if (token.startsWith('-')) {
+      if (CONTROL_VALUE_FLAGS.has(token)) i++;
+      continue;
+    }
+    args.push(token);
+  }
+  return args;
 }
 
 function getConfig(flags: string[]): Config {
@@ -179,6 +219,9 @@ function getConfig(flags: string[]): Config {
     maxRounds: parseInt(getFlagValue(flags, '--max-rounds') || process.env.ASKII_MAX_ROUNDS || '5'),
     yes: hasFlag(flags, '-y', '--yes'),
     headless: hasFlag(flags, '--headless'),
+    controlTarget: (getFlagValue(flags, '--target') ||
+      process.env.ASKII_CONTROL_TARGET ||
+      'screen') as Config['controlTarget'],
     chromePath: getFlagValue(flags, '--chrome-path') || process.env.ASKII_CHROME_PATH || undefined,
     wikiPath: getFlagValue(flags, '--wiki-path') || process.env.ASKII_WIKI_PATH || undefined,
     useWiki: hasFlag(flags, '--use-wiki') || process.env.ASKII_USE_WIKI === '1',
@@ -1105,8 +1148,8 @@ Commands:
   do <task>             Agentic task runner — creates, modifies, and deletes files
   commit                 Generate a commit message from staged/working-tree diff and print to stdout
   note <subcommand>      Notes / tasks / reminders (add, list, search, done, delete, due)
-  control <instruction> Screen control — takes screenshots and drives mouse/keyboard
-  browse <task>         Browser agent — launches Puppeteer and navigates the web
+  control <task>         Screen & browser agent — --target screen (default) or --target browser
+  browse <task>          Alias for control --target browser
   wiki-reload           Index .md files from --wiki-path into the local vector database
 
 Options:
@@ -1126,13 +1169,14 @@ Options:
       --askiicloud-key <key> ASKII Cloud API key (env: ASKII_CLOUD_KEY)
       --askiicloud-model <m> ASKII Cloud model (default: askii-default)
       --mode <mode>          Response mode: helpful, funny (default: funny)
-      --max-rounds <n>       Max agent rounds for "do" / "control" / "browse" (default: 5)
+      --max-rounds <n>       Max agent rounds for "do" / "control" (default: 5)
       --dir <path>           Working directory for "do" (default: cwd)
   -c, --code <code>          Code input (alternative to stdin)
       --lang <language>      Language of the code (e.g. typescript, python)
       --file <filename>      Filename of the code (e.g. src/utils.ts)
-      --headless             Run Puppeteer in headless mode for "browse" (default: visible)
-      --chrome-path <path>   Path to Chrome/Chromium executable for "browse" (env: ASKII_CHROME_PATH)
+      --target <t>           Control target for "control": screen or browser (env: ASKII_CONTROL_TARGET, default: screen)
+      --headless             Run Puppeteer in headless mode for "control --target browser" (default: visible)
+      --chrome-path <path>   Path to Chrome/Chromium executable for "control --target browser" (env: ASKII_CHROME_PATH)
       --wiki-path <path>     Path to folder with .md docs for wiki RAG (env: ASKII_WIKI_PATH)
       --use-wiki             Inject wiki context into ask/edit/do (env: ASKII_USE_WIKI=1)
   -y, --yes                  Auto-confirm all actions
@@ -1146,7 +1190,7 @@ Environment variables:
   ASKII_ANTHROPIC_KEY   ASKII_ANTHROPIC_MODEL
   ASKII_OPENCODEGO_KEY  ASKII_OPENCODEGO_MODEL  ASKII_OPENCODEGO_URL
   ASKII_CLOUD_KEY       ASKII_CLOUD_MODEL
-  ASKII_MODE            ASKII_MAX_ROUNDS
+  ASKII_MODE            ASKII_MAX_ROUNDS      ASKII_CONTROL_TARGET
   ASKII_WIKI_PATH       ASKII_USE_WIKI
 
 Examples:
@@ -1168,8 +1212,9 @@ Examples:
   askii -p lmstudio --lmstudio-model "my-model" do "refactor index.ts"
   askii control --ollama-model llava "open Notepad and type hello world"
   askii control --yes --ollama-model llava "click the search bar and search for cats"
-  askii browse --ollama-model llava "go to https://example.com and click Learn more"
-  askii browse --yes --headless --ollama-model llava "search Google for Node.js"
+  askii control --target browser --ollama-model llava "go to https://example.com and click Learn more"
+  askii control --target browser --yes --headless --ollama-model llava "search Google for Node.js"
+  askii browse --ollama-model llava "check the title of https://github.com"    # alias for control --target browser
   askii wiki-reload --wiki-path ./docs
   askii ask --wiki-path ./docs --use-wiki "how do I configure the database?"
 `);
@@ -1679,6 +1724,325 @@ Examples:
   }
 }
 
+// ── ASKII Control (Screen / Browser) ──────────────────────────────────────────
+// One entry point for both control targets: `askii control` drives the screen
+// by default or the browser via --target browser / ASKII_CONTROL_TARGET, and
+// `askii browse` is an alias for browser mode. Mirrors askiiControlCommand /
+// runScreenControlTask / runBrowserTask in src/commands.ts.
+
+async function runScreenControl(instruction: string, config: Config): Promise<void> {
+  const missingDeps = checkControlDependencies();
+  if (missingDeps.length > 0) {
+    console.error(
+      `Error: missing required tools:\n${missingDeps.map((d) => `  - ${d}`).join('\n')}`,
+    );
+    process.exit(1);
+  }
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  const abortController = new AbortController();
+
+  // Handle Ctrl+C gracefully
+  process.once('SIGINT', () => {
+    abortController.abort();
+    console.error('\n\nStopped by user (Ctrl+C).');
+    rl.close();
+    process.exit(0);
+  });
+
+  try {
+    console.error(`ASKII Control (Screen) starting... ${getRandomThinkingKaomoji()}`);
+    console.error(`Instruction: ${instruction}`);
+    console.error('(Make sure your model supports vision/images)');
+    console.error('Press Ctrl+C to stop at any time.\n');
+
+    // Monitor selection
+    let monitorId: string | number | undefined;
+    try {
+      const monitors = await getMonitors();
+      if (monitors.length > 1) {
+        console.error('Available monitors:');
+        monitors.forEach((m, i) => console.error(`  [${i + 1}] ${m.name}`));
+        const answer = await new Promise<string>((resolve) => {
+          rl.question('Select monitor (number, default=1): ', resolve);
+        });
+        const idx = Math.max(0, Math.min(monitors.length - 1, (parseInt(answer) || 1) - 1));
+        monitorId = monitors[idx].id;
+        console.error(`Using: ${monitors[idx].name}\n`);
+      }
+    } catch {
+      // proceed with default monitor
+    }
+
+    const history: ControlHistoryEntry[] = [];
+    const ZOOM_ACTIONS = new Set(['mouse_left_click', 'mouse_right_click', 'mouse_double_click']);
+    let round = 0;
+    let prevScreenshot: string | undefined;
+    let systemInfo: SystemInfo | undefined;
+
+    while (round < config.maxRounds && !abortController.signal.aborted) {
+      console.error(`Round ${round + 1}/${config.maxRounds} — taking screenshot...`);
+
+      const {
+        base64: imageBase64,
+        width: screenW,
+        height: screenH,
+        physWidth,
+        physHeight,
+      } = await takeScreenshot(monitorId);
+
+      if (!systemInfo) {
+        systemInfo = await getSystemInfo(physWidth, physHeight);
+      }
+
+      if (prevScreenshot !== undefined && prevScreenshot === imageBase64) {
+        console.error('Warning: screen unchanged since last action.');
+      }
+      const screenChanged = prevScreenshot === undefined || prevScreenshot !== imageBase64;
+      prevScreenshot = imageBase64;
+
+      const prompt =
+        round === 0
+          ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action(s).`
+          : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and return the next action(s) or DONE.`;
+
+      console.error('Asking AI...');
+      const rawResponse = await getResponse(
+        config,
+        prompt,
+        buildControlSystemPrompt(screenW, screenH, systemInfo, history),
+        imageBase64,
+      );
+
+      if (abortController.signal.aborted) break;
+
+      const parsed = parseControlResponse(rawResponse);
+
+      if (!parsed) {
+        console.error('Error: could not parse AI response.');
+        console.error(`Raw response: ${rawResponse}`);
+        break;
+      }
+
+      if (parsed.type === 'done') {
+        console.error(`\nDone! ${getRandomKaomoji()}`);
+        console.error(`Reasoning: ${parsed.reasoning}`);
+        break;
+      }
+
+      let { actions } = parsed;
+
+      // Two-phase zoom: refine coordinates for a single position-based click
+      if (actions.length === 1 && ZOOM_ACTIONS.has(actions[0].action)) {
+        const a = actions[0] as ControlAction & { x: number; y: number };
+        try {
+          console.error('Refining coordinates (zoom)...');
+          const imgBuf = Buffer.from(imageBase64, 'base64');
+          const refined = await refineCoordinates(
+            imgBuf,
+            a.x,
+            a.y,
+            screenW,
+            screenH,
+            a,
+            (sys, img) => getResponse(config, sys, undefined, img),
+          );
+          if (refined) {
+            console.error(`Zoom: (${a.x}, ${a.y}) → (${refined.x}, ${refined.y})`);
+            a.x = refined.x;
+            a.y = refined.y;
+          }
+        } catch {
+          // zoom failed — use original coordinates
+        }
+      }
+
+      // Log planned actions
+      actions.forEach((a, i) => {
+        const label = actions.length > 1 ? `Action ${i + 1}/${actions.length}` : 'Action';
+        console.error(`\n${label}:    ${describeAction(a as ControlAction)}`);
+        console.error(`Reasoning: ${a.reasoning}`);
+      });
+
+      // Confirm
+      const confirmMsg =
+        actions.length === 1 ? 'Execute this action?' : `Execute these ${actions.length} actions?`;
+      const ok = await confirm(rl, confirmMsg, config.yes);
+      if (!ok || abortController.signal.aborted) {
+        console.error('Stopped.');
+        break;
+      }
+
+      // Resolve click_text actions to coordinates via a second LLM call
+      for (const a of actions) {
+        if ((a as ControlAction).action === 'click_text') {
+          const ct = a as { action: 'click_text'; text: string; reasoning: string };
+          try {
+            const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
+            const raw = await getResponse(config, resolvePrompt, undefined, imageBase64);
+            const m = raw.match(/\{[\s\S]*?\}/);
+            if (m) {
+              const coords = JSON.parse(m[0]);
+              if (typeof coords.x === 'number' && typeof coords.y === 'number') {
+                Object.assign(a, { action: 'mouse_left_click', x: coords.x, y: coords.y });
+                console.error(`Resolved "${ct.text}" → (${coords.x}, ${coords.y})`);
+              }
+            }
+          } catch {
+            console.error(`Warning: could not resolve text "${ct.text}" to coordinates`);
+          }
+        }
+      }
+
+      // Execute sequence
+      for (const a of actions) {
+        if (abortController.signal.aborted) break;
+        await executeControlAction(a as ControlAction, screenW, screenH, abortController.signal);
+        history.push({
+          round: round + 1,
+          description: describeAction(a as ControlAction),
+          reasoning: a.reasoning,
+          screenChanged,
+        });
+      }
+      console.error('Executed.\n');
+
+      round++;
+    }
+
+    if (round >= config.maxRounds && !abortController.signal.aborted) {
+      console.error(`Max rounds (${config.maxRounds}) reached.`);
+    }
+
+    rl.close();
+  } catch (error) {
+    rl.close();
+    console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    process.exit(1);
+  }
+}
+
+async function runBrowserControl(task: string, config: Config): Promise<void> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  const abortController = new AbortController();
+
+  process.once('SIGINT', () => {
+    abortController.abort();
+    console.error('\n\nStopped by user (Ctrl+C).');
+    rl.close();
+    process.exit(0);
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const puppeteer = require('puppeteer-core') as typeof import('puppeteer-core');
+  let browser: import('puppeteer-core').Browser | undefined;
+
+  try {
+    console.error(`ASKII Control (Browser) starting... ${getRandomThinkingKaomoji()}`);
+    console.error(`Task: ${task}`);
+    console.error('(Make sure your model supports vision/images)');
+    console.error('Press Ctrl+C to stop at any time.\n');
+
+    const executablePath = config.chromePath || detectBrowserExecutable();
+    if (!executablePath) {
+      console.error(
+        'Error: no Chromium-based browser found. Install Chrome or Edge, or pass --chrome-path / set ASKII_CHROME_PATH to your browser executable.',
+      );
+      process.exit(1);
+    }
+    console.error(`Browser executable: ${executablePath}`);
+
+    browser = await puppeteer.launch({
+      headless: config.headless ? true : false,
+      executablePath,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
+    });
+
+    const [page] = await browser.pages();
+    await page.setViewport(null);
+
+    let round = 0;
+
+    while (round < config.maxRounds && !abortController.signal.aborted) {
+      console.error(`Round ${round + 1}/${config.maxRounds} — capturing screenshot...`);
+
+      const imageBase64 = await takePageScreenshot(page);
+      const currentUrl = page.url();
+
+      console.error(`Current URL: ${currentUrl}`);
+
+      const userPrompt =
+        round === 0
+          ? `Task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and determine the next action.`
+          : `Continuing task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and return the next action or DONE.`;
+
+      console.error('Asking AI...');
+      const rawResponse = await getResponse(
+        config,
+        userPrompt,
+        buildBrowserSystemPrompt(),
+        imageBase64,
+      );
+
+      if (abortController.signal.aborted) break;
+
+      const parsed = parseBrowserResponse(rawResponse);
+
+      if (!parsed) {
+        console.error('Error: could not parse AI response.');
+        console.error(`Raw response: ${rawResponse}`);
+        break;
+      }
+
+      if (parsed.type === 'done') {
+        console.error(`\nDone! ${getRandomKaomoji()}`);
+        console.error(`Reasoning: ${parsed.reasoning}`);
+        break;
+      }
+
+      let stopped = false;
+      for (const action of parsed.actions) {
+        if (abortController.signal.aborted) {
+          stopped = true;
+          break;
+        }
+
+        console.error(`\nAction:    ${describeBrowserAction(action)}`);
+        console.error(`Reasoning: ${action.reasoning}`);
+
+        const ok = await confirm(rl, 'Execute this action?', config.yes);
+        if (!ok || abortController.signal.aborted) {
+          console.error('Stopped.');
+          stopped = true;
+          break;
+        }
+
+        try {
+          await executeBrowserAction(action, page);
+          console.error('Executed.\n');
+        } catch (execErr) {
+          console.error(
+            `Action failed: ${execErr instanceof Error ? execErr.message : 'Unknown error'}`,
+          );
+        }
+      }
+      if (stopped) break;
+
+      round++;
+    }
+
+    if (round >= config.maxRounds && !abortController.signal.aborted) {
+      console.error(`Max rounds (${config.maxRounds}) reached.`);
+    }
+
+    rl.close();
+  } catch (error) {
+    rl.close();
+    console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    process.exit(1);
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const flags = argv;
@@ -1952,7 +2316,7 @@ Rules:
       process.exit(1);
     }
   } else if (command === 'do') {
-    const task = positional.slice(1).join(' ');
+    const task = getControlTaskArgs(argv, command).join(' ');
 
     if (!task) {
       console.error('Error: provide a task as an argument');
@@ -2200,211 +2564,9 @@ Rules:
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);
     }
-  } else if (command === 'control') {
-    const instruction = positional.slice(1).join(' ');
-
-    if (!instruction) {
-      console.error('Error: provide an instruction as an argument');
-      process.exit(1);
-    }
-
-    const missingDeps = checkControlDependencies();
-    if (missingDeps.length > 0) {
-      console.error(
-        `Error: missing required tools:\n${missingDeps.map((d) => `  - ${d}`).join('\n')}`,
-      );
-      process.exit(1);
-    }
-
-    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
-    const abortController = new AbortController();
-
-    // Handle Ctrl+C gracefully
-    process.once('SIGINT', () => {
-      abortController.abort();
-      console.error('\n\nStopped by user (Ctrl+C).');
-      rl.close();
-      process.exit(0);
-    });
-
-    try {
-      console.error(`ASKII Control starting... ${getRandomThinkingKaomoji()}`);
-      console.error(`Instruction: ${instruction}`);
-      console.error('(Make sure your model supports vision/images)');
-      console.error('Press Ctrl+C to stop at any time.\n');
-
-      // Monitor selection
-      let monitorId: string | number | undefined;
-      try {
-        const monitors = await getMonitors();
-        if (monitors.length > 1) {
-          console.error('Available monitors:');
-          monitors.forEach((m, i) => console.error(`  [${i + 1}] ${m.name}`));
-          const answer = await new Promise<string>((resolve) => {
-            rl.question('Select monitor (number, default=1): ', resolve);
-          });
-          const idx = Math.max(0, Math.min(monitors.length - 1, (parseInt(answer) || 1) - 1));
-          monitorId = monitors[idx].id;
-          console.error(`Using: ${monitors[idx].name}\n`);
-        }
-      } catch {
-        // proceed with default monitor
-      }
-
-      const history: ControlHistoryEntry[] = [];
-      const ZOOM_ACTIONS = new Set(['mouse_left_click', 'mouse_right_click', 'mouse_double_click']);
-      let round = 0;
-      let prevScreenshot: string | undefined;
-      let systemInfo: SystemInfo | undefined;
-
-      while (round < config.maxRounds && !abortController.signal.aborted) {
-        console.error(`Round ${round + 1}/${config.maxRounds} — taking screenshot...`);
-
-        const {
-          base64: imageBase64,
-          width: screenW,
-          height: screenH,
-          physWidth,
-          physHeight,
-        } = await takeScreenshot(monitorId);
-
-        if (!systemInfo) {
-          systemInfo = await getSystemInfo(physWidth, physHeight);
-        }
-
-        if (prevScreenshot !== undefined && prevScreenshot === imageBase64) {
-          console.error('Warning: screen unchanged since last action.');
-        }
-        const screenChanged = prevScreenshot === undefined || prevScreenshot !== imageBase64;
-        prevScreenshot = imageBase64;
-
-        const prompt =
-          round === 0
-            ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action(s).`
-            : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and return the next action(s) or DONE.`;
-
-        console.error('Asking AI...');
-        const rawResponse = await getResponse(
-          config,
-          prompt,
-          buildControlSystemPrompt(screenW, screenH, systemInfo, history),
-          imageBase64,
-        );
-
-        if (abortController.signal.aborted) break;
-
-        const parsed = parseControlResponse(rawResponse);
-
-        if (!parsed) {
-          console.error('Error: could not parse AI response.');
-          console.error(`Raw response: ${rawResponse}`);
-          break;
-        }
-
-        if (parsed.type === 'done') {
-          console.error(`\nDone! ${getRandomKaomoji()}`);
-          console.error(`Reasoning: ${parsed.reasoning}`);
-          break;
-        }
-
-        let { actions } = parsed;
-
-        // Two-phase zoom: refine coordinates for a single position-based click
-        if (actions.length === 1 && ZOOM_ACTIONS.has(actions[0].action)) {
-          const a = actions[0] as ControlAction & { x: number; y: number };
-          try {
-            console.error('Refining coordinates (zoom)...');
-            const imgBuf = Buffer.from(imageBase64, 'base64');
-            const refined = await refineCoordinates(
-              imgBuf,
-              a.x,
-              a.y,
-              screenW,
-              screenH,
-              a,
-              (sys, img) => getResponse(config, sys, undefined, img),
-            );
-            if (refined) {
-              console.error(`Zoom: (${a.x}, ${a.y}) → (${refined.x}, ${refined.y})`);
-              a.x = refined.x;
-              a.y = refined.y;
-            }
-          } catch {
-            // zoom failed — use original coordinates
-          }
-        }
-
-        // Log planned actions
-        actions.forEach((a, i) => {
-          const label = actions.length > 1 ? `Action ${i + 1}/${actions.length}` : 'Action';
-          console.error(`\n${label}:    ${describeAction(a as ControlAction)}`);
-          console.error(`Reasoning: ${a.reasoning}`);
-        });
-
-        // Confirm
-        const confirmMsg =
-          actions.length === 1
-            ? 'Execute this action?'
-            : `Execute these ${actions.length} actions?`;
-        const ok = await confirm(rl, confirmMsg, config.yes);
-        if (!ok || abortController.signal.aborted) {
-          console.error('Stopped.');
-          break;
-        }
-
-        // Resolve click_text actions to coordinates via a second LLM call
-        for (const a of actions) {
-          if ((a as ControlAction).action === 'click_text') {
-            const ct = a as { action: 'click_text'; text: string; reasoning: string };
-            try {
-              const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
-              const raw = await getResponse(config, resolvePrompt, undefined, imageBase64);
-              const m = raw.match(/\{[\s\S]*?\}/);
-              if (m) {
-                const coords = JSON.parse(m[0]);
-                if (typeof coords.x === 'number' && typeof coords.y === 'number') {
-                  Object.assign(a, { action: 'mouse_left_click', x: coords.x, y: coords.y });
-                  console.error(`Resolved "${ct.text}" → (${coords.x}, ${coords.y})`);
-                }
-              }
-            } catch {
-              console.error(`Warning: could not resolve text "${ct.text}" to coordinates`);
-            }
-          }
-        }
-
-        // Execute sequence
-        for (const a of actions) {
-          if (abortController.signal.aborted) break;
-          await executeControlAction(a as ControlAction, screenW, screenH, abortController.signal);
-          history.push({
-            round: round + 1,
-            description: describeAction(a as ControlAction),
-            reasoning: a.reasoning,
-            screenChanged,
-          });
-        }
-        console.error('Executed.\n');
-
-        round++;
-      }
-
-      if (round >= config.maxRounds && !abortController.signal.aborted) {
-        console.error(`Max rounds (${config.maxRounds}) reached.`);
-      }
-
-      rl.close();
-    } catch (error) {
-      rl.close();
-      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      process.exit(1);
-    }
-  } else if (command === 'note') {
-    // ASKII Note — notes / tasks / reminders, persisted to ~/.askii/notes.json
-    const subcommand = positional[1] ?? 'list';
-    const noteArgs = positional.slice(2);
-    await runNoteCommand(subcommand, noteArgs, flags, config);
-  } else if (command === 'browse') {
+  } else if (command === 'control' || command === 'browse') {
+    // ASKII Control — screen (default) or browser, picked via --target /
+    // ASKII_CONTROL_TARGET. `browse` is an alias for browser mode.
     const task = positional.slice(1).join(' ');
 
     if (!task) {
@@ -2412,124 +2574,22 @@ Rules:
       process.exit(1);
     }
 
-    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
-    const abortController = new AbortController();
-
-    process.once('SIGINT', () => {
-      abortController.abort();
-      console.error('\n\nStopped by user (Ctrl+C).');
-      rl.close();
-      process.exit(0);
-    });
-
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const puppeteer = require('puppeteer-core') as typeof import('puppeteer-core');
-    let browser: import('puppeteer-core').Browser | undefined;
-
-    try {
-      console.error(`ASKII Browse starting... ${getRandomThinkingKaomoji()}`);
-      console.error(`Task: ${task}`);
-      console.error('(Make sure your model supports vision/images)');
-      console.error('Press Ctrl+C to stop at any time.\n');
-
-      const executablePath = config.chromePath || detectBrowserExecutable();
-      if (!executablePath) {
-        console.error(
-          'Error: no Chromium-based browser found. Install Chrome or Edge, or pass --chrome-path / set ASKII_CHROME_PATH to your browser executable.',
-        );
-        process.exit(1);
-      }
-      console.error(`Browser executable: ${executablePath}`);
-
-      browser = await puppeteer.launch({
-        headless: config.headless ? true : false,
-        executablePath,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
-      });
-
-      const [page] = await browser.pages();
-      await page.setViewport(null);
-
-      let round = 0;
-
-      while (round < config.maxRounds && !abortController.signal.aborted) {
-        console.error(`Round ${round + 1}/${config.maxRounds} — capturing screenshot...`);
-
-        const imageBase64 = await takePageScreenshot(page);
-        const currentUrl = page.url();
-
-        console.error(`Current URL: ${currentUrl}`);
-
-        const userPrompt =
-          round === 0
-            ? `Task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and determine the next action.`
-            : `Continuing task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and return the next action or DONE.`;
-
-        console.error('Asking AI...');
-        const rawResponse = await getResponse(
-          config,
-          userPrompt,
-          buildBrowserSystemPrompt(),
-          imageBase64,
-        );
-
-        if (abortController.signal.aborted) break;
-
-        const parsed = parseBrowserResponse(rawResponse);
-
-        if (!parsed) {
-          console.error('Error: could not parse AI response.');
-          console.error(`Raw response: ${rawResponse}`);
-          break;
-        }
-
-        if (parsed.type === 'done') {
-          console.error(`\nDone! ${getRandomKaomoji()}`);
-          console.error(`Reasoning: ${parsed.reasoning}`);
-          break;
-        }
-
-        let stopped = false;
-        for (const action of parsed.actions) {
-          if (abortController.signal.aborted) {
-            stopped = true;
-            break;
-          }
-
-          console.error(`\nAction:    ${describeBrowserAction(action)}`);
-          console.error(`Reasoning: ${action.reasoning}`);
-
-          const ok = await confirm(rl, 'Execute this action?', config.yes);
-          if (!ok || abortController.signal.aborted) {
-            console.error('Stopped.');
-            stopped = true;
-            break;
-          }
-
-          try {
-            await executeBrowserAction(action, page);
-            console.error('Executed.\n');
-          } catch (execErr) {
-            console.error(
-              `Action failed: ${execErr instanceof Error ? execErr.message : 'Unknown error'}`,
-            );
-          }
-        }
-        if (stopped) break;
-
-        round++;
-      }
-
-      if (round >= config.maxRounds && !abortController.signal.aborted) {
-        console.error(`Max rounds (${config.maxRounds}) reached.`);
-      }
-
-      rl.close();
-    } catch (error) {
-      rl.close();
-      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    const target = command === 'browse' ? 'browser' : config.controlTarget;
+    if (target !== 'screen' && target !== 'browser') {
+      console.error(`Error: --target must be 'screen' or 'browser' (got: '${target}')`);
       process.exit(1);
     }
+
+    if (target === 'browser') {
+      await runBrowserControl(task, config);
+    } else {
+      await runScreenControl(task, config);
+    }
+  } else if (command === 'note') {
+    // ASKII Note — notes / tasks / reminders, persisted to ~/.askii/notes.json
+    const subcommand = positional[1] ?? 'list';
+    const noteArgs = positional.slice(2);
+    await runNoteCommand(subcommand, noteArgs, flags, config);
   } else {
     console.error(`Unknown command: ${command}`);
     printHelp();
