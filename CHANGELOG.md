@@ -6,6 +6,12 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-25
+
+### Fixed
+
+- **ASKII Note icons & panel now render**: a JavaScript syntax error (a stray double comma) in the redesigned Note panel's inline script prevented the entire webview script from running — no icons appeared in the toolbar, chips or entry actions, the notes list stayed empty, and search / filters / the composer were unresponsive. The script now parses cleanly and the full panel works.
+
 ## [0.5.0] - 2026-09-23
 
 ### Added

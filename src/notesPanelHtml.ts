@@ -482,7 +482,7 @@ export function getNotePanelHtml(
         edit: '<path d="M11.25 2 14 4.75 6.25 12.5 3 13l.5-3.25z"/><path d="m10 3.25 2.75 2.75"/>',
         trash: '<path d="M2.75 4.5h10.5"/><path d="M6.25 4.5V2.75h3.5V4.5"/><path d="M4.25 4.5l.75 8.75h6l.75-8.75"/><path d="M6.75 7v4M9.25 7v4"/>',
         camera: '<rect x="1.75" y="4.25" width="12.5" height="9" rx="1.5"/><path d="M5.25 4.25 6.25 2.5h3.5l1 1.75"/><circle cx="8" cy="8.75" r="2.25"/>',
-        mic: '<rect x="6" y="1.75" width="4" height="8.25" rx="2"/><path d="M3.5 7.75a4.5 4.5 0 0 0 9 0"/><path d="M8 12.25v2"/>',,
+        mic: '<rect x="6" y="1.75" width="4" height="8.25" rx="2"/><path d="M3.5 7.75a4.5 4.5 0 0 0 9 0"/><path d="M8 12.25v2"/>',
         send: '<path d="M14.25 1.75 1.75 7l4.75 2 2 4.75z"/><path d="M14.25 1.75 6.5 9"/>',
         search: '<circle cx="6.75" cy="6.75" r="4.5"/><path d="m10.5 10.5 3.25 3.25"/>',
         close: '<path d="m4 4 8 8M12 4l-8 8"/>',
