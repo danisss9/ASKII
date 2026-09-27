@@ -2,6 +2,8 @@
 
 An AI code assistant for VS Code with style — ask about your code, have it edited for you, run agentic tasks, drive your screen or a browser, and keep AI-classified notes, tasks and reminders. Bring your own LLM: ASKII Cloud, Ollama, LM Studio, OpenAI, Anthropic, or opencode Go.
 
+**Install:** [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=danisss9.askii) · [Open VSX](https://open-vsx.org/extension/danisss9/askii) · [CLI on npm](https://www.npmjs.com/package/askii-cli)
+
 ## Quick start
 
 1. Install ASKII from the VS Code Marketplace — or build it from source (see [Development](#development))

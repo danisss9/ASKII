@@ -6,6 +6,12 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-09-27
+
+### Added
+
+- **Open VSX publishing**: releases now also publish the extension to [open-vsx.org](https://open-vsx.org) from the release workflow.
+
 ## [0.5.1] - 2026-09-25
 
 ### Fixed

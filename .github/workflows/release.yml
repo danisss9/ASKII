@@ -74,3 +74,11 @@ jobs:
 
       - name: Publish VS Code extension
         run: npx @vscode/vsce publish --packagePath askii-${{ steps.version.outputs.VERSION }}.vsix --pat ${{ secrets.MARKETPLACE_PAT }}
+
+      # ── Open VSX (open-vsx.org) ───────────────────────────────────────────
+      # Requires an OPEN_VSX_PAT secret: log in at https://open-vsx.org with
+      # the GitHub account that owns the namespace (danisss9) and create an
+      # access token under User Settings → Access Tokens.
+
+      - name: Publish VS Code extension to Open VSX
+        run: npx ovsx publish askii-${{ steps.version.outputs.VERSION }}.vsix --pat ${{ secrets.OPEN_VSX_PAT }}
