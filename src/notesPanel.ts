@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import { randomBytes } from 'crypto';
-import { type NoteEntry, type NoteKind, searchNotes } from '@common/notes';
+import { type NoteEntry, type NoteKind, searchNotes, describeRecurrence, describeEventTrigger } from '@common/notes';
 import {
   loadNotes,
   saveNotes,
@@ -15,15 +14,12 @@ import {
 import { rescheduleAll, onNotesChanged } from './notesScheduler';
 import { getNotePanelHtml } from './notesPanelHtml';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
-import { startVoiceRecording, type VoiceRecording } from './voiceRecorder';
-import { getExtensionTranscription } from './providers';
 
 // ── Single-instance panel ────────────────────────────────────────────────────
 
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentContext: vscode.ExtensionContext | undefined;
 let notesChangedSub: vscode.Disposable | undefined;
-let activeRecording: VoiceRecording | undefined;
 
 export async function askiiNoteCommand(
   context: vscode.ExtensionContext,
@@ -72,9 +68,6 @@ export async function askiiNoteCommand(
     currentPanel = undefined;
     notesChangedSub?.dispose();
     notesChangedSub = undefined;
-    // Mic capture outlives the panel only until the file is finalized — then it is discarded.
-    activeRecording?.cancel();
-    activeRecording = undefined;
   });
 
   currentPanel = panel;
@@ -96,9 +89,9 @@ let lastQuery = '';
 let lastKinds: NoteKind[] = [];
 
 function refreshList(query?: string, kinds?: NoteKind[]): void {
-  if (!currentPanel || !currentContext) return;
-  if (query !== undefined) lastQuery = query;
-  if (kinds !== undefined) lastKinds = kinds;
+  if (!currentPanel || !currentContext) {return;}
+  if (query !== undefined) {lastQuery = query;}
+  if (kinds !== undefined) {lastKinds = kinds;}
   const all = loadNotes(currentContext);
   const stats = {
     tasksDone: all.filter((n) => n.kind === 'task' && n.done).length,
@@ -115,7 +108,7 @@ function refreshList(query?: string, kinds?: NoteKind[]): void {
         .asWebviewUri(vscode.Uri.file(n.screenshotPath))
         .toString();
     }
-    return { ...n, screenshotUri };
+    return { ...n, screenshotUri, recurLabel: n.recur ? describeRecurrence(n.recur) : undefined, eventLabel: n.event ? describeEventTrigger(n.event) : undefined };
   });
   currentPanel.webview.postMessage({ type: 'entries', entries, stats });
 }
@@ -127,7 +120,7 @@ async function handleWebviewMessage(
   context: vscode.ExtensionContext,
   msg: unknown,
 ): Promise<void> {
-  if (typeof msg !== 'object' || msg === null) return;
+  if (typeof msg !== 'object' || msg === null) {return;}
   const m = msg as { type: string; [k: string]: unknown };
 
   switch (m.type) {
@@ -145,7 +138,7 @@ async function handleWebviewMessage(
 
     case 'submit': {
       const text = typeof m.text === 'string' ? m.text.trim() : '';
-      if (!text) break;
+      if (!text) {break;}
       const attachScreenshot = m.attachScreenshot === true;
       panel.webview.postMessage({
         type: 'status',
@@ -174,6 +167,8 @@ async function handleWebviewMessage(
             kind: 'note',
             priority: null,
             dueAt: null,
+            recur: null,
+            event: null,
             tags: cls.tags,
             needsClarification: false,
             clarifyingQuestion: null,
@@ -199,7 +194,7 @@ async function handleWebviewMessage(
 
     case 'deleteEntry': {
       const id = typeof m.id === 'string' ? m.id : '';
-      if (!id) break;
+      if (!id) {break;}
       const notes = loadNotes(context).filter((n) => n.id !== id);
       saveNotes(context, notes);
       rescheduleAll(notes);
@@ -209,12 +204,17 @@ async function handleWebviewMessage(
 
     case 'toggleTask': {
       const id = typeof m.id === 'string' ? m.id : '';
-      if (!id) break;
+      if (!id) {break;}
       const notes = loadNotes(context);
       const i = notes.findIndex((n) => n.id === id);
       if (i !== -1 && notes[i].kind === 'task') {
         notes[i].done = !notes[i].done;
+        if (notes[i].dueAt) {
+          // Done tasks stop firing their deadline; un-completing re-arms it.
+          notes[i].fired = notes[i].done ? true : false;
+        }
         saveNotes(context, notes);
+        rescheduleAll(notes);
       }
       refreshList();
       break;
@@ -223,7 +223,7 @@ async function handleWebviewMessage(
     case 'updateEntry': {
       const id = typeof m.id === 'string' ? m.id : '';
       const text = typeof m.text === 'string' ? m.text : '';
-      if (!id) break;
+      if (!id) {break;}
       if (updateNoteText(context, id, text)) {
         panel.webview.postMessage({ type: 'status', status: 'done', kaomoji: getRandomKaomoji() });
       }
@@ -233,12 +233,12 @@ async function handleWebviewMessage(
 
     case 'reclassify': {
       const id = typeof m.id === 'string' ? m.id : '';
-      if (!id) break;
+      if (!id) {break;}
       const notes = loadNotes(context);
       const i = notes.findIndex((n) => n.id === id);
-      if (i === -1) break;
+      if (i === -1) {break;}
       // Optionally apply an in-progress edit before re-running classification.
-      if (typeof m.text === 'string' && m.text.trim()) notes[i].text = m.text.trim();
+      if (typeof m.text === 'string' && m.text.trim()) {notes[i].text = m.text.trim();}
       const n = notes[i];
       panel.webview.postMessage({
         type: 'status',
@@ -251,9 +251,14 @@ async function handleWebviewMessage(
       n.summary = cls.summary;
       n.priority = cls.kind === 'task' ? (cls.priority ?? 'medium') : undefined;
       n.done = cls.kind === 'task' ? (n.done ?? false) : undefined;
-      n.dueAt = cls.kind === 'reminder' ? (cls.dueAt ?? undefined) : undefined;
-      n.fired = cls.kind === 'reminder' ? false : undefined;
+      const triggered =
+        cls.kind === 'reminder' || (cls.kind === 'task' && (Boolean(cls.dueAt) || Boolean(cls.event)));
+      n.dueAt = triggered ? (cls.dueAt ?? undefined) : undefined;
+      n.fired = triggered ? false : undefined;
       n.missed = cls.kind === 'reminder' ? false : undefined;
+      // Recurring tasks and event triggers are allowed too — they ride on the trigger.
+      n.recur = triggered ? (cls.recur ?? undefined) : undefined;
+      n.event = triggered ? (cls.event ?? undefined) : undefined;
       saveNotes(context, notes);
       rescheduleAll(notes);
       panel.webview.postMessage({ type: 'status', status: 'done', kaomoji: getRandomKaomoji() });
@@ -263,7 +268,7 @@ async function handleWebviewMessage(
 
     case 'togglePin': {
       const id = typeof m.id === 'string' ? m.id : '';
-      if (!id) break;
+      if (!id) {break;}
       const notes = loadNotes(context);
       const i = notes.findIndex((n) => n.id === id);
       if (i !== -1) {
@@ -276,7 +281,7 @@ async function handleWebviewMessage(
 
     case 'snoozeReminder': {
       const id = typeof m.id === 'string' ? m.id : '';
-      if (!id) break;
+      if (!id) {break;}
       const minutes =
         typeof m.minutes === 'number' && m.minutes > 0 ? m.minutes : getSnoozeMinutes();
       if (snoozeNote(context, id, minutes)) {
@@ -288,7 +293,7 @@ async function handleWebviewMessage(
 
     case 'dismissReminder': {
       const id = typeof m.id === 'string' ? m.id : '';
-      if (!id) break;
+      if (!id) {break;}
       const notes = loadNotes(context);
       const i = notes.findIndex((n) => n.id === id);
       if (i !== -1 && notes[i].kind === 'reminder') {
@@ -309,83 +314,13 @@ async function handleWebviewMessage(
       }
       break;
     }
-
-    case 'voiceStart': {
-      void beginVoiceCapture(panel, context);
-      break;
-    }
-
-    case 'voiceStop': {
-      void finishVoiceCapture(panel);
-      break;
-    }
-  }
-}
-
-// ── Voice input ───────────────────────────────────────────────────────────────
-
-async function beginVoiceCapture(
-  panel: vscode.WebviewPanel,
-  context: vscode.ExtensionContext,
-): Promise<void> {
-  if (activeRecording) return;
-  try {
-    const recording = await startVoiceRecording(context, (level) => {
-      panel.webview.postMessage({ type: 'voiceLevel', level });
-    });
-    activeRecording = recording;
-    // Duration cap reached / device vanished: wrap up like a user stop so the
-    // captured audio is still transcribed instead of being dropped silently.
-    recording.onAutoEnd(() => {
-      if (activeRecording === recording) void finishVoiceCapture(panel);
-    });
-    panel.webview.postMessage({ type: 'voiceStarted' });
-  } catch (err) {
-    panel.webview.postMessage({
-      type: 'voiceError',
-      error: err instanceof Error ? err.message : 'Voice input failed to start.',
-    });
-  }
-}
-
-async function finishVoiceCapture(panel: vscode.WebviewPanel): Promise<void> {
-  const recording = activeRecording;
-  activeRecording = undefined;
-  if (!recording) return;
-  panel.webview.postMessage({
-    type: 'status',
-    status: 'thinking',
-    kaomoji: `${getRandomThinkingKaomoji()} transcribing…`,
-  });
-  try {
-    const file = await recording.stop();
-    let audio: Buffer;
-    try {
-      audio = await fs.promises.readFile(file);
-    } finally {
-      void fs.promises.unlink(file).catch(() => undefined);
-    }
-    const text = await getExtensionTranscription(audio);
-    if (!text) {
-      panel.webview.postMessage({
-        type: 'voiceError',
-        error: 'No speech was detected in the recording.',
-      });
-    } else {
-      panel.webview.postMessage({ type: 'voiceText', text });
-    }
-  } catch (err) {
-    panel.webview.postMessage({
-      type: 'voiceError',
-      error: err instanceof Error ? err.message : 'Transcription failed.',
-    });
   }
 }
 
 function waitForClarifyAnswer(panel: vscode.WebviewPanel): Promise<string | null> {
   return new Promise((resolve) => {
     const disp = panel.webview.onDidReceiveMessage((msg: unknown) => {
-      if (typeof msg !== 'object' || msg === null) return;
+      if (typeof msg !== 'object' || msg === null) {return;}
       const m = msg as { type: string; answer?: unknown };
       if (m.type === 'clarifyAnswer') {
         disp.dispose();

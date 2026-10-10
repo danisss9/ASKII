@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { getExtensionResponse } from './providers';
+import { getExtensionResponse, getEnabledWikiContext } from './providers';
 
 export const INLINE_ACCEPT_COMMAND = 'askii.inlineCompletionAccepted';
 
@@ -228,7 +228,24 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
       ? `Current selection:\n${ctx.selectionText}\n\n`
       : '';
 
+    // Retrieval context from every enabled wiki (docs + code). The local line
+    // plus a slice of the trailing code steers the semantic search; the result
+    // is capped so wiki lookups never bloat completion latency or prompts.
+    let wikiSection = '';
+    try {
+      const wikiContext = await getEnabledWikiContext(
+        `${ctx.linePrefix} ${ctx.suffix.slice(0, 200)}`.trim() || ctx.fileName,
+        1,
+      );
+      if (wikiContext) {
+        wikiSection = `Relevant context from the workspace wikis:\n${wikiContext.slice(0, 1200)}\n\n`;
+      }
+    } catch {
+      // wiki retrieval must never break completion — proceed without context
+    }
+
     const prompt =
+      wikiSection +
       `File: ${ctx.fileName} (language: ${ctx.languageId})\n\n` +
       selectionSection +
       `Code before cursor:\n${ctx.prefix}\n` +

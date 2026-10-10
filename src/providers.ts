@@ -16,16 +16,14 @@ import {
   getOpenCodeGoChat,
   getOpenCodeGoChatStreaming,
   OPENCODE_GO_URL,
-  getOpenCodeGoHeaders,
   getAskiiCloudResponse,
   getAskiiCloudChat,
   getAskiiCloudChatStreaming,
   ASKII_CLOUD_URL,
-  transcribeAudio,
-  lmStudioRestBase,
   type ChatMessage,
 } from '@common/providers';
-import { loadWikiIndex, searchWikiRaw } from '@common/wiki';
+import { hasWikiIndex, searchWikiRaw } from '@common/wiki';
+import { hasCodeWikiIndex, searchCodeWikiRaw } from '@common/codewiki';
 import { getProviderApiKey, isProviderStructurallyConfigured } from './providerSecrets';
 import { getProviderDefinition, isProviderId } from './setupCore';
 
@@ -186,53 +184,6 @@ export async function getExtensionChatStreaming(
 }
 
 /**
- * Transcribes a voice-note recording (webm/opus bytes) to text using the
- * `askii.sttPlatform` / `askii.sttModel` settings via OpenAI-compatible
- * /audio/transcriptions endpoints.
- */
-export async function getExtensionTranscription(audio: Buffer): Promise<string> {
-  const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('sttPlatform') || 'askiicloud';
-  const model = config.get<string>('sttModel') || 'whisper-1';
-
-  if (platform === 'openai') {
-    const apiKey = await getProviderApiKey('openai');
-    const baseURL = config.get<string>('openaiUrl') || undefined;
-    return transcribeAudio(audio, 'note.webm', 'audio/webm', apiKey, model, baseURL);
-  } else if (platform === 'lmstudio') {
-    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
-    // LM Studio's REST server accepts any bearer token; the SDK key is unused locally.
-    return transcribeAudio(
-      audio,
-      'note.webm',
-      'audio/webm',
-      'lm-studio',
-      model,
-      lmStudioRestBase(url),
-    );
-  } else if (platform === 'opencodego') {
-    const apiKey = await getProviderApiKey('opencodego');
-    return transcribeAudio(
-      audio,
-      'note.webm',
-      'audio/webm',
-      apiKey,
-      model,
-      OPENCODE_GO_URL,
-      getOpenCodeGoHeaders(),
-    );
-  } else if (platform === 'askiicloud') {
-    const apiKey = await getProviderApiKey('askiicloud');
-    return transcribeAudio(audio, 'note.webm', 'audio/webm', apiKey, model, ASKII_CLOUD_URL);
-  } else {
-    throw new Error(
-      `Speech-to-text is not available on ${platform}. ` +
-        'Set askii.sttPlatform to a transcription-capable platform (openai, askiicloud, lmstudio or opencodego).',
-    );
-  }
-}
-
-/**
  * Validates the currently configured LLM provider and returns an actionable
  * error message if something is wrong, or null if the config looks good.
  *
@@ -263,6 +214,56 @@ export async function validateProviderConfig(): Promise<string | null> {
   return null;
 }
 
+/**
+ * Gathers retrieval context from every wiki enabled in settings — the docs
+ * wiki (askii.wikiEnabled) and the code wiki (askii.codeWikiEnabled) — and
+ * returns the hits as labeled sections. Returns an empty string when no wiki
+ * is enabled/indexed or nothing matches; retrieval errors degrade silently.
+ */
+export async function getEnabledWikiContext(query: string, topK = 2): Promise<string> {
+  const q = query.trim();
+  if (!q) return '';
+  const config = vscode.workspace.getConfiguration('askii');
+  const sections: string[] = [];
+
+  if (config.get<boolean>('wikiEnabled') ?? false) {
+    const wikiPath = config.get<string>('wikiPath') ?? '';
+    if (wikiPath && hasWikiIndex(wikiPath)) {
+      try {
+        const hits = await searchWikiRaw(wikiPath, q, topK);
+        if (hits.length > 0) {
+          sections.push(
+            'Documentation:\n' +
+              hits.map((h) => `[${h.source} — ${h.heading}]\n${h.content}`).join('\n\n---\n\n'),
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Search failed';
+        console.error(`[askii wiki] ${message}`);
+      }
+    }
+  }
+
+  if (config.get<boolean>('codeWikiEnabled') ?? false) {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (root && hasCodeWikiIndex(root)) {
+      try {
+        const hits = await searchCodeWikiRaw(root, q, topK);
+        if (hits.length > 0) {
+          sections.push(
+            'Code:\n' + hits.map((h) => `[${h.heading}]\n${h.content}`).join('\n\n---\n\n'),
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Search failed';
+        console.error(`[askii code wiki] ${message}`);
+      }
+    }
+  }
+
+  return sections.join('\n\n---\n\n');
+}
+
 export async function getLLMExplanation(
   lineText: string,
   abortSignal?: AbortSignal,
@@ -272,20 +273,21 @@ export async function getLLMExplanation(
   const model = resolveModel(config, platform, config.get<string>('llmInlineModel'));
   const mode = config.get<string>('inlineHelperMode') || 'funny';
 
-  if (mode === 'off') return '';
+  if (mode === 'off') {return '';}
 
-  // Wiki mode: search the index for context, then ask the LLM with that context
+  // Wiki mode: search every enabled wiki (docs + code) for context, then ask
+  // the LLM with that context
   let wikiContext = '';
   if (mode === 'wiki') {
-    const wikiPath = config.get<string>('wikiPath') ?? '';
-    if (!wikiPath) return 'Set askii.wikiPath to enable wiki mode';
-    const data = loadWikiIndex(wikiPath);
-    if (!data) return 'Run "ASKII: Reload Wiki" to build the index';
-    const hits = searchWikiRaw(lineText, data, 2);
-    if (hits.length > 0) {
-      wikiContext = hits
-        .map((h) => `[${h.source} — ${h.heading}]\n${h.content}`)
-        .join('\n\n---\n\n');
+    wikiContext = await getEnabledWikiContext(lineText, 2);
+    if (!wikiContext) {
+      const wikiPath = config.get<string>('wikiPath') ?? '';
+      const wikiSetUp =
+        ((config.get<boolean>('wikiEnabled') ?? false) && !!wikiPath) ||
+        (config.get<boolean>('codeWikiEnabled') ?? false);
+      return wikiSetUp
+        ? 'Run "ASKII: Reload Wikis" to build the wiki index'
+        : 'Enable wiki RAG (set askii.wikiPath) or Code Wiki (askii.codeWikiEnabled), then run "ASKII: Reload Wikis"';
     }
   }
 
@@ -293,36 +295,36 @@ export async function getLLMExplanation(
   const systemPrompt = isHelpful
     ? 'You are ASKII, a helpful coding assistant. Provide clear, concise explanations.'
     : 'You are ASKII, a witty coding assistant. Provide humorous comments.';
-  const wikiSection = wikiContext ? `Relevant documentation:\n${wikiContext}\n\n` : '';
+  const wikiSection = wikiContext ? `Relevant context:\n${wikiContext}\n\n` : '';
   const userPrompt = isHelpful
     ? `${wikiSection}Explain this code in one sentence: ${lineText}`
     : `Make a funny comment about this code in one sentence: ${lineText}`;
 
   try {
-    if (abortSignal?.aborted) throw new Error('Request cancelled');
+    if (abortSignal?.aborted) {throw new Error('Request cancelled');}
 
     if (platform === 'lmstudio') {
       const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       const result = await getLMStudioResponse(userPrompt, url, model, systemPrompt);
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       return result || 'No explanation available.';
     } else if (platform === 'openai') {
       const apiKey = await getProviderApiKey('openai');
       const baseURL = config.get<string>('openaiUrl') || undefined;
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       const result = await getOpenAIResponse(userPrompt, apiKey, model, baseURL, systemPrompt);
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       return result || 'No explanation available.';
     } else if (platform === 'anthropic') {
       const apiKey = await getProviderApiKey('anthropic');
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       const result = await getAnthropicResponse(userPrompt, apiKey, model, systemPrompt);
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       return result || 'No explanation available.';
     } else if (platform === 'opencodego') {
       const apiKey = await getProviderApiKey('opencodego');
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       const result = await getOpenCodeGoResponse(
         userPrompt,
         apiKey,
@@ -330,11 +332,11 @@ export async function getLLMExplanation(
         OPENCODE_GO_URL,
         systemPrompt,
       );
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       return result || 'No explanation available.';
     } else if (platform === 'askiicloud') {
       const apiKey = await getProviderApiKey('askiicloud');
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       const result = await getAskiiCloudResponse(
         userPrompt,
         apiKey,
@@ -342,17 +344,17 @@ export async function getLLMExplanation(
         ASKII_CLOUD_URL,
         systemPrompt,
       );
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       return result || 'No explanation available.';
     } else {
       const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       const result = await getOllamaResponse(userPrompt, url, model, systemPrompt);
-      if (abortSignal?.aborted) throw new Error('Request cancelled');
+      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
       return result || 'No explanation available.';
     }
   } catch (error) {
-    if (abortSignal?.aborted) throw error;
+    if (abortSignal?.aborted) {throw error;}
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return `Error: ${errorMessage}`;
   }

@@ -41,6 +41,8 @@ interface OptionalSettings {
   wikiEnabled: boolean;
   wikiPath: string;
   wikiAutoReload: boolean;
+  codeWikiEnabled: boolean;
+  codeWikiAutoReload: boolean;
   chromePath: string;
   commitMessageInstructions: string;
 }
@@ -75,6 +77,8 @@ function getOptionalSettings(config: vscode.WorkspaceConfiguration): OptionalSet
     wikiEnabled: config.get<boolean>('wikiEnabled') ?? false,
     wikiPath: config.get<string>('wikiPath') ?? '',
     wikiAutoReload: config.get<boolean>('wikiAutoReload') ?? false,
+    codeWikiEnabled: config.get<boolean>('codeWikiEnabled') ?? false,
+    codeWikiAutoReload: config.get<boolean>('codeWikiAutoReload') ?? false,
     chromePath: config.get<string>('chromePath') ?? '',
     commitMessageInstructions: config.get<string>('commitMessageInstructions') ?? '',
   };
@@ -316,6 +320,8 @@ function parseOptionalSettings(message: Record<string, unknown>): OptionalSettin
     wikiEnabled: message.wikiEnabled === true,
     wikiPath: messageString(message, 'wikiPath'),
     wikiAutoReload: message.wikiAutoReload === true,
+    codeWikiEnabled: message.codeWikiEnabled === true,
+    codeWikiAutoReload: message.codeWikiAutoReload === true,
     chromePath: messageString(message, 'chromePath'),
     commitMessageInstructions: messageString(message, 'commitMessageInstructions'),
   };
@@ -535,6 +541,9 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
       <div class="option"><input id="wikiEnabled" type="checkbox"><div class="option-body"><label for="wikiEnabled">Enable wiki RAG</label><span class="hint">Use the wiki as retrieval context for Ask, Edit, and Do. Requires a wiki folder and an index built via ASKII: Reload Wiki.</span></div></div>
       <div class="option"><div class="option-body"><label for="wikiPathInput">Wiki folder</label><span class="hint">Folder of .md documentation files used for wiki RAG context. Run ASKII: Reload Wiki to index it.</span><div class="pick-row"><input id="wikiPathInput" type="text" spellcheck="false" placeholder="Absolute path to your wiki folder"><button id="wikiPathBrowse" class="btn secondary small" type="button">Browse…</button></div></div></div>
       <div class="option"><input id="wikiAutoReload" type="checkbox"><div class="option-body"><label for="wikiAutoReload">Auto-reload wiki on startup</label><span class="hint">Rebuild and reload the wiki index whenever the extension starts. Requires wiki RAG and a wiki folder.</span></div></div>
+      <h3>Code wiki</h3>
+      <div class="option"><input id="codeWikiEnabled" type="checkbox"><div class="option-body"><label for="codeWikiEnabled">Enable code wiki</label><span class="hint">Vector index over workspace code (code files only) used as retrieval context for Ask, Edit, and Do. Runs the embeddinggemma2 model locally — the first index build downloads it once — then run ASKII: Reload Wikis.</span></div></div>
+      <div class="option"><input id="codeWikiAutoReload" type="checkbox"><div class="option-body"><label for="codeWikiAutoReload">Auto-reload code wiki on startup</label><span class="hint">Rebuild the code wiki index whenever the extension starts. Unchanged files are reused, so only edits are re-embedded. Requires code wiki.</span></div></div>
       <div class="option"><div class="option-body"><label for="commitRulesInput">Commit rules file</label><span class="hint">.md file with custom instructions appended to the commit message prompt. Absolute or workspace-relative. Leave empty for the built-in rules.</span><div class="pick-row"><input id="commitRulesInput" type="text" spellcheck="false" placeholder="Absolute or workspace-relative .md path"><button id="commitRulesBrowse" class="btn secondary small" type="button">Browse…</button></div></div></div>
       <div id="wikiError" class="error" role="alert"></div>
       <div class="actions"><button id="wikiBack" class="btn secondary">Back</button><span class="spacer"></span><button id="ignore" class="btn secondary">Ignore</button><button id="finish" class="btn">Finish</button></div>
@@ -592,6 +601,8 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
     document.getElementById('wikiEnabled').checked = state.options.wikiEnabled;
     document.getElementById('wikiPathInput').value = state.options.wikiPath;
     document.getElementById('wikiAutoReload').checked = state.options.wikiAutoReload;
+    document.getElementById('codeWikiEnabled').checked = state.options.codeWikiEnabled;
+    document.getElementById('codeWikiAutoReload').checked = state.options.codeWikiAutoReload;
     document.getElementById('chromePathInput').value = state.options.chromePath;
     document.getElementById('commitRulesInput').value = state.options.commitMessageInstructions;
 
@@ -619,7 +630,7 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
     wirePathPicker('wikiPathInput', 'wikiPathBrowse', 'wikiPath');
     wirePathPicker('chromePathInput', 'chromePathBrowse', 'chromePath');
     wirePathPicker('commitRulesInput', 'commitRulesBrowse', 'commitMessageInstructions');
-    function finishPayload() { return { inlineCompletionEnabled: document.getElementById('inlineCompletionEnabled').checked, inlineCompletionEagerness: document.getElementById('inlineCompletionEagerness').value, inlineHelperMode: document.getElementById('inlineHelperMode').value, formatAfterEdit: document.getElementById('formatAfterEdit').checked, doAutoConfirm: document.getElementById('doAutoConfirm').checked, wikiEnabled: document.getElementById('wikiEnabled').checked, wikiPath: document.getElementById('wikiPathInput').value.trim(), wikiAutoReload: document.getElementById('wikiAutoReload').checked, chromePath: document.getElementById('chromePathInput').value.trim(), commitMessageInstructions: document.getElementById('commitRulesInput').value.trim() }; }
+    function finishPayload() { return { inlineCompletionEnabled: document.getElementById('inlineCompletionEnabled').checked, inlineCompletionEagerness: document.getElementById('inlineCompletionEagerness').value, inlineHelperMode: document.getElementById('inlineHelperMode').value, formatAfterEdit: document.getElementById('formatAfterEdit').checked, doAutoConfirm: document.getElementById('doAutoConfirm').checked, wikiEnabled: document.getElementById('wikiEnabled').checked, wikiPath: document.getElementById('wikiPathInput').value.trim(), wikiAutoReload: document.getElementById('wikiAutoReload').checked, codeWikiEnabled: document.getElementById('codeWikiEnabled').checked, codeWikiAutoReload: document.getElementById('codeWikiAutoReload').checked, chromePath: document.getElementById('chromePathInput').value.trim(), commitMessageInstructions: document.getElementById('commitRulesInput').value.trim() }; }
     document.getElementById('finish').addEventListener('click', () => { setFinalActions(true); vscode.postMessage({ type: 'finish', ...finishPayload() }); });
 
     window.addEventListener('message', (event) => {

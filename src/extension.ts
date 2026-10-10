@@ -52,12 +52,15 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.workspace.registerTextDocumentContentProvider('askii-diff', askiiDiffProvider),
   );
 
-  // Auto-reload wiki on startup if configured
+  // Auto-reload enabled wikis on startup if configured
   const wikiConfig = vscode.workspace.getConfiguration('askii');
-  if (
+  const docsWikiReload =
     (wikiConfig.get<boolean>('wikiEnabled') ?? false) &&
-    (wikiConfig.get<boolean>('wikiAutoReload') ?? false)
-  ) {
+    (wikiConfig.get<boolean>('wikiAutoReload') ?? false);
+  const codeWikiReload =
+    (wikiConfig.get<boolean>('codeWikiEnabled') ?? false) &&
+    (wikiConfig.get<boolean>('codeWikiAutoReload') ?? false);
+  if (docsWikiReload || codeWikiReload) {
     askiiReloadWikiCommand();
   }
   const decorationType = vscode.window.createTextEditorDecorationType({
@@ -144,8 +147,8 @@ export async function activate(context: vscode.ExtensionContext) {
           command: 'askii.noteTask',
         },
         {
-          label: '$(book) Reload Wiki',
-          description: 'Reindex wiki docs',
+          label: '$(book) Reload Wikis',
+          description: 'Reindex enabled wikis (docs + code)',
           command: 'askii.reloadWiki',
         },
         {

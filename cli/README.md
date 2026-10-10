@@ -54,7 +54,7 @@ Bare text keeps the full conversation across turns (`/clear` resets it). Tab com
 | `/explain <text>`                    | Explain a line of code                                      |
 | `/commit`                            | Generate a commit message from the staged/working-tree diff |
 | `/note <subcommand>`                 | Notes / tasks / reminders (same as the `note` command)      |
-| `/wiki-reload`                       | Rebuild the wiki index                                      |
+| `/wiki-reload`                       | Reload the enabled wiki indexes (docs and/or code)           |
 | `/platform <name>` · `/model <name>` | Switch platform / model for the session                     |
 | `/config`                            | Show session config (keys redacted)                         |
 | `/clear`                             | Clear chat history                                          |
@@ -100,6 +100,7 @@ Prints the working directory's top-level listing, then loops until the AI return
 | ---------------------------------------------------------------- | --------------------------------------------------------------- | ------------ |
 | `list`, `view`, `search`                                         | Explore the workspace (`list` labels `[file]` / `[folder]`)     | No           |
 | `wiki_search`                                                    | BM25 search over indexed `.md` docs (needs `--use-wiki`)        | No           |
+| `code_search`                                                    | Semantic vector search over indexed workspace code (needs `--use-code-wiki`) | No |
 | `create`, `write`, `modify`, `rename`, `copy`, `mkdir`, `delete` | Write files (existing files are backed up to `.askii/backups/`) | Yes          |
 | `run`                                                            | Run a shell command                                             | Yes (always) |
 
@@ -148,18 +149,31 @@ askii browse --ollama-model llava "go to https://example.com and click Learn mor
 
 Browse drives a Puppeteer browser (visible by default, `--headless` to hide) with `goto`, `click`, `type`, `wait_for`, `back`, `forward` or `DONE`. Requires a **vision-capable model** and a Chromium-based browser — auto-detected (Chrome, Edge, Chromium, Brave), or set `--chrome-path` / `ASKII_CHROME_PATH`.
 
-### wiki-reload — index docs for RAG
+### wiki-reload — reload the enabled wikis
 
 ```bash
 askii wiki-reload --wiki-path ./docs
+askii wiki-reload --use-code-wiki
 ```
 
-Splits the `.md` files under `--wiki-path` by heading and builds a [MiniSearch](https://github.com/lucaong/minisearch) BM25 index (`.askii-wiki-index.json` inside the wiki folder). Re-run whenever the docs change. Then add `--wiki-path` and `--use-wiki` to inject the top matching chunks into any `ask`, `edit` or `do`:
+Reloads every wiki enabled via flags/env:
+
+- **Docs wiki** (when `--wiki-path` is set): splits the `.md` files by heading and builds a vector index in `.askii-wiki-index/` inside the wiki folder. Then add `--wiki-path` and `--use-wiki` to inject the top matching chunks into any `ask`, `edit` or `do`:
 
 ```bash
 askii ask --wiki-path ./docs --use-wiki "how do I configure the database?"
 askii do --wiki-path ./docs --use-wiki "implement the auth flow described in the docs"
 ```
+
+- **Code wiki** (when `--use-code-wiki` is set): walks the workspace's code files (code only — no `.md`/`.txt`/`.json`/images), respecting the root `.gitignore`, and builds a vector index in `.askii/code-wiki/`. Rebuilds are incremental (unchanged files keep their vectors). Then add `--use-code-wiki` to inject relevant code chunks into `ask` / `edit` and to give `do` a semantic `code_search` action:
+
+```bash
+askii wiki-reload --use-code-wiki
+askii ask --use-code-wiki "where is buildDoSystemPrompt defined?"
+askii do --use-code-wiki "update the workspace actions to support undo"
+```
+
+Both wikis embed with **embeddinggemma2 running locally in JavaScript** (Transformers.js + ONNX — no API keys, no external services). The model downloads once (~314 MB) to `~/.askii/models` on first use.
 
 ## Options
 
@@ -192,6 +206,7 @@ askii do --wiki-path ./docs --use-wiki "implement the auth flow described in the
 | `--chrome-path`      | `ASKII_CHROME_PATH`      | Browser executable for `control --target browser`                       | auto-detect                     |
 | `--wiki-path`        | `ASKII_WIKI_PATH`        | Docs folder for wiki RAG                                                |                                 |
 | `--use-wiki`         | `ASKII_USE_WIKI=1`       | Inject wiki context into `ask` / `edit` / `do`                          |                                 |
+| `--use-code-wiki`    | `ASKII_USE_CODE_WIKI=1`  | Inject code wiki context into `ask` / `edit` / `do`                     |                                 |
 | `-h`, `--help`       |                          | Show help                                                               |                                 |
 
 ## Platforms

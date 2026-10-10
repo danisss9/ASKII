@@ -1,51 +1,31 @@
-import MiniSearch from 'minisearch';
 import * as fs from 'fs';
 import * as path from 'path';
+import { embedDocuments, embedQuery, EMBEDDING_MODEL_ID } from './embedder';
+import {
+  rebuildVectorIndex,
+  searchVectorIndex,
+  hasVectorIndex,
+  invalidateVectorCache,
+  type VectorChunk,
+  type VectorFileEntry,
+  type VectorHit,
+  type VectorIndexStats,
+  type VectorRebuildOptions,
+} from './vectordb';
 
-const INDEX_FILENAME = '.askii-wiki-index.json';
+// ── Docs wiki: vector index over .md documentation files ─────────────────────
+// Chunked by markdown headings; embeddings run locally via embeddinggemma2
+// (common/embedder.ts). The index lives in <wikiPath>/.askii-wiki-index/.
+
+const INDEX_DIRNAME = '.askii-wiki-index';
+const LEGACY_INDEX_FILENAME = '.askii-wiki-index.json'; // old MiniSearch index
 const DEFAULT_TOP_K = 3;
 const MAX_CHUNK_CHARS = 1500;
 
-// ── Document shape stored in MiniSearch ──────────────────────────────────────
+export type WikiStats = VectorIndexStats;
+export type WikiHit = VectorHit;
 
-interface WikiDoc {
-  id: string;
-  source: string;   // relative path to .md file
-  heading: string;  // section heading
-  content: string;  // chunk text (capped at MAX_CHUNK_CHARS)
-}
-
-// ── Persisted index shape ─────────────────────────────────────────────────────
-
-export interface WikiIndexData {
-  search: string;    // JSON produced by MiniSearch's toJSON()
-  builtAt: string;
-  fileCount: number;
-  chunkCount: number;
-}
-
-// ── In-memory caches (persist for the lifetime of the process) ────────────────
-
-// Raw WikiIndexData cached per wikiPath to avoid repeated disk reads
-const _dataCache = new Map<string, WikiIndexData>();
-
-// Deserialized MiniSearch instance cached by builtAt timestamp to avoid
-// repeated MiniSearch.loadJSON calls on every search
-let _msCache: { builtAt: string; ms: MiniSearch<WikiDoc> } | null = null;
-
-// ── MiniSearch configuration (must be identical for build and load) ───────────
-
-const MS_OPTIONS: ConstructorParameters<typeof MiniSearch<WikiDoc>>[0] = {
-  fields: ['heading', 'content'],
-  storeFields: ['source', 'heading', 'content'],
-  searchOptions: {
-    boost: { heading: 2 },
-    fuzzy: 0.2,
-    prefix: true,
-  },
-};
-
-// ── Internal helpers ──────────────────────────────────────────────────────────
+// ── File discovery ───────────────────────────────────────────────────────────
 
 function walkMdFiles(dir: string): string[] {
   const files: string[] = [];
@@ -59,157 +39,127 @@ function walkMdFiles(dir: string): string[] {
   return files;
 }
 
-function splitIntoChunks(
-  relPath: string,
-  content: string,
-): Array<{ heading: string; content: string }> {
-  const result: Array<{ heading: string; content: string }> = [];
-  const fileBase = path.basename(relPath, '.md');
+// ── Chunking (exported for tests) ────────────────────────────────────────────
+
+/** Split markdown into heading-delimited chunks, tracking line spans. */
+export function splitIntoChunks(content: string): Array<VectorChunk> {
+  const result: Array<VectorChunk> = [];
   const lines = content.split('\n');
 
-  let currentHeading = fileBase;
+  let currentHeading = 'overview';
+  let currentStart = 0;
   let currentLines: string[] = [];
 
-  const flush = () => {
+  const flush = (endLine: number): void => {
     const text = currentLines.join('\n').trim();
     if (text.length > 40) {
-      result.push({ heading: currentHeading, content: text.substring(0, MAX_CHUNK_CHARS) });
+      result.push({
+        heading: currentHeading,
+        startLine: currentStart + 1,
+        endLine,
+        text: text.substring(0, MAX_CHUNK_CHARS),
+      });
     }
   };
 
-  for (const line of lines) {
-    if (/^#{1,3}\s/.test(line)) {
-      flush();
-      currentHeading = line.replace(/^#+\s+/, '').trim();
+  for (let i = 0; i < lines.length; i++) {
+    if (/^#{1,3}\s/.test(lines[i])) {
+      flush(i);
+      currentHeading = lines[i].replace(/^#+\s+/, '').trim();
+      currentStart = i; // the heading line belongs to the chunk
       currentLines = [];
     } else {
-      currentLines.push(line);
+      currentLines.push(lines[i]);
     }
   }
-  flush();
-
-  if (result.length === 0 && content.trim().length > 40) {
-    result.push({ heading: fileBase, content: content.trim().substring(0, MAX_CHUNK_CHARS) });
-  }
+  flush(lines.length);
 
   return result;
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Spec ─────────────────────────────────────────────────────────────────────
 
-/**
- * Build a MiniSearch wiki index from all .md files under wikiPath.
- * Returns the index data ready to be saved.
- */
-export function buildWikiIndex(wikiPath: string): WikiIndexData {
-  const mdFiles = walkMdFiles(wikiPath);
-  const ms = new MiniSearch<WikiDoc>(MS_OPTIONS);
-  const docs: WikiDoc[] = [];
+function indexDirPath(wikiPath: string): string {
+  return path.join(wikiPath, INDEX_DIRNAME);
+}
 
-  for (const filePath of mdFiles) {
-    let content: string;
-    try {
-      content = fs.readFileSync(filePath, 'utf-8');
-    } catch {
-      continue;
-    }
-    const relPath = path.relative(wikiPath, filePath).replace(/\\/g, '/');
-    const chunks = splitIntoChunks(relPath, content);
-    chunks.forEach((chunk, idx) => {
-      docs.push({
-        id: `${relPath}::${idx}`,
-        source: relPath,
-        heading: chunk.heading,
-        content: chunk.content,
-      });
-    });
-  }
-
-  ms.addAll(docs);
-
+function wikiSpec(wikiPath: string) {
   return {
-    search: JSON.stringify(ms),
-    builtAt: new Date().toISOString(),
-    fileCount: new Set(docs.map(d => d.source)).size,
-    chunkCount: docs.length,
+    listFiles: (): VectorFileEntry[] =>
+      walkMdFiles(wikiPath).map((fullPath) => ({
+        fullPath,
+        relPath: path.relative(wikiPath, fullPath).replace(/\\/g, '/'),
+      })),
+    chunk: (relPath: string, content: string): VectorChunk[] =>
+      splitIntoChunks(content).map((c) => ({
+        ...c,
+        // The heading (section title + file name) steers the embedding the way
+        // the old BM25 index boosted heading matches.
+        embedText: `${path.basename(relPath)} — ${c.heading}\n${c.text}`,
+      })),
   };
 }
 
-/**
- * Save the wiki index data as JSON inside wikiPath and warm the in-memory caches.
- */
-export function saveWikiIndex(data: WikiIndexData, wikiPath: string): void {
-  const indexPath = path.join(wikiPath, INDEX_FILENAME);
-  fs.writeFileSync(indexPath, JSON.stringify(data), 'utf-8');
-  // Warm caches so the next search doesn't need a disk read or deserialization
-  _dataCache.set(wikiPath, data);
-  _msCache = { builtAt: data.builtAt, ms: MiniSearch.loadJSON<WikiDoc>(data.search, MS_OPTIONS) };
+// ── Public API ───────────────────────────────────────────────────────────────
+
+/** Cheap availability check (reads meta.json only — no vectors). */
+export function hasWikiIndex(wikiPath: string): boolean {
+  return hasVectorIndex(indexDirPath(wikiPath));
+}
+
+export function invalidateWikiCache(wikiPath?: string): void {
+  if (wikiPath) invalidateVectorCache(indexDirPath(wikiPath));
+  else invalidateVectorCache();
+}
+
+export interface WikiRebuildOptions extends VectorRebuildOptions {
+  /** Reports model download progress (first use downloads ~314 MB). */
+  onDownloadProgress?: (file: string, receivedMB: number, totalMB: number) => void;
 }
 
 /**
- * Load a previously-saved wiki index.
- * Returns the cached copy if the path was already loaded this session.
+ * Build (or incrementally update) the wiki index for a docs folder. Unchanged
+ * files keep their vectors; the local embeddinggemma2 model runs in-process.
  */
-export function loadWikiIndex(wikiPath: string): WikiIndexData | null {
-  if (_dataCache.has(wikiPath)) return _dataCache.get(wikiPath)!;
-  const indexPath = path.join(wikiPath, INDEX_FILENAME);
-  if (!fs.existsSync(indexPath)) return null;
+export async function buildWikiIndex(
+  wikiPath: string,
+  opts: WikiRebuildOptions = {},
+): Promise<WikiStats> {
+  const stats = await rebuildVectorIndex(
+    indexDirPath(wikiPath),
+    EMBEDDING_MODEL_ID,
+    wikiSpec(wikiPath),
+    (texts) => embedDocuments(texts, opts.onDownloadProgress),
+    opts,
+  );
+  // The old MiniSearch index file is superseded — remove it if present
   try {
-    const data = JSON.parse(fs.readFileSync(indexPath, 'utf-8')) as WikiIndexData;
-    _dataCache.set(wikiPath, data);
-    return data;
+    fs.unlinkSync(path.join(wikiPath, LEGACY_INDEX_FILENAME));
   } catch {
-    return null;
+    // not there — fine
   }
+  return stats;
 }
 
-/** Returns the cached MiniSearch instance, deserializing from data only when stale. */
-function getMs(data: WikiIndexData): MiniSearch<WikiDoc> {
-  if (_msCache?.builtAt === data.builtAt) return _msCache.ms;
-  const ms = MiniSearch.loadJSON<WikiDoc>(data.search, MS_OPTIONS);
-  _msCache = { builtAt: data.builtAt, ms };
-  return ms;
-}
-
-/**
- * Search the wiki index and return a formatted context string
- * with the top-K most relevant chunks. Returns empty string if nothing found.
- */
-export function searchWiki(query: string, data: WikiIndexData, topK = DEFAULT_TOP_K): string {
-  if (!query.trim()) return '';
-
-  let ms: MiniSearch<WikiDoc>;
-  try {
-    ms = getMs(data);
-  } catch {
-    return '';
-  }
-
-  const results = ms.search(query).slice(0, topK) as (ReturnType<typeof ms.search>[number] & WikiDoc)[];
-  if (results.length === 0) return '';
-
-  return results
-    .map(r => `[${r.source} — ${r.heading}]\n${r.content}`)
-    .join('\n\n---\n\n');
-}
-
-/**
- * Search the wiki and return raw result objects (for inline decorations).
- */
-export function searchWikiRaw(
+/** Search the docs wiki, returning raw hits sorted by cosine similarity. */
+export async function searchWikiRaw(
+  wikiPath: string,
   query: string,
-  data: WikiIndexData,
   topK = 1,
-): Array<{ source: string; heading: string; content: string; score: number }> {
-  if (!query.trim()) return [];
+): Promise<WikiHit[]> {
+  return searchVectorIndex(indexDirPath(wikiPath), query, EMBEDDING_MODEL_ID, (texts) =>
+    embedQuery(texts, 'search result'),
+    topK,
+  );
+}
 
-  let ms: MiniSearch<WikiDoc>;
-  try {
-    ms = getMs(data);
-  } catch {
-    return [];
-  }
-
-  return (ms.search(query).slice(0, topK) as (ReturnType<typeof ms.search>[number] & WikiDoc)[])
-    .map(r => ({ source: r.source, heading: r.heading, content: r.content, score: r.score }));
+/**
+ * Search the docs wiki and return a formatted context string with the top-K
+ * most relevant chunks. Returns an empty string if nothing is found.
+ */
+export async function searchWiki(wikiPath: string, query: string, topK = DEFAULT_TOP_K): Promise<string> {
+  if (!query.trim()) return '';
+  const hits = await searchWikiRaw(wikiPath, query, topK);
+  if (hits.length === 0) return '';
+  return hits.map((h) => `[${h.source} — ${h.heading}]\n${h.content}`).join('\n\n---\n\n');
 }

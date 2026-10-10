@@ -18,7 +18,7 @@ An AI code assistant for VS Code with style — ask about your code, have it edi
 | ASKII Edit         | `Ctrl+Shift+K E` | Replace the selection with an AI-edited version; review the diff and undo if needed                                 |
 | ASKII Do           | `Ctrl+Shift+K D` | Agentic workspace agent — explores, creates, modifies, renames and deletes files over multiple rounds               |
 | ASKII Control      | `Ctrl+Shift+K C` | Screen or browser agent — screenshot-driven mouse/keyboard control, or Puppeteer web automation                     |
-| ASKII Note         | `Ctrl+Shift+K N` | Notes / tasks / reminders panel with search, screenshots and voice input                                            |
+| ASKII Note         | `Ctrl+Shift+K N` | Notes / tasks / reminders panel with search and screenshots                                                         |
 | ASKII: Reload Wiki | `Ctrl+Shift+K W` | Rebuild the wiki RAG index                                                                                          |
 | ASKII: Clear Cache | `Ctrl+Shift+K X` | Clear cached inline explanations and completions                                                                    |
 | ASKII: Open Setup  | `Ctrl+Shift+A S` | Re-run the setup wizard                                                                                             |
@@ -29,13 +29,15 @@ On macOS swap `Ctrl` for `Cmd`. The **(⌐■_■)** status-bar button opens a q
 
 Select some code and ask about it, or ask a general question with nothing selected — the file name, language and selection are included as context automatically (plus matching wiki chunks when wiki RAG is on). Answers stream into the markdown panel with syntax-highlighted code blocks, and the panel header gives you **copy**, **follow-up** (previous questions and answers are kept as conversation context) and a **history view** to re-read the whole session.
 
+File citations are clickable: when the answer references a file or code location, references like `src/app.ts:42` render as links — click one to open the file in the editor at exactly that line (ranges like `src/app.ts:10-20` select the whole span). Works for workspace code and docs-wiki files alike.
+
 ### ASKII Edit
 
 Describe the change you want and ASKII rewrites your selection — or the whole file if nothing is selected, using the full file as context either way. The edit is applied immediately, then a side-by-side diff of original vs. proposed code opens beside it so you can review it, with a one-click **Undo** offer to revert. Optional `askii.formatAfterEdit` formats the document after the edit.
 
 ### ASKII Do
 
-Describe a task — ASKII prints the top-level workspace structure, then loops until the task is done or `askii.doMaxRounds` (default 5) is reached. Read-only actions (`list`, `view`, `search`, `wiki_search`) run freely; write actions (`create`, `write`, `modify`, `rename`, `copy`, `mkdir`, `delete`) and shell `run` ask for confirmation (skip with `askii.doAutoConfirm`). Files are backed up before destructive changes, and the whole run can be undone with one click when it finishes.
+Describe a task — ASKII prints the top-level workspace structure, then loops until the task is done or `askii.doMaxRounds` (default 20) is reached. Read-only actions (`list`, `view`, `search`, `wiki_search`) run freely; write actions (`create`, `write`, `modify`, `rename`, `copy`, `mkdir`, `delete`) and shell `run` ask for confirmation (skip with `askii.doAutoConfirm`). Files are backed up before destructive changes, and the whole run can be undone with one click when it finishes.
 
 ### ASKII Control
 
@@ -50,14 +52,17 @@ Requires a **vision-capable model** (e.g. `llava`, `moondream2`). Browser mode a
 
 Type free text — the AI classifies it as a **note**, a **task** (`low` / `medium` / `high` priority) or a **reminder** (with a due time), and asks a clarifying question when the intent or time is ambiguous. Entries are stored globally, tagged by workspace, full-text searchable, and grouped by age (Pinned, Today, Yesterday, This week, Earlier). Hover an entry to pin, edit (with AI re-classify), mark done, snooze / dismiss, or delete it.
 
+- **Time triggers** — a wide range of phrases resolve locally, right in the composer: `in 30 minutes`, `in 1h30m`, `in half an hour`, `in two hours`, `in a couple of hours`, `in a few minutes`, `20 minutes from now`, `an hour from now`, `at 5pm`, `at noon`, `tomorrow at noon`, `at 9 in the morning`, `half past 5`, `quarter to 6`, `later today`, `tonight at 8`, `tomorrow morning`, `day after tomorrow`, `this time tomorrow`, `first thing in the morning`, `on friday`, `friday evening`, `by tuesday at 5pm`, `next monday`, `friday next week`, `next week on wednesday`, `this weekend`, `end of day`, `end of month`, `end of year`, `on the 15th`, `by the 1st of next month`, `july 8th`, `2026-07-08 14:30`, …
+- **Recurring triggers** — `every day at 9am`, `daily`, `every morning`, `every weekday at 9`, `every monday at 10`, `every monday and wednesday at 6pm`, `every mon, wed, fri`, `weekly on friday at 5pm`, `every weekend`, `every 2 hours`, `every hour`, `every half hour`, `every other day`, `biweekly`, `quarterly`, `every month`, `every month on the 15th`, `every year on july 8` — the entry re-arms itself after each firing and shows a repeat badge
+- **Event triggers** — fire on editor events instead of a clock time: `when I open VS Code`, `on startup`, `when I open this workspace`, `when I open package.json`, `every time I save .env`, `when I open a ts file`, `when I save this file`, or bare `when I save`. One-shot triggers fire once (shown with a ⚡ badge), `every time`/`whenever` triggers re-arm on each matching event
+- **Task deadlines & recurring tasks** — tasks accept due times too (`fix the login bug by friday`) and can repeat (`water the plants every 3 days`); when a deadline passes you get a task-due notification with Open / Done / Snooze, and un-completing a done task re-arms it
 - **Reminders** fire as VS Code notifications with a sound while VS Code is running; ones missed while it was closed re-fire on the next startup
 - **Screenshots** — toggle the camera icon to attach a full-screen capture to the entry
-- **Voice input** — click the mic icon, speak, click again; the recording is transcribed straight into the composer (needs `ffmpeg`)
 
 ### Inline completion & decorations
 
-- `askii.inlineCompletionEnabled` — Copilot-style ghost text; **Tab** accepts, **Esc** dismisses. Tune the trigger with `askii.inlineCompletionEagerness` (`low` 1200 ms / `medium` 500 ms / `high` 200 ms). Suggestions are cached per context
-- `askii.inlineHelperMode` — adds a kaomoji decoration after the current line: `helpful`, `funny`, or `wiki` (explanations enriched by your indexed docs). Example:
+- `askii.inlineCompletionEnabled` — Copilot-style ghost text; **Tab** accepts, **Esc** dismisses. Tune the trigger with `askii.inlineCompletionEagerness` (`low` 1200 ms / `medium` 500 ms / `high` 200 ms). Suggestions are cached per context, and matching context from your enabled wikis is injected into the prompt
+- `askii.inlineHelperMode` — adds a kaomoji decoration after the current line: `helpful`, `funny`, or `wiki` (explanations enriched by matching context from your enabled wikis — docs and code). Example:
 
 ```javascript
 const sum = a + b; (◕‿◕) Adds two variables; prefer const for variables that won't be reassigned.
@@ -66,9 +71,19 @@ const sum = a + b; (◕‿◕) Adds two variables; prefer const for variables th
 ### Wiki RAG
 
 1. Point `askii.wikiPath` at a folder of `.md` docs
-2. Run **ASKII: Reload Wiki** — builds a local [MiniSearch](https://github.com/lucaong/minisearch) BM25 index
+2. Run **ASKII: Reload Wikis** — chunks the docs by heading and builds a vector index (embeddings run locally via embeddinggemma2)
 3. Enable `askii.wikiEnabled` — matching chunks are injected into Ask / Edit / Do as context
 4. Optional: `askii.wikiAutoReload` rebuilds the index on startup
+
+### Code wiki
+
+A vector index over your **workspace code** (code files only — no `.md`, `.txt`, `.json`, markup, or images) used as retrieval context for Ask / Edit / Do:
+
+1. Run **ASKII: Reload Wikis** (or `askii wiki-reload --use-code-wiki`) — walks the workspace (respecting root `.gitignore` and skipping `node_modules`/build dirs), chunks code into overlapping 60-line windows, and embeds them
+2. Enable `askii.codeWikiEnabled` — relevant code chunks are injected into Ask / Edit as context, and the Do agent gets a `code_search` action for semantic lookup
+3. Optional: `askii.codeWikiAutoReload` rebuilds the index on startup
+
+Both wikis run **[embeddinggemma2](https://huggingface.co/onnx-community/embeddinggemma-2-ONNX) fully locally in JavaScript** (Transformers.js + ONNX WASM — no API keys, no external services). The model downloads once (~314 MB) to `~/.askii/models` on first use and is shared by the CLI and the extension. Rebuilds are **incremental** (unchanged files keep their vectors) and the index is **memory-optimized**: Int8-quantized vectors (~¼ the RAM of Float32), metadata packed as typed arrays, and chunk text stays on disk — only the top hits are read back. Indexes live in `.askii/code-wiki/` (workspace) and `.askii-wiki-index/` (wiki folder).
 
 ### Commit messages
 
@@ -99,21 +114,18 @@ API keys and server URLs are shared per provider across all groups.
 
 All settings live in VS Code Settings under the `askii.*` namespace.
 
-**Notes & voice**
+**Notes & reminders**
 
-| Setting                   | Default      | Description                                             |
-| ------------------------- | ------------ | ------------------------------------------------------- |
-| `askii.noteReminderSound` | `true`       | Play a sound when a reminder fires                      |
-| `askii.noteSnoozeMinutes` | `10`         | Minutes added by **Snooze**                             |
-| `askii.sttPlatform`       | `askiicloud` | Platform used to transcribe voice input                 |
-| `askii.sttModel`          | `whisper-1`  | Speech-to-text model                                    |
-| `askii.ffmpegPath`        | _(empty)_    | ffmpeg executable for voice input (empty = auto-detect) |
+| Setting                   | Default | Description                        |
+| ------------------------- | ------- | ---------------------------------- |
+| `askii.noteReminderSound` | `true`  | Play a sound when a reminder fires |
+| `askii.noteSnoozeMinutes` | `10`    | Minutes added by **Snooze**        |
 
 **Agents & browser**
 
 | Setting                 | Default   | Description                              |
 | ----------------------- | --------- | ---------------------------------------- |
-| `askii.doMaxRounds`     | `5`       | Max rounds for Do / Control              |
+| `askii.doMaxRounds`     | `20`      | Max rounds for Do / Control              |
 | `askii.doAutoConfirm`   | `false`   | Skip write confirmations                 |
 | `askii.formatAfterEdit` | `false`   | Format files after Edit / Do             |
 | `askii.browserHeadless` | `false`   | Hide the Puppeteer browser window        |
@@ -125,6 +137,18 @@ All settings live in VS Code Settings under the `askii.*` namespace.
 | --------------------------------- | ---------- | ---------------------------------- |
 | `askii.commitMessageStyle`        | `oneliner` | Generated message style            |
 | `askii.commitMessageInstructions` | _(empty)_  | `.md` file with extra commit rules |
+
+**Wiki RAG**
+
+| Setting                     | Default | Description                                                 |
+| --------------------------- | ------- | ----------------------------------------------------------- |
+| `askii.wikiEnabled`         | `false` | Inject docs wiki context into Ask / Edit / Do               |
+| `askii.wikiPath`            | _(empty)_ | Folder of `.md` docs                                      |
+| `askii.wikiAutoReload`      | `false` | Rebuild docs wiki on startup                                |
+| `askii.codeWikiEnabled`     | `false` | Inject code wiki context into Ask / Edit / Do               |
+| `askii.codeWikiAutoReload`  | `false` | Rebuild code wiki on startup                                |
+
+Embeddings for both wikis run locally (embeddinggemma2) — no embedding settings required.
 
 ## CLI
 
@@ -140,7 +164,6 @@ See [cli/README.md](cli/README.md).
 
 - VS Code **1.108+**
 - Control requires a **vision-capable model**; screen control needs `xdotool` on Linux; browser mode needs a Chromium-based browser
-- Voice input requires **ffmpeg** on PATH (auto-detected, or set `askii.ffmpegPath`)
 
 ## Development
 

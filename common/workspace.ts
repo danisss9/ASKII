@@ -12,6 +12,7 @@ export interface WorkspaceAction {
     | 'list'
     | 'search'
     | 'wiki_search'
+    | 'code_search'
     | 'run'
     | 'copy'
     | 'mkdir';
@@ -24,7 +25,7 @@ export interface WorkspaceAction {
   startLine?: number; // partial view / line-range modify (1-indexed)
   endLine?: number;
   pattern?: string; // search (code grep)
-  query?: string; // wiki_search (natural language)
+  query?: string; // wiki_search / code_search (natural language)
   command?: string; // run
 }
 
@@ -40,7 +41,7 @@ const CREATED_LOG = path.join('.askii', 'created.json');
 /** Copy filePath into .askii/backups/, preserving relative path. No-op if file doesn't exist. */
 export function writeBackup(workspaceRoot: string, filePath: string): void {
   try {
-    if (!fs.existsSync(filePath)) return;
+    if (!fs.existsSync(filePath)) {return;}
     const rel = path.relative(workspaceRoot, filePath);
     const backupPath = path.join(workspaceRoot, BACKUP_DIR, rel);
     fs.mkdirSync(path.dirname(backupPath), { recursive: true });
@@ -63,7 +64,7 @@ export function recordCreatedFile(workspaceRoot: string, relativePath: string): 
         /* ignore */
       }
     }
-    if (!list.includes(relativePath)) list.push(relativePath);
+    if (!list.includes(relativePath)) {list.push(relativePath);}
     fs.writeFileSync(logPath, JSON.stringify(list));
   } catch {
     // Best-effort
@@ -90,7 +91,7 @@ export function restoreAllBackups(workspaceRoot: string): {
   const backupDir = path.join(workspaceRoot, BACKUP_DIR);
   const restored: string[] = [];
   function walk(dir: string): void {
-    if (!fs.existsSync(dir)) return;
+    if (!fs.existsSync(dir)) {return;}
     for (const name of fs.readdirSync(dir)) {
       const fullPath = path.join(dir, name);
       if (fs.statSync(fullPath).isDirectory()) {
@@ -189,7 +190,7 @@ export function parseWorkspaceActions(responseText: string): WorkspaceAction[] {
     }
 
     return actions.filter((action) => {
-      if (!action.type) return false;
+      if (!action.type) {return false;}
       return ALL_TYPES.includes(action.type);
     });
   } catch (error) {
@@ -246,7 +247,7 @@ export function executeViewAction(action: WorkspaceAction, workspaceRoot: string
  */
 export function executeSearchAction(action: WorkspaceAction, workspaceRoot: string): string {
   const pattern = action.pattern ?? '';
-  if (!pattern) return 'Error: search requires a pattern';
+  if (!pattern) {return 'Error: search requires a pattern';}
 
   const results: string[] = [];
 
@@ -258,7 +259,7 @@ export function executeSearchAction(action: WorkspaceAction, workspaceRoot: stri
       return;
     }
     for (const name of entries) {
-      if (LIST_EXCLUDED.has(name)) continue;
+      if (LIST_EXCLUDED.has(name)) {continue;}
       const fullPath = path.join(dir, name);
       let stat: fs.Stats;
       try {
@@ -292,9 +293,16 @@ export function executeSearchAction(action: WorkspaceAction, workspaceRoot: stri
 }
 
 /** Builds the system prompt for the do command (shared by extension + CLI). */
-export function buildDoSystemPrompt(workspaceStructure: string, wikiAvailable = false): string {
+export function buildDoSystemPrompt(
+  workspaceStructure: string,
+  wikiAvailable = false,
+  codeWikiAvailable = false,
+): string {
   const wikiAction = wikiAvailable
     ? `- {"type": "wiki_search", "query": "natural language question"} — search the documentation wiki and get relevant context back\n`
+    : '';
+  const codeWikiAction = codeWikiAvailable
+    ? `- {"type": "code_search", "query": "natural language description of the code to find"} — semantic search over the indexed workspace code\n`
     : '';
 
   return `You are ASKII, an AI agent that can create, modify, view, delete, rename, list, search, run commands, copy files, and make directories in a workspace.
@@ -312,7 +320,7 @@ READ ACTIONS (results returned to you, no confirmation needed):
 - {"type": "view", "paths": ["file1.ts", "file2.ts"]} — view multiple files at once
 - {"type": "list", "path": "src/"} — list folder contents (node_modules/dist excluded)
 - {"type": "search", "pattern": "TODO"} — grep workspace files for pattern (node_modules/dist excluded)
-${wikiAction}
+${wikiAction}${codeWikiAction}
 WRITE ACTIONS (require confirmation):
 - {"type": "create", "path": "path/to/file", "content": "full file content"} — create new file
 - {"type": "write", "path": "path/to/file", "content": "full file content"} — replace entire file

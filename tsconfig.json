@@ -5,7 +5,8 @@
     "lib": ["ES2022", "DOM"],
     "sourceMap": true,
     "rootDir": "",
-    "strict": true /* enable all strict type-checking options */,
+    "strict": true, // enable all strict type-checking options
+    "skipLibCheck": true, // upstream d.ts (e.g. @huggingface/transformers) has internal errors
     "forceConsistentCasingInFileNames": true,
     "baseUrl": "./",
     /* Additional Checks */

@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "icon": "icon.png",
   "publisher": "danisss9",
   "repository": {
@@ -97,7 +97,7 @@
       },
       {
         "command": "askii.reloadWiki",
-        "title": "ASKII: Reload Wiki",
+        "title": "ASKII: Reload Wikis",
         "category": "ASKII"
       },
       {
@@ -185,27 +185,6 @@
           "default": "askii-smart",
           "description": "Model id to use for ASKII Control (screen and browser) and Note (vision-capable features)."
         },
-        "askii.sttPlatform": {
-          "type": "string",
-          "enum": [
-            "openai",
-            "lmstudio",
-            "opencodego",
-            "askiicloud"
-          ],
-          "default": "askiicloud",
-          "description": "Platform used to transcribe ASKII Note voice input (OpenAI-compatible /audio/transcriptions endpoint)."
-        },
-        "askii.sttModel": {
-          "type": "string",
-          "default": "whisper-1",
-          "description": "Speech-to-text model id for ASKII Note voice input (e.g. whisper-1 or gpt-4o-transcribe on OpenAI)."
-        },
-        "askii.ffmpegPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to the ffmpeg executable used for ASKII Note voice input (leave empty to auto-detect ffmpeg on PATH, winget, Chocolatey or C:\\ffmpeg)."
-        },
         "askii.ollamaUrl": {
           "type": "string",
           "default": "http://localhost:11434",
@@ -240,7 +219,7 @@
         },
         "askii.doMaxRounds": {
           "type": "number",
-          "default": 5,
+          "default": 20,
           "minimum": 1,
           "description": "Maximum number of interaction rounds for ASKII Do command"
         },
@@ -278,6 +257,16 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically rebuild and reload the wiki index when the extension starts. Requires askii.wikiEnabled and askii.wikiPath to be configured."
+        },
+        "askii.codeWikiEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable code wiki — a vector index over workspace code (code files only) used as retrieval context for Ask / Edit / Do. Runs the embeddinggemma2 model locally (first index build downloads it once to ~/.askii/models); build the index via ASKII: Reload Wikis."
+        },
+        "askii.codeWikiAutoReload": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically rebuild the code wiki index when the extension starts. Requires askii.codeWikiEnabled."
         },
         "askii.inlineCompletionEnabled": {
           "type": "boolean",
@@ -364,12 +353,15 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@huggingface/transformers": "^4.3.1",
     "@lmstudio/immer-with-plugins": "^10.1.1",
     "@lmstudio/sdk": "^1.5.0",
+    "ignore": "^7.0.5",
     "jimp": "^0.22.12",
     "markdown-it": "^14.1.1",
     "minisearch": "^7.2.0",
     "ollama": "^0.6.3",
+    "onnxruntime-web": "^1.31.0-dev.20260914-8d85527a0",
     "openai": "^6.25.0",
     "puppeteer-core": "^24.37.5",
     "screenshot-desktop": "^1.12.7"

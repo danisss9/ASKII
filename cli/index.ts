@@ -14,8 +14,14 @@ import {
   type ActionResult,
 } from '@common/workspace';
 import { unescapeJsonString, extractCode } from '@common/utils';
-import { buildWikiIndex, saveWikiIndex, loadWikiIndex, searchWiki } from '@common/wiki';
+import { buildWikiIndex, hasWikiIndex, searchWiki } from '@common/wiki';
+import {
+  rebuildCodeWikiIndex,
+  searchCodeWiki,
+  hasCodeWikiIndex,
+} from '@common/codewiki';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
+import { FILE_CITATION_INSTRUCTIONS } from '@common/links';
 import {
   getOllamaResponse,
   getLMStudioResponse,
@@ -61,8 +67,16 @@ import {
   type NoteKind,
   type TaskPriority,
   type NoteContext,
+  type RecurRule,
+  type EventTrigger,
   searchNotes,
   parseReminderTimeLocal,
+  parseReminderTrigger,
+  parseRecurrence,
+  parseEventTrigger,
+  computeNextOccurrence,
+  describeRecurrence,
+  describeEventTrigger,
 } from '@common/notes';
 import { randomBytes } from 'crypto';
 import * as readline from 'readline';
@@ -88,6 +102,7 @@ interface Config {
   chromePath: string | undefined;
   wikiPath: string | undefined;
   useWiki: boolean;
+  useCodeWiki: boolean;
 }
 
 function getFlagValue(flags: string[], ...names: string[]): string | undefined {
@@ -225,19 +240,58 @@ function getConfig(flags: string[]): Config {
     chromePath: getFlagValue(flags, '--chrome-path') || process.env.ASKII_CHROME_PATH || undefined,
     wikiPath: getFlagValue(flags, '--wiki-path') || process.env.ASKII_WIKI_PATH || undefined,
     useWiki: hasFlag(flags, '--use-wiki') || process.env.ASKII_USE_WIKI === '1',
+    useCodeWiki: hasFlag(flags, '--use-code-wiki') || process.env.ASKII_USE_CODE_WIKI === '1',
   };
 }
 
-function getCliWikiContext(config: Config, query: string): string {
+async function getCliWikiContext(config: Config, query: string): Promise<string> {
   if (!config.useWiki || !config.wikiPath) return '';
-  const index = loadWikiIndex(config.wikiPath);
-  if (!index) {
+  if (!hasWikiIndex(config.wikiPath)) {
     console.error('  [wiki] No index found — run: askii wiki-reload --wiki-path <path>');
     return '';
   }
-  const ctx = searchWiki(query, index);
-  if (ctx) console.error(`  [wiki] Injecting ${ctx.length} chars of context`);
-  return ctx;
+  try {
+    const ctx = await searchWiki(config.wikiPath, query);
+    if (ctx) console.error(`  [wiki] Injecting ${ctx.length} chars of context`);
+    return ctx;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Search failed';
+    console.error(`  [wiki] ${message}`);
+    return '';
+  }
+}
+
+async function getCliCodeWikiContext(config: Config, query: string): Promise<string> {
+  if (!config.useCodeWiki) return '';
+  try {
+    const ctx = await searchCodeWiki(process.cwd(), query);
+    if (ctx) console.error(`  [code wiki] Injecting ${ctx.length} chars of context`);
+    return ctx;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Search failed';
+    console.error(`  [code wiki] ${message} — run: askii wiki-reload`);
+    return '';
+  }
+}
+
+/**
+ * Rebuilds the code wiki index for dir with CLI progress output.
+ * Shared by the wiki-reload command and the /wiki-reload REPL command.
+ */
+async function reloadCliCodeWiki(dir: string): Promise<void> {
+  console.error(`Indexing code wiki: ${dir}`);
+  const stats = await rebuildCodeWikiIndex(dir, {
+    onProgress: (stage, current, total) => {
+      if (stage === 'indexing') {
+        process.stderr.write(`\r  code wiki: file ${current}/${total}`);
+      }
+    },
+  });
+  process.stderr.write('\n');
+  console.error(
+    `Code wiki indexed: ${stats.chunkCount} chunks from ${stats.fileCount} file(s) ` +
+      `(${stats.embeddedFiles} embedded, ${stats.cachedFiles} reused). ${getRandomKaomoji()}`,
+  );
 }
 
 async function getResponse(
@@ -480,7 +534,7 @@ REPL Commands:
   /note <subcommand>             Notes / tasks / reminders (add, list, search, done, delete, due)
   /edit --file <path> <instr>    Edit a file in place
   /explain <text>                Explain a line of code
-  /wiki-reload                   Rebuild the docs wiki index
+  /wiki-reload                   Rebuild the enabled wiki indexes (docs and/or code)
   /platform <name>               Switch platform: ollama|lmstudio|openai|anthropic|opencodego|askiicloud
   /model <name>                  Switch model for current session
   /config                        Show current session config
@@ -494,12 +548,14 @@ Config overrides (bare flags at the prompt update session config):
 
 function printWelcomeBanner(config: Config): void {
   const wikiStatus = config.useWiki ? `on (${config.wikiPath ?? 'no path set'})` : 'off';
+  const codeWikiStatus = config.useCodeWiki ? 'on (local embeddinggemma2)' : 'off';
   console.error(`
 ASKII ( •_•)>⌐■-■ (⌐■_■)  — interactive mode
 
   Platform : ${config.platform} (${config.model})
   Workspace: ${process.cwd()}
   Wiki     : ${wikiStatus}
+  Code wiki: ${codeWikiStatus}
 
 Type a message to chat, /help for commands, /exit to quit.
 `);
@@ -540,6 +596,8 @@ function mergeConfigOverride(base: Config, tokens: string[]): Config {
   const mode = getFlagValue(tokens, '--mode');
   if (mode) result.mode = mode as Config['mode'];
 
+  if (hasFlag(tokens, '--use-code-wiki')) result.useCodeWiki = true;
+
   if (hasFlag(tokens, '-y', '--yes')) result.yes = true;
 
   return result;
@@ -549,15 +607,22 @@ async function runReplAsk(question: string, config: Config, history: ChatMessage
   if (history.length === 0) {
     const system =
       config.mode === 'helpful'
-        ? 'You are ASKII, a helpful coding assistant. Provide clear, concise answers.'
-        : 'You are ASKII, a witty coding assistant who sprinkles in humor and kaomoji.';
+        ? 'You are ASKII, a helpful coding assistant. Provide clear, concise answers.\n\n' +
+          FILE_CITATION_INSTRUCTIONS
+        : 'You are ASKII, a witty coding assistant who sprinkles in humor and kaomoji.\n\n' +
+          FILE_CITATION_INSTRUCTIONS;
     history.push({ role: 'system', content: system });
   }
 
-  const wikiCtx = getCliWikiContext(config, question);
+  const wikiCtx = await getCliWikiContext(config, question);
   const wikiSection = wikiCtx ? `Relevant documentation:\n${wikiCtx}\n\n` : '';
 
-  history.push({ role: 'user', content: `${wikiSection}${question}` });
+  const codeWikiCtx = await getCliCodeWikiContext(config, question);
+  const codeWikiSection = codeWikiCtx
+    ? `Relevant code from the codebase:\n${codeWikiCtx}\n\n`
+    : '';
+
+  history.push({ role: 'user', content: `${wikiSection}${codeWikiSection}${question}` });
 
   process.stderr.write(`\nASKII: `);
   let response = '';
@@ -590,8 +655,9 @@ async function runReplDo(
     const workspaceStructure = getWorkspaceStructure(workDir);
     console.error(`Workspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
 
-    const wikiAvailable = !!(config.wikiPath && loadWikiIndex(config.wikiPath));
-    const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable);
+    const wikiAvailable = !!(config.wikiPath && hasWikiIndex(config.wikiPath));
+    const codeWikiAvailable = config.useCodeWiki && hasCodeWikiIndex(workDir);
+    const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable, codeWikiAvailable);
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -627,11 +693,19 @@ async function runReplDo(
 
       const readActions = actions.filter(
         (a) =>
-          a.type === 'view' || a.type === 'list' || a.type === 'search' || a.type === 'wiki_search',
+          a.type === 'view' ||
+          a.type === 'list' ||
+          a.type === 'search' ||
+          a.type === 'wiki_search' ||
+          a.type === 'code_search',
       );
       const writeActions = actions.filter(
         (a) =>
-          a.type !== 'view' && a.type !== 'list' && a.type !== 'search' && a.type !== 'wiki_search',
+          a.type !== 'view' &&
+          a.type !== 'list' &&
+          a.type !== 'search' &&
+          a.type !== 'wiki_search' &&
+          a.type !== 'code_search',
       );
 
       const feedbackParts: string[] = [];
@@ -642,10 +716,16 @@ async function runReplDo(
           if (action.type === 'wiki_search') {
             const q = action.query ?? '';
             console.error(`  → Wiki search: "${q}"`);
-            const wikiData = config.wikiPath ? loadWikiIndex(config.wikiPath) : null;
-            viewResults[`wiki_search:${q}`] = wikiData
-              ? searchWiki(q, wikiData) || 'No wiki results found'
-              : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
+            viewResults[`wiki_search:${q}`] =
+              config.wikiPath && hasWikiIndex(config.wikiPath)
+                ? (await searchWiki(config.wikiPath, q)) || 'No wiki results found'
+                : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
+          } else if (action.type === 'code_search') {
+            const q = action.query ?? '';
+            console.error(`  → Code search: "${q}"`);
+            viewResults[`code_search:${q}`] = codeWikiAvailable
+              ? (await searchCodeWiki(workDir, q)) || 'No code wiki results found'
+              : 'Code wiki not available — run: askii wiki-reload (with --use-code-wiki)';
           } else if (action.type === 'search') {
             console.error(`  → Search: "${action.pattern}"`);
             viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);
@@ -870,24 +950,46 @@ async function handleReplInput(
       }
 
       case '/wiki-reload': {
-        const wikiPath = config.wikiPath;
-        if (!wikiPath) {
-          console.error('Error: set --wiki-path first or use env ASKII_WIKI_PATH');
-          return false;
+        let reloaded = false;
+
+        if (config.wikiPath) {
+          if (!fs.existsSync(config.wikiPath)) {
+            console.error(`Error: wiki path not found: ${config.wikiPath}`);
+          } else {
+            try {
+              console.error(`Indexing wiki: ${config.wikiPath}`);
+              const stats = await buildWikiIndex(config.wikiPath, {
+                onProgress: (stage, current, total) => {
+                  if (stage === 'indexing') {
+                    process.stderr.write(`\r  wiki: file ${current}/${total}`);
+                  }
+                },
+              });
+              process.stderr.write('\n');
+              console.error(
+                `Wiki indexed: ${stats.chunkCount} chunks from ${stats.fileCount} file(s). ${getRandomKaomoji()}`,
+              );
+            } catch (e) {
+              process.stderr.write('\n');
+              console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+            }
+          }
+          reloaded = true;
         }
-        if (!fs.existsSync(wikiPath)) {
-          console.error(`Error: wiki path not found: ${wikiPath}`);
-          return false;
+
+        if (config.useCodeWiki) {
+          try {
+            await reloadCliCodeWiki(path.resolve(process.cwd()));
+          } catch (e) {
+            console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+          }
+          reloaded = true;
         }
-        try {
-          console.error(`Indexing wiki: ${wikiPath}`);
-          const index = buildWikiIndex(wikiPath);
-          saveWikiIndex(index, wikiPath);
+
+        if (!reloaded) {
           console.error(
-            `Wiki indexed: ${index.chunkCount} chunks from ${index.fileCount} file(s). ${getRandomKaomoji()}`,
+            'Nothing to reload — set --wiki-path (docs wiki) and/or --use-code-wiki (code wiki) first.',
           );
-        } catch (e) {
-          console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
         }
         return false;
       }
@@ -1150,7 +1252,7 @@ Commands:
   note <subcommand>      Notes / tasks / reminders (add, list, search, done, delete, due)
   control <task>         Screen & browser agent — --target screen (default) or --target browser
   browse <task>          Alias for control --target browser
-  wiki-reload           Index .md files from --wiki-path into the local vector database
+  wiki-reload           Reload the enabled wikis — docs (--wiki-path) and/or code (--use-code-wiki)
 
 Options:
   -p, --platform <p>         LLM platform: ollama, lmstudio, openai, anthropic, opencodego, askiicloud (default: ollama)
@@ -1179,6 +1281,7 @@ Options:
       --chrome-path <path>   Path to Chrome/Chromium executable for "control --target browser" (env: ASKII_CHROME_PATH)
       --wiki-path <path>     Path to folder with .md docs for wiki RAG (env: ASKII_WIKI_PATH)
       --use-wiki             Inject wiki context into ask/edit/do (env: ASKII_USE_WIKI=1)
+      --use-code-wiki        Inject code wiki context into ask/edit/do (env: ASKII_USE_CODE_WIKI=1)
   -y, --yes                  Auto-confirm all actions
   -h, --help                 Show help
 
@@ -1191,7 +1294,7 @@ Environment variables:
   ASKII_OPENCODEGO_KEY  ASKII_OPENCODEGO_MODEL  ASKII_OPENCODEGO_URL
   ASKII_CLOUD_KEY       ASKII_CLOUD_MODEL
   ASKII_MODE            ASKII_MAX_ROUNDS      ASKII_CONTROL_TARGET
-  ASKII_WIKI_PATH       ASKII_USE_WIKI
+  ASKII_WIKI_PATH       ASKII_USE_WIKI      ASKII_USE_CODE_WIKI
 
 Examples:
   cat myfile.ts | askii ask "what does this do?"
@@ -1217,6 +1320,8 @@ Examples:
   askii browse --ollama-model llava "check the title of https://github.com"    # alias for control --target browser
   askii wiki-reload --wiki-path ./docs
   askii ask --wiki-path ./docs --use-wiki "how do I configure the database?"
+  askii wiki-reload --use-code-wiki    # build the code wiki (runs embeddinggemma2 locally)
+  askii ask --use-code-wiki "where is buildDoSystemPrompt defined?"
 `);
 }
 
@@ -1270,6 +1375,8 @@ interface CliClassification {
   kind: NoteKind;
   priority: TaskPriority | null;
   dueAt: string | null;
+  recur: RecurRule | null;
+  event: EventTrigger | null;
   tags: string[];
   needsClarification: boolean;
   clarifyingQuestion: string | null;
@@ -1283,11 +1390,16 @@ Workspace: {WORKSPACE}
 
 Kinds:
 - "note"  : a plain piece of information to remember (no deadline, no priority).
-- "task"  : an actionable item that should be done. Extract a priority: "low" | "medium" | "high".
-- "reminder" : something the user wants to be pinged about at a specific time. Extract "dueAt" as an ISO8601 timestamp in UTC. Resolve relative phrases ("in 2 hours", "tomorrow 9am", "next monday") against the current date/time above.
+- "task"  : an actionable item that should be done. Extract a priority: "low" | "medium" | "high". If the text names a deadline ("by friday", "due 2026-07-08", "finish today at 5pm"), also extract "dueAt" as an ISO8601 timestamp in UTC.
+- "reminder" : something the user wants to be pinged about. Extract "dueAt" as an ISO8601 timestamp in UTC. Resolve relative phrases against the current date/time above. Phrases you can rely on resolving include: "in 90 seconds", "in 30 minutes", "in 2 hours", "in 1 hour and 30 minutes", "in 1h30m", "in half an hour", "in a bit", "in two hours", "in a couple of hours", "in a few minutes", "in a fortnight", "20 minutes from now", "an hour from now", "at 5pm", "at 17:30", "at noon", "at midnight", "tomorrow at noon", "at 9 in the morning", "half past 5", "quarter to 6", "today at 3pm", "later today", "this morning/afternoon/evening", "tonight at 8pm", "tomorrow", "tomorrow 9am", "tomorrow morning/afternoon/evening", "this time tomorrow", "first thing in the morning", "day after tomorrow", "on friday", "this fri", "by tuesday", "due monday at 9am", "friday evening", "next monday", "next week on wednesday at 10am", "friday next week", "next month", "this weekend", "over the weekend", "end of day", "eod", "end of week", "eow", "end of month", "eom", "end of year", "eoy", "on the 15th", "by the 1st of next month", "july 8th", "8 july 2026 at 3pm", "2026-07-08 14:30".
+
+Recurring triggers: if the user wants a repeating trigger ("every day at 9am", "daily", "every morning", "every weekday at 9", "every monday at 10", "every monday and wednesday at 6pm", "every mon, wed, fri", "weekly on friday at 5pm", "every weekend", "every 2 hours", "every 30 minutes", "every hour", "hourly", "every half hour", "every quarter hour", "every other day", "biweekly", "fortnightly", "every month", "monthly", "quarterly", "every month on the 15th", "every 15th of the month", "every year", "yearly", "every year on july 8"), extract "dueAt" for the FIRST occurrence, and mention the recurrence phrase verbatim inside "summary". Recurring TASKS are valid too ("water the plants every 3 days", "submit the weekly report every friday") — set kind "task"; the recurrence phrase itself is detected automatically from the text.
+
+Event triggers: phrases like "when I open VS Code", "on startup", "when I open this workspace", "when I open/save <file>" ("when I open package.json", "every time I save .env", "when I save a ts file", "when I save this file") are valid triggers tied to editor events instead of a time. They are detected automatically from the text — for them leave "dueAt" null and do NOT set "needsClarification". If the text names BOTH a time and an event, keep the time in "dueAt" (the event is ignored).
 
 Rules:
 - If the user's text is ambiguous about WHEN a reminder should fire (e.g. "later", "soon", "remind me"), set "needsClarification": true and provide a short "clarifyingQuestion" asking for a concrete time. Otherwise set "needsClarification": false and "clarifyingQuestion": null.
+- "remind me to stretch" with no time = ambiguous (needsClarification). "remind me to stretch every hour" = recurring (not ambiguous).
 - Extract up to 5 short lowercase tags (single words or hyphenated phrases) that describe the topic.
 - "summary" is a short (<= 80 chars) human-readable title for the entry.
 - Respond with ONLY a single JSON object, no markdown, no extra text.
@@ -1364,22 +1476,38 @@ async function classifyNoteCli(
         const d = new Date(obj['dueAt']);
         if (!isNaN(d.getTime())) dueAt = d.toISOString();
       }
-      if (kind === 'reminder' && !dueAt && !needsClarification) {
-        dueAt = parseReminderTimeLocal(text, now);
-        if (!dueAt) {
-          return {
-            kind,
-            priority,
-            dueAt: null,
-            tags,
-            needsClarification: true,
-            clarifyingQuestion:
-              'When should I remind you? (e.g. "in 2 hours", "tomorrow 9am", "2026-07-08 14:30")',
-            summary,
-          };
+      // Recurrence detection stays local — the rule format is ours. Tasks can
+      // recur too ("water the plants every 3 days").
+      const recur = kind === 'note' ? null : parseRecurrence(text, now);
+      let event: EventTrigger | null = null;
+      if (recur) {
+        const first = computeNextOccurrence(recur, now);
+        if (first) dueAt = first.toISOString();
+      } else if (!dueAt && !needsClarification) {
+        // Event triggers ("when I open VS Code", "when I save .env") come
+        // before clock-time parsing; a time phrase wins if an event isn't found.
+        event = kind === 'note' ? null : parseEventTrigger(text, context.workspaceFolder, context.fileName);
+        if (!event && kind === 'reminder') {
+          dueAt = parseReminderTimeLocal(text, now);
+          if (!dueAt) {
+            return {
+              kind,
+              priority,
+              dueAt: null,
+              recur: null,
+              event: null,
+              tags,
+              needsClarification: true,
+              clarifyingQuestion:
+                'When should I remind you? (e.g. "in 2 hours", "tomorrow 9am", "every day at 9am", "2026-07-08 14:30")',
+              summary,
+            };
+          }
+        } else if (!event && kind === 'task') {
+          dueAt = parseReminderTimeLocal(text, now);
         }
       }
-      return { kind, priority, dueAt, tags, needsClarification, clarifyingQuestion, summary };
+      return { kind, priority, dueAt, recur, event, tags, needsClarification, clarifyingQuestion, summary };
     }
   } catch {
     // fall through to heuristic
@@ -1389,21 +1517,47 @@ async function classifyNoteCli(
   const lower = text.toLowerCase();
   let kind: NoteKind = 'note';
   let priority: TaskPriority | null = null;
-  let dueAt: string | null = null;
   let needsClarification = false;
   let clarifyingQuestion: string | null = null;
 
-  if (/remind|reminder|ping|notify|alert/.test(lower)) {
+  const trigger = parseReminderTrigger(text, now);
+  const { dueAt, recur } = trigger;
+  // Event triggers are only used when no time trigger was found.
+  let event = parseEventTrigger(text, context.workspaceFolder, context.fileName);
+  if (event && (dueAt || recur)) event = null;
+  const hasTimeTrigger = Boolean(dueAt || recur || event);
+
+  const reminderWord =
+    /\b(?:remind|reminder|ping me|notify|alert|wake me|follow up|appointment)\b/.test(lower) ||
+    /\bdon'?t (?:let me )?forget\b/.test(lower) ||
+    /\bremember to\b/.test(lower);
+  const taskWord =
+    /\b(?:task|todo|to-do|fix|implement|add|create|write|update|refactor|review|ship|deploy|release|debug|finish|complete|build|migrate|integrate|draft|prepare|submit|buy|pay|send|book)\b/.test(
+      lower,
+    ) ||
+    /\b(?:need to|needs to|should|must|have to|gotta|plan to|going to|want to)\b/.test(lower) ||
+    /^\s*(?:do|try|check|make|read|watch|ask|pick up|set up|clean up)\b/.test(lower);
+  // "meeting at 3pm" / "call mom tomorrow" — only a reminder with a time trigger.
+  const scheduledEvent =
+    hasTimeTrigger &&
+    /\b(?:meeting|standup|stand-up|appointment|call|text|email|deadline|due|interview)\b/.test(
+      lower,
+    );
+
+  if (reminderWord || scheduledEvent || ((recur || event) && !taskWord)) {
+    // A recurrence or event trigger with no task wording is still a trigger
+    // ("standup every weekday at 9am", "when I open VS Code, check email"),
+    // so treat it as a reminder.
     kind = 'reminder';
-    dueAt = parseReminderTimeLocal(text, now);
-    if (!dueAt) {
+    if (!hasTimeTrigger) {
       needsClarification = true;
-      clarifyingQuestion = 'When should I remind you? (e.g. "in 2 hours", "tomorrow 9am")';
+      clarifyingQuestion =
+        'When should I remind you? (e.g. "in 2 hours", "tomorrow 9am", "every day at 9am")';
     }
-  } else if (/task|todo|to-do|fix|implement|do:|need to|should|must/.test(lower)) {
+  } else if (taskWord) {
     kind = 'task';
-    if (/high|critical|urgent|asap/.test(lower)) priority = 'high';
-    else if (/low|minor|whenever|someday/.test(lower)) priority = 'low';
+    if (/\b(?:high|critical|urgent|asap|p0)\b/.test(lower)) priority = 'high';
+    else if (/\b(?:low|minor|whenever|someday|p3)\b/.test(lower)) priority = 'low';
     else priority = 'medium';
   }
 
@@ -1411,6 +1565,8 @@ async function classifyNoteCli(
     kind,
     priority,
     dueAt,
+    recur: kind === 'note' ? null : (recur ?? null),
+    event: kind === 'note' ? null : event,
     tags: [],
     needsClarification,
     clarifyingQuestion,
@@ -1419,6 +1575,11 @@ async function classifyNoteCli(
 }
 
 function buildCliEntry(text: string, cls: CliClassification, context: NoteContext): NoteEntry {
+  // Tasks can carry a deadline trigger; reminders always can. Tasks may also
+  // recur ("water the plants every 3 days") or fire on an event ("when I open
+  // VS Code") — classify sets dueAt to the first occurrence in the recur case.
+  const triggered =
+    cls.kind === 'reminder' || (cls.kind === 'task' && (Boolean(cls.dueAt) || Boolean(cls.event)));
   return {
     id: noteGenId(),
     kind: cls.kind,
@@ -1429,8 +1590,11 @@ function buildCliEntry(text: string, cls: CliClassification, context: NoteContex
     workspaceTag: context.workspaceFolder,
     priority: cls.kind === 'task' ? (cls.priority ?? 'medium') : undefined,
     done: cls.kind === 'task' ? false : undefined,
-    dueAt: cls.kind === 'reminder' ? (cls.dueAt ?? undefined) : undefined,
-    fired: cls.kind === 'reminder' ? false : undefined,
+    dueAt: triggered ? (cls.dueAt ?? undefined) : undefined,
+    fired: triggered ? false : undefined,
+    missed: cls.kind === 'reminder' ? false : undefined,
+    recur: triggered ? (cls.recur ?? undefined) : undefined,
+    event: triggered ? (cls.event ?? undefined) : undefined,
     context,
   };
 }
@@ -1464,11 +1628,13 @@ function printNoteEntry(n: NoteEntry, idx?: number): void {
     const done = n.done ? ' ✓ done' : '';
     parts.push(`${pIcon}${done}`);
   }
-  if (n.kind === 'reminder' && n.dueAt) {
+  if (n.dueAt) {
     parts.push(`due: ${formatDue(n.dueAt)}`);
-    if (n.fired) parts.push('fired');
-    if (n.missed) parts.push('missed');
+    if (n.fired && !n.recur) parts.push('fired');
+    if (n.missed && !n.done) parts.push(n.kind === 'task' ? 'overdue' : 'missed');
   }
+  if (n.recur) parts.push(`repeats ${describeRecurrence(n.recur)}`);
+  if (n.event) parts.push(`when: ${describeEventTrigger(n.event)}`);
   console.log(parts.join('  '));
   console.log(`    ${n.summary ?? n.text}`);
   if (n.text && n.text !== n.summary) {
@@ -1525,6 +1691,8 @@ async function noteAdd(
         kind: 'note',
         priority: null,
         dueAt: null,
+        recur: null,
+        event: null,
         tags: cls.tags,
         needsClarification: false,
         clarifyingQuestion: null,
@@ -1544,6 +1712,8 @@ async function noteAdd(
       kind: 'note',
       priority: null,
       dueAt: null,
+      recur: null,
+      event: null,
       tags: cls.tags,
       needsClarification: false,
       clarifyingQuestion: null,
@@ -1607,21 +1777,28 @@ function noteDue(): void {
   const notes = loadCliNotes();
   const now = Date.now();
   const due = notes.filter(
-    (n) => n.kind === 'reminder' && n.dueAt && !n.fired && new Date(n.dueAt).getTime() <= now,
+    (n) => n.dueAt && !n.fired && !n.done && new Date(n.dueAt).getTime() <= now,
   );
   if (due.length === 0) {
     console.log('No reminders are due. (´･_･`)');
     return;
   }
-  console.log(`⏰ ${due.length} reminder(s) due:\n`);
+  console.log(`⏰ ${due.length} trigger(s) due:\n`);
   due.forEach((n, i) => {
     printNoteEntry(n, i + 1);
-    // Mark as fired + missed (CLI has no background scheduler)
-    n.fired = true;
-    n.missed = true;
+    if (n.recur) {
+      // Recurring: roll to the next occurrence instead of marking fired.
+      const next = computeNextOccurrence(n.recur, new Date(now));
+      if (next) n.dueAt = next.toISOString();
+      else n.fired = true;
+    } else {
+      // One-shot: mark as fired + missed (CLI has no background scheduler)
+      n.fired = true;
+      n.missed = true;
+    }
   });
   saveCliNotes(notes);
-  console.error('\n  (Reminders marked as fired. Use `askii note add` to create new ones.)');
+  console.error('\n  (Triggers processed. Use `askii note add` to create new ones.)');
 }
 
 async function runNoteCommand(
@@ -2063,27 +2240,52 @@ async function main() {
   }
 
   if (command === 'wiki-reload') {
-    const wikiPath =
-      config.wikiPath || getFlagValue(flags, '--wiki-path') || process.env.ASKII_WIKI_PATH;
-    if (!wikiPath) {
-      console.error('Error: provide --wiki-path <path> or set ASKII_WIKI_PATH');
-      process.exit(1);
-    }
-    if (!fs.existsSync(wikiPath)) {
-      console.error(`Error: wiki path not found: ${wikiPath}`);
-      process.exit(1);
-    }
-    try {
-      console.error(`Indexing wiki files in: ${wikiPath}`);
-      const index = buildWikiIndex(wikiPath);
-      saveWikiIndex(index, wikiPath);
+    const wikiPath = config.wikiPath || getFlagValue(flags, '--wiki-path') || process.env.ASKII_WIKI_PATH;
+    const codeWikiRequested = config.useCodeWiki;
+    if (!wikiPath && !codeWikiRequested) {
       console.error(
-        `Wiki indexed: ${index.chunkCount} chunks from ${index.fileCount} file(s). ${getRandomKaomoji()}`,
+        'Error: nothing to reload — provide --wiki-path <path> (docs wiki) and/or --use-code-wiki (code wiki)',
       );
-    } catch (error) {
-      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);
     }
+    let failed = false;
+
+    if (wikiPath) {
+      if (!fs.existsSync(wikiPath)) {
+        console.error(`Error: wiki path not found: ${wikiPath}`);
+        failed = true;
+      } else {
+        try {
+          console.error(`Indexing wiki files in: ${wikiPath}`);
+          const stats = await buildWikiIndex(wikiPath, {
+            onProgress: (stage, current, total) => {
+              if (stage === 'indexing') {
+                process.stderr.write(`\r  wiki: file ${current}/${total}`);
+              }
+            },
+          });
+          process.stderr.write('\n');
+          console.error(
+            `Wiki indexed: ${stats.chunkCount} chunks from ${stats.fileCount} file(s). ${getRandomKaomoji()}`,
+          );
+        } catch (error) {
+          process.stderr.write('\n');
+          console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          failed = true;
+        }
+      }
+    }
+
+    if (codeWikiRequested) {
+      try {
+        await reloadCliCodeWiki(path.resolve(getFlagValue(flags, '--dir') || process.cwd()));
+      } catch (error) {
+        console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        failed = true;
+      }
+    }
+
+    if (failed) process.exit(1);
   } else if (command === 'ask') {
     const stdin = await readStdin();
     const code = getFlagValue(flags, '-c', '--code') || stdin;
@@ -2096,8 +2298,13 @@ async function main() {
       process.exit(1);
     }
 
-    const wikiCtxAsk = getCliWikiContext(config, question);
+    const wikiCtxAsk = await getCliWikiContext(config, question);
     const wikiSectionAsk = wikiCtxAsk ? `Relevant documentation:\n${wikiCtxAsk}\n\n` : '';
+
+    const codeWikiCtxAsk = await getCliCodeWikiContext(config, question);
+    const codeWikiSectionAsk = codeWikiCtxAsk
+      ? `Relevant code from the codebase:\n${codeWikiCtxAsk}\n\n`
+      : '';
 
     let prompt: string;
     if (code) {
@@ -2105,10 +2312,11 @@ async function main() {
         .filter(Boolean)
         .join('\n');
       const codeBlock = `\`\`\`${lang ?? ''}\n${code}\n\`\`\``;
-      prompt = `${wikiSectionAsk}${metaLines ? metaLines + '\n' : ''}Code:\n${codeBlock}\n\nQuestion: ${question}`;
+      prompt = `${wikiSectionAsk}${codeWikiSectionAsk}${metaLines ? metaLines + '\n' : ''}Code:\n${codeBlock}\n\nQuestion: ${question}`;
     } else {
-      prompt = `${wikiSectionAsk}Question: ${question}`;
+      prompt = `${wikiSectionAsk}${codeWikiSectionAsk}Question: ${question}`;
     }
+    prompt += `\n\n${FILE_CITATION_INSTRUCTIONS}`;
 
     console.error(`ASKII is thinking... ${getRandomThinkingKaomoji()}`);
 
@@ -2276,9 +2484,13 @@ Rules:
     const metaLines = [file ? `File: ${file}` : null, lang ? `Language: ${lang}` : null]
       .filter(Boolean)
       .join('\n');
-    const wikiCtxEdit = getCliWikiContext(config, instruction);
+    const wikiCtxEdit = await getCliWikiContext(config, instruction);
     const wikiSectionEdit = wikiCtxEdit ? `Relevant documentation:\n${wikiCtxEdit}\n\n` : '';
-    const prompt = `${wikiSectionEdit}${metaLines ? metaLines + '\n' : ''}Update this code:\n\`\`\`${lang ?? ''}\n${code}\n\`\`\`\n\nRequest: ${instruction}\n\nReturn only the updated code without explanation.`;
+    const codeWikiCtxEdit = await getCliCodeWikiContext(config, instruction);
+    const codeWikiSectionEdit = codeWikiCtxEdit
+      ? `Relevant code from the codebase:\n${codeWikiCtxEdit}\n\n`
+      : '';
+    const prompt = `${wikiSectionEdit}${codeWikiSectionEdit}${metaLines ? metaLines + '\n' : ''}Update this code:\n\`\`\`${lang ?? ''}\n${code}\n\`\`\`\n\nRequest: ${instruction}\n\nReturn only the updated code without explanation.`;
 
     console.error(`ASKII is editing... (•_•)>⌐■-■`);
 
@@ -2344,8 +2556,13 @@ Rules:
       const workspaceStructure = getWorkspaceStructure(workDir);
       console.error(`\nWorkspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
 
-      const wikiAvailableDo = !!(config.wikiPath && loadWikiIndex(config.wikiPath));
-      const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailableDo);
+      const wikiAvailableDo = !!(config.wikiPath && hasWikiIndex(config.wikiPath));
+      const codeWikiAvailableDo = config.useCodeWiki && hasCodeWikiIndex(workDir);
+      const systemPrompt = buildDoSystemPrompt(
+        workspaceStructure,
+        wikiAvailableDo,
+        codeWikiAvailableDo,
+      );
       const messages: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: task },
@@ -2383,14 +2600,16 @@ Rules:
             a.type === 'view' ||
             a.type === 'list' ||
             a.type === 'search' ||
-            a.type === 'wiki_search',
+            a.type === 'wiki_search' ||
+            a.type === 'code_search',
         );
         const writeActions = actions.filter(
           (a) =>
             a.type !== 'view' &&
             a.type !== 'list' &&
             a.type !== 'search' &&
-            a.type !== 'wiki_search',
+            a.type !== 'wiki_search' &&
+            a.type !== 'code_search',
         );
 
         const feedbackParts: string[] = [];
@@ -2402,10 +2621,16 @@ Rules:
             if (action.type === 'wiki_search') {
               const q = action.query ?? '';
               console.error(`  → Wiki search: "${q}"`);
-              const wikiData = config.wikiPath ? loadWikiIndex(config.wikiPath) : null;
-              viewResults[`wiki_search:${q}`] = wikiData
-                ? searchWiki(q, wikiData) || 'No wiki results found'
-                : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
+              viewResults[`wiki_search:${q}`] =
+                config.wikiPath && hasWikiIndex(config.wikiPath)
+                  ? (await searchWiki(config.wikiPath, q)) || 'No wiki results found'
+                  : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
+            } else if (action.type === 'code_search') {
+              const q = action.query ?? '';
+              console.error(`  → Code search: "${q}"`);
+              viewResults[`code_search:${q}`] = codeWikiAvailableDo
+                ? (await searchCodeWiki(workDir, q)) || 'No code wiki results found'
+                : 'Code wiki not available — run: askii wiki-reload (with --use-code-wiki)';
             } else if (action.type === 'search') {
               console.error(`  → Search: "${action.pattern}"`);
               viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);

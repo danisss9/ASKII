@@ -70,16 +70,86 @@ import {
   takePageScreenshot,
   detectBrowserExecutable,
 } from '@common/browser';
-import { buildWikiIndex, saveWikiIndex, loadWikiIndex, searchWiki } from '@common/wiki';
+import { buildWikiIndex, hasWikiIndex, searchWiki } from '@common/wiki';
+import {
+  rebuildCodeWikiIndex,
+  searchCodeWiki,
+  hasCodeWikiIndex,
+} from '@common/codewiki';
+import {
+  autoLinkFileReferences,
+  makePathResolver,
+  parseLocationHref,
+  FILE_CITATION_INSTRUCTIONS,
+} from '@common/links';
+import {
+  acquireTaskPanel,
+  addTimelineEntry,
+  beginTaskSession,
+  endTaskSession,
+  flushEntryStream,
+  requestChoice,
+  setTaskCanceller,
+  setTaskStatus,
+  streamToEntry,
+  sweepPendingEntries,
+  updateTimelineEntry,
+  waitForFollowUp,
+} from './taskPanel';
 
-function getWikiContext(query: string): string {
-  const config = vscode.workspace.getConfiguration('askii');
-  if (!(config.get<boolean>('wikiEnabled') ?? false)) return '';
-  const wikiPath = config.get<string>('wikiPath') ?? '';
-  if (!wikiPath) return '';
-  const index = loadWikiIndex(wikiPath);
-  if (!index) return '';
-  return searchWiki(query, index);
+async function getWikiContext(query: string): Promise<string> {
+  try {
+    const config = vscode.workspace.getConfiguration('askii');
+    if (!(config.get<boolean>('wikiEnabled') ?? false)) {return '';}
+    const wikiPath = config.get<string>('wikiPath') ?? '';
+    if (!wikiPath || !hasWikiIndex(wikiPath)) {return '';}
+    return await searchWiki(wikiPath, query);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[askii wiki] ${message}`);
+    return '';
+  }
+}
+
+async function getCodeWikiContext(query: string): Promise<string> {
+  try {
+    const config = vscode.workspace.getConfiguration('askii');
+    if (!(config.get<boolean>('codeWikiEnabled') ?? false)) {return '';}
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) {return '';}
+    return await searchCodeWiki(root, query);
+  } catch (error) {
+    // Retrieval must never break the command — log and continue without context
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[askii code wiki] ${message}`);
+    return '';
+  }
+}
+
+// ── Ask answer citations ─────────────────────────────────────────────────────
+// Answers cite locations as `path:line`; the panel rewrites those into
+// askii-open:// links and clicking one lands here to open the exact spot.
+async function openAskiiLocation(href: string): Promise<void> {
+  const loc = parseLocationHref(href);
+  if (!loc) {return;}
+  try {
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(loc.path));
+    const editor = await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.Beside,
+      preview: true,
+    });
+    if (loc.line !== undefined) {
+      const lastLine = Math.max(0, doc.lineCount - 1);
+      const start = Math.min(Math.max(0, loc.line - 1), lastLine);
+      const end = Math.min(Math.max(0, (loc.endLine ?? loc.line) - 1), lastLine);
+      const range = new vscode.Range(start, 0, end, doc.lineAt(end).text.length);
+      editor.selection = new vscode.Selection(range.start, range.end);
+      editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    vscode.window.showErrorMessage(`ASKII: could not open ${loc.path} — ${message}`);
+  }
 }
 
 export async function askAskiiCommand() {
@@ -103,6 +173,13 @@ export async function askAskiiCommand() {
   }
 
   const md = new MarkdownIt({ html: false, linkify: true, typographer: true });
+
+  // Citation candidates resolve against the workspace root and the docs-wiki
+  // folder, so both code and documentation references become clickable
+  const resolveLocation = makePathResolver([
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    vscode.workspace.getConfiguration('askii').get<string>('wikiPath'),
+  ]);
 
   const css = `
     body {
@@ -330,6 +407,17 @@ export async function askAskiiCommand() {
         vscode.postMessage({ type: 'copy', text: rawText });
       }
     });
+    // path:line citations are rewritten into askii-open:// links; clicking one
+    // hands the href to the host, which opens the file at that exact spot
+    contentEl.addEventListener('click', (e) => {
+      const anchor = e.target instanceof Element ? e.target.closest('a') : null;
+      if (!anchor) return;
+      const href = anchor.getAttribute('href') || '';
+      if (href.startsWith('askii-open:')) {
+        e.preventDefault();
+        vscode.postMessage({ type: 'openLocation', href });
+      }
+    });
   </script>
 </body>
 </html>`;
@@ -350,16 +438,18 @@ export async function askAskiiCommand() {
   // Copy & history requests are honored for the whole panel lifetime — the webview falls
   // back to the clipboard path when its own access is unavailable (e.g. unfocused webview).
   panel.webview.onDidReceiveMessage((msg) => {
-    if (typeof msg !== 'object' || msg === null) return;
+    if (typeof msg !== 'object' || msg === null) {return;}
     if (msg.type === 'copy' && typeof msg.text === 'string') {
       void vscode.env.clipboard.writeText(msg.text).then(
         () => {
-          if (!panelDisposed) panel.webview.postMessage({ type: 'copied' });
+          if (!panelDisposed) {panel.webview.postMessage({ type: 'copied' });}
         },
         () => {
-          if (!panelDisposed) panel.webview.postMessage({ type: 'copyFailed' });
+          if (!panelDisposed) {panel.webview.postMessage({ type: 'copyFailed' });}
         },
       );
+    } else if (msg.type === 'openLocation' && typeof msg.href === 'string') {
+      void openAskiiLocation(msg.href);
     } else if (msg.type === 'requestHistory') {
       const html =
         conversation.length === 0
@@ -368,14 +458,16 @@ export async function askAskiiCommand() {
               .map((entry) => {
                 let answerHtml: string;
                 try {
-                  answerHtml = md.render(entry.answer);
+                  answerHtml = md.render(
+                    autoLinkFileReferences(entry.answer, { resolve: resolveLocation }),
+                  );
                 } catch {
                   answerHtml = `<pre>${escapeHtml(entry.answer)}</pre>`;
                 }
                 return `<div class="history-entry"><div class="history-q">${escapeHtml(entry.question)}</div>${answerHtml}</div>`;
               })
               .join('<hr>');
-      if (!panelDisposed) panel.webview.postMessage({ type: 'history', html });
+      if (!panelDisposed) {panel.webview.postMessage({ type: 'history', html });}
     }
   });
 
@@ -390,14 +482,17 @@ export async function askAskiiCommand() {
   });
 
   while (!panelDisposed) {
-    const wikiCtx = getWikiContext(currentQuestion);
+    const wikiCtx = await getWikiContext(currentQuestion);
     const wikiSection = wikiCtx ? `Relevant documentation:\n${wikiCtx}\n\n` : '';
-    const fullPrompt = wikiSection + codeContext + history + `Question: ${currentQuestion}`;
+    const codeWikiCtx = await getCodeWikiContext(currentQuestion);
+    const codeWikiSection = codeWikiCtx ? `Relevant code from the codebase:\n${codeWikiCtx}\n\n` : '';
+    const fullPrompt =
+      wikiSection + codeWikiSection + codeContext + history + `Question: ${currentQuestion}`;
     let accumulated = '';
 
     const renderAccumulated = (): string => {
       try {
-        return md.render(accumulated);
+        return md.render(autoLinkFileReferences(accumulated, { resolve: resolveLocation }));
       } catch {
         return `<pre>${escapeHtml(accumulated)}</pre>`;
       }
@@ -410,7 +505,7 @@ export async function askAskiiCommand() {
       await getExtensionResponseStreaming(
         fullPrompt,
         (chunk) => {
-          if (panelDisposed) return;
+          if (panelDisposed) {return;}
           accumulated += chunk;
           if (flushTimer === null) {
             flushTimer = setTimeout(() => {
@@ -421,7 +516,8 @@ export async function askAskiiCommand() {
             }, 50);
           }
         },
-        'You are ASKII, a precise coding assistant. Answer concisely.',
+        'You are ASKII, a precise coding assistant. Answer concisely.\n\n' +
+        FILE_CITATION_INSTRUCTIONS,
       );
       if (flushTimer !== null) {
         clearTimeout(flushTimer);
@@ -444,14 +540,14 @@ export async function askAskiiCommand() {
       const answer = await new Promise<string | null>((resolve) => {
         let settled = false;
         const settle = (value: string | null): void => {
-          if (settled) return;
+          if (settled) {return;}
           settled = true;
           msgDisp.dispose();
           dispDisp.dispose();
           resolve(value);
         };
         const msgDisp = panel.webview.onDidReceiveMessage(async (msg) => {
-          if (typeof msg !== 'object' || msg === null) return;
+          if (typeof msg !== 'object' || msg === null) {return;}
           if (msg.type === 'followup') {
             settle(
               (await vscode.window.showInputBox({
@@ -519,14 +615,19 @@ export async function askiiEditCommand() {
       .filter(Boolean)
       .join('\n');
 
-    const wikiCtxEdit = getWikiContext(question);
+    const wikiCtxEdit = await getWikiContext(question);
     const wikiSectionEdit = wikiCtxEdit ? `Relevant documentation:\n${wikiCtxEdit}\n\n` : '';
+    const codeWikiCtxEdit = await getCodeWikiContext(question);
+    const codeWikiSectionEdit = codeWikiCtxEdit
+      ? `Relevant code from the codebase:\n${codeWikiCtxEdit}\n\n`
+      : '';
 
     let prompt: string;
     if (hasSelection && selectedText !== null) {
       // Pass full file as context, but ask only for the selected portion back
       prompt =
         wikiSectionEdit +
+        codeWikiSectionEdit +
         `${metaLines ? metaLines + '\n' : ''}` +
         `Full file context:\n\`\`\`${languageId}\n${fullFileText}\n\`\`\`\n\n` +
         `Update only this selected section:\n\`\`\`${languageId}\n${selectedText}\n\`\`\`\n\n` +
@@ -536,6 +637,7 @@ export async function askiiEditCommand() {
       // No selection — edit the entire file
       prompt =
         wikiSectionEdit +
+        codeWikiSectionEdit +
         `${metaLines ? metaLines + '\n' : ''}` +
         `Update this file:\n\`\`\`${languageId}\n${fullFileText}\n\`\`\`\n\n` +
         `Request: ${question}\n\n` +
@@ -613,7 +715,7 @@ export async function askiiDoCommand() {
     placeHolder: 'e.g., Create a test file, refactor common patterns',
   });
 
-  if (!question) return;
+  if (!question) {return;}
 
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceRoot) {
@@ -621,313 +723,467 @@ export async function askiiDoCommand() {
     return;
   }
 
+  if (!beginTaskSession()) {
+    vscode.window.showInformationMessage('ASKII is already running a task — see the ASKII task panel.');
+    return;
+  }
+
   const config = vscode.workspace.getConfiguration('askii');
-  const maxRounds = config.get<number>('doMaxRounds') || 5;
+  const maxRounds = config.get<number>('doMaxRounds') || 20;
   const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
   const formatAfterEdit = config.get<boolean>('formatAfterEdit') ?? false;
   const rootPath = workspaceRoot.uri.fsPath;
 
-  deleteAllBackups(rootPath);
+  try {
+    deleteAllBackups(rootPath);
+  } catch {
+    // Backup cleanup is best-effort; don't block the run on it
+  }
 
   const channel = vscode.window.createOutputChannel('ASKII Do');
-  channel.show(true);
   channel.appendLine(`Task: ${question}`);
 
   const abortController = new AbortController();
+  setTaskCanceller(() => {
+    abortController.abort();
+    channel.appendLine('\nStopped by user.');
+  });
 
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: 'ASKII Do', cancellable: true },
-    async (_progress, token) => {
-      token.onCancellationRequested(() => {
-        abortController.abort();
-        channel.appendLine('\nStopped by user.');
-      });
+  acquireTaskPanel('ASKII Do');
 
-      try {
+  // Wiki availability only depends on settings/indexes — resolve once per session
+  const wikiPath = config.get<string>('wikiPath') ?? '';
+  const wikiEnabled = config.get<boolean>('wikiEnabled') ?? false;
+  const wikiAvailable = !!(wikiEnabled && wikiPath && hasWikiIndex(wikiPath));
+  const codeWikiEnabled = config.get<boolean>('codeWikiEnabled') ?? false;
+  const codeWikiAvailable = codeWikiEnabled && hasCodeWikiIndex(rootPath);
+
+  const messages: ChatMessage[] = [];
+  let currentTask: string | null = question;
+
+  while (currentTask) {
+    if (currentTask !== question) {
+      channel.appendLine(`\nFollow-up task: ${currentTask}`);
+    }
+    setTaskStatus('running', currentTask);
+
+    let completedActions = 0;
+    let roundCount = 0;
+    let taskComplete = false;
+    let errorMsg: string | null = null;
+
+    try {
+      if (messages.length === 0) {
         const workspaceStructure = getWorkspaceStructure(rootPath);
-        const doConfig = vscode.workspace.getConfiguration('askii');
-        const wikiPath = doConfig.get<string>('wikiPath') ?? '';
-        const wikiEnabled = doConfig.get<boolean>('wikiEnabled') ?? false;
-        const wikiAvailable = !!(wikiEnabled && wikiPath && loadWikiIndex(wikiPath));
-        const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable);
-
-        const messages: ChatMessage[] = [
+        const systemPrompt = buildDoSystemPrompt(
+          workspaceStructure,
+          wikiAvailable,
+          codeWikiAvailable,
+        );
+        messages.push(
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: question },
-        ];
-
-        let completedActions = 0;
-        let roundCount = 0;
-
-        while (roundCount < maxRounds && !abortController.signal.aborted) {
-          channel.appendLine(`\n[Round ${roundCount + 1}/${maxRounds}]`);
-
-          channel.append('AI: ');
-          const responseText = await getExtensionChatStreaming(messages, (chunk) =>
-            channel.append(chunk),
-          );
-          channel.appendLine('');
-          messages.push({ role: 'assistant', content: responseText });
-
-          const actions = parseWorkspaceActions(responseText);
-          if (actions.length === 0) {
-            channel.appendLine('No actions returned. Done.');
-            if (responseText.trim()) {
-              channel.appendLine(`Raw (first 500): ${responseText.substring(0, 500)}`);
-            }
-            break;
-          }
-
-          const readActions = actions.filter(
-            (a) =>
-              a.type === 'view' ||
-              a.type === 'list' ||
-              a.type === 'search' ||
-              a.type === 'wiki_search',
-          );
-          const writeActions = actions.filter(
-            (a) =>
-              a.type !== 'view' &&
-              a.type !== 'list' &&
-              a.type !== 'search' &&
-              a.type !== 'wiki_search',
-          );
-
-          const feedbackParts: string[] = [];
-
-          // ── Read actions (no confirmation) ──────────────────────────────────────
-          const viewResults: Record<string, string> = {};
-          for (const action of readActions) {
-            try {
-              if (action.type === 'wiki_search') {
-                const q = action.query ?? '';
-                channel.appendLine(`Wiki search: "${q}"`);
-                const wikiData = wikiPath ? loadWikiIndex(wikiPath) : null;
-                viewResults[`wiki_search:${q}`] = wikiData
-                  ? searchWiki(q, wikiData) || 'No wiki results found'
-                  : 'Wiki not available — set askii.wikiPath and run Reload Wiki';
-              } else if (action.type === 'search') {
-                channel.appendLine(`Search: "${action.pattern}"`);
-                viewResults[`search:${action.pattern}`] = executeSearchAction(action, rootPath);
-              } else if (action.type === 'view' && action.paths) {
-                for (const p of action.paths) {
-                  channel.appendLine(`Viewing: ${p}`);
-                  try {
-                    viewResults[p] = executeViewAction(
-                      { ...action, path: p, paths: undefined },
-                      rootPath,
-                    );
-                  } catch (e) {
-                    viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
-                  }
-                }
-              } else {
-                channel.appendLine(
-                  `${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`,
-                );
-                viewResults[action.path!] = executeViewAction(action, rootPath);
-              }
-            } catch (e) {
-              viewResults[action.path ?? 'unknown'] =
-                `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
-            }
-          }
-
-          if (Object.keys(viewResults).length > 0) {
-            feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
-          }
-
-          // ── Write actions (with confirmation) ───────────────────────────────────
-          const actionResults: ActionResult[] = [];
-
-          for (const action of writeActions) {
-            // Sandbox check
-            let filePath: string;
-            try {
-              filePath = sandboxPath(rootPath, action.path!);
-            } catch (e) {
-              const msg = e instanceof Error ? e.message : 'Path error';
-              channel.appendLine(`BLOCKED: ${msg}`);
-              actionResults.push({
-                action: `${action.type}:${action.path}`,
-                status: 'error',
-                detail: msg,
-              });
-              continue;
-            }
-
-            if (action.type === 'run') {
-              channel.appendLine(`Run: ${action.command}`);
-              const choice = await vscode.window.showInformationMessage(
-                `ASKII Do — run command?\n${action.command}`,
-                { modal: true },
-                'Run',
-                'Skip',
-              );
-              if (choice !== 'Run') {
-                actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
-                continue;
-              }
-              try {
-                const { execSync } = await import('child_process');
-                const output = execSync(action.command!, {
-                  cwd: rootPath,
-                  encoding: 'utf-8',
-                  timeout: 30000,
-                });
-                channel.appendLine(`Run output: ${output.substring(0, 200)}`);
-                actionResults.push({
-                  action: `run:${action.command}`,
-                  status: 'ok',
-                  detail: output.substring(0, 500),
-                });
-              } catch (e: unknown) {
-                const err = e as { stdout?: string; stderr?: string; message?: string };
-                const detail =
-                  `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
-                channel.appendLine(`Run failed: ${detail.substring(0, 200)}`);
-                actionResults.push({
-                  action: `run:${action.command}`,
-                  status: 'error',
-                  detail: detail.substring(0, 500),
-                });
-              }
-              continue;
-            }
-
-            // Confirmation for all other write actions
-            const confirmMsg = _doConfirmMessage(action);
-            let confirmed = autoConfirm;
-            if (!confirmed) {
-              const choice = await vscode.window.showInformationMessage(
-                `ASKII Do — ${confirmMsg}`,
-                { modal: true },
-                'Confirm',
-                'Skip',
-              );
-              confirmed = choice === 'Confirm';
-            }
-
-            if (!confirmed) {
-              actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
-              continue;
-            }
-
-            try {
-              const result = await _executeWriteAction(action, filePath, rootPath, formatAfterEdit);
-              if (result === 'ok') completedActions++;
-              actionResults.push({
-                action: `${action.type}:${action.path}`,
-                status: result === 'ok' ? 'ok' : 'error',
-                detail: result === 'ok' ? undefined : result,
-              });
-              if (result === 'ok') {
-                channel.appendLine(`✓ ${_doActionLabel(action)}`);
-              } else {
-                channel.appendLine(`✗ Failed: ${result}`);
-              }
-            } catch (e) {
-              const detail = e instanceof Error ? e.message : 'Unknown error';
-              channel.appendLine(`✗ Failed: ${detail}`);
-              actionResults.push({
-                action: `${action.type}:${action.path}`,
-                status: 'error',
-                detail,
-              });
-            }
-          }
-
-          if (actionResults.length > 0) {
-            feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
-          }
-
-          if (feedbackParts.length === 0) break;
-
-          messages.push({
-            role: 'user',
-            content:
-              feedbackParts.join('\n\n') +
-              '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
-          });
-
-          roundCount++;
-        }
-
-        if (abortController.signal.aborted) {
-          channel.appendLine(`\nCompleted ${completedActions} actions before stopping. (⌐■_■)`);
-        } else {
-          if (roundCount >= maxRounds) channel.appendLine(`Max rounds (${maxRounds}) reached.`);
-          channel.appendLine(`\nCompleted ${completedActions} actions! (⌐■_■)`);
-        }
-
-        if (hasBackups(rootPath)) {
-          const choice = await vscode.window.showInformationMessage(
-            `ASKII Do: ${completedActions} actions completed.`,
-            'Confirm',
-            'Undo',
-          );
-          if (choice === 'Undo') {
-            const { restored, deleted } = restoreAllBackups(rootPath);
-            deleteAllBackups(rootPath);
-            channel.appendLine(
-              `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
-            );
-            vscode.window.showInformationMessage(
-              `ASKII Do: Restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
-            );
-          } else if (choice === 'Confirm') {
-            deleteAllBackups(rootPath);
-          }
-        } else {
-          vscode.window.showInformationMessage(`ASKII Do: ${completedActions} actions completed.`);
-        }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        channel.appendLine(`\nError: ${errorMsg}`);
-        vscode.window.showErrorMessage(`ASKII Do failed: ${errorMsg}`);
+          { role: 'user', content: currentTask },
+        );
+      } else {
+        messages.push({ role: 'user', content: currentTask });
       }
-    }, // end withProgress callback
-  );
+
+      while (roundCount < maxRounds && !abortController.signal.aborted) {
+        channel.appendLine(`\n[Round ${roundCount + 1}/${maxRounds}]`);
+
+        const roundEntry = addTimelineEntry({
+          kind: 'round',
+          title: `Round ${roundCount + 1} of ${maxRounds}`,
+          status: 'pending',
+        });
+
+        channel.append('AI: ');
+        const responseText = await getExtensionChatStreaming(messages, (chunk) => {
+          channel.append(chunk);
+          streamToEntry(roundEntry, chunk);
+        });
+        flushEntryStream(roundEntry);
+        channel.appendLine('');
+        updateTimelineEntry(roundEntry, { status: 'ok' });
+        messages.push({ role: 'assistant', content: responseText });
+
+        const actions = parseWorkspaceActions(responseText);
+        if (actions.length === 0) {
+          channel.appendLine('No actions returned. Done.');
+          if (responseText.trim()) {
+            channel.appendLine(`Raw (first 500): ${responseText.substring(0, 500)}`);
+          }
+          addTimelineEntry({
+            kind: 'done',
+            title: 'Task complete',
+            detail: responseText.trim() ? _timelineSnippet(responseText) : undefined,
+          });
+          taskComplete = true;
+          break;
+        }
+
+        const readActions = actions.filter(
+          (a) =>
+            a.type === 'view' ||
+            a.type === 'list' ||
+            a.type === 'search' ||
+            a.type === 'wiki_search' ||
+            a.type === 'code_search',
+        );
+        const writeActions = actions.filter(
+          (a) =>
+            a.type !== 'view' &&
+            a.type !== 'list' &&
+            a.type !== 'search' &&
+            a.type !== 'wiki_search' &&
+            a.type !== 'code_search',
+        );
+
+        const feedbackParts: string[] = [];
+
+        // ── Read actions (no confirmation) ──────────────────────────────────────
+        const viewResults: Record<string, string> = {};
+        for (const action of readActions) {
+          if (action.type === 'view' && action.paths) {
+            for (const p of action.paths) {
+              channel.appendLine(`Viewing: ${p}`);
+              const entry = addTimelineEntry({
+                kind: 'action',
+                title: `View: ${p}`,
+                status: 'pending',
+              });
+              try {
+                const result = executeViewAction(
+                  { ...action, path: p, paths: undefined },
+                  rootPath,
+                );
+                viewResults[p] = result;
+                updateTimelineEntry(entry, { status: 'ok', detail: _timelineSnippet(result) });
+              } catch (e) {
+                const msg = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
+                viewResults[p] = msg;
+                updateTimelineEntry(entry, { status: 'error', detail: msg });
+              }
+            }
+            continue;
+          }
+
+          const entry = addTimelineEntry({
+            kind: 'action',
+            title: _doReadLabel(action),
+            status: 'pending',
+          });
+          try {
+            if (action.type === 'wiki_search') {
+              const q = action.query ?? '';
+              channel.appendLine(`Wiki search: "${q}"`);
+              const result =
+                wikiPath && hasWikiIndex(wikiPath)
+                  ? (await searchWiki(wikiPath, q)) || 'No wiki results found'
+                  : 'Wiki not available — set askii.wikiPath and run Reload Wikis';
+              viewResults[`wiki_search:${q}`] = result;
+              updateTimelineEntry(entry, { status: 'ok', detail: _timelineSnippet(result) });
+            } else if (action.type === 'code_search') {
+              const q = action.query ?? '';
+              channel.appendLine(`Code search: "${q}"`);
+              const result = codeWikiAvailable
+                ? (await searchCodeWiki(rootPath, q)) || 'No code wiki results found'
+                : 'Code wiki not available — enable askii.codeWikiEnabled and run Reload Wikis';
+              viewResults[`code_search:${q}`] = result;
+              updateTimelineEntry(entry, { status: 'ok', detail: _timelineSnippet(result) });
+            } else if (action.type === 'search') {
+              channel.appendLine(`Search: "${action.pattern}"`);
+              const result = executeSearchAction(action, rootPath);
+              viewResults[`search:${action.pattern}`] = result;
+              updateTimelineEntry(entry, { status: 'ok', detail: _timelineSnippet(result) });
+            } else {
+              channel.appendLine(
+                `${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`,
+              );
+              const result = executeViewAction(action, rootPath);
+              viewResults[action.path!] = result;
+              updateTimelineEntry(entry, { status: 'ok', detail: _timelineSnippet(result) });
+            }
+          } catch (e) {
+            const msg = `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
+            viewResults[action.path ?? 'unknown'] = msg;
+            updateTimelineEntry(entry, { status: 'error', detail: msg });
+          }
+        }
+
+        if (Object.keys(viewResults).length > 0) {
+          feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
+        }
+
+        // ── Write actions (with confirmation) ───────────────────────────────────
+        const actionResults: ActionResult[] = [];
+
+        for (const action of writeActions) {
+          if (abortController.signal.aborted) {break;}
+
+          // Sandbox check
+          let filePath: string;
+          try {
+            filePath = sandboxPath(rootPath, action.path!);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : 'Path error';
+            channel.appendLine(`BLOCKED: ${msg}`);
+            addTimelineEntry({
+              kind: 'error',
+              title: `Blocked: ${_doConfirmMessage(action)}`,
+              detail: msg,
+            });
+            actionResults.push({
+              action: `${action.type}:${action.path}`,
+              status: 'error',
+              detail: msg,
+            });
+            continue;
+          }
+
+          if (action.type === 'run') {
+            channel.appendLine(`Run: ${action.command}`);
+            const runEntry = addTimelineEntry({
+              kind: 'action',
+              title: `Run: ${action.command}`,
+              status: 'pending',
+            });
+            const choice = await requestChoice(
+              runEntry,
+              'Run this command in the workspace?',
+              ['Run', 'Skip'],
+            );
+            if (choice !== 'Run') {
+              updateTimelineEntry(runEntry, { status: 'skipped' });
+              actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
+              continue;
+            }
+            try {
+              const { execSync } = await import('child_process');
+              const output = execSync(action.command!, {
+                cwd: rootPath,
+                encoding: 'utf-8',
+                timeout: 30000,
+              });
+              channel.appendLine(`Run output: ${output.substring(0, 200)}`);
+              updateTimelineEntry(runEntry, { status: 'ok', detail: _timelineSnippet(output, 500) });
+              actionResults.push({
+                action: `run:${action.command}`,
+                status: 'ok',
+                detail: output.substring(0, 500),
+              });
+            } catch (e: unknown) {
+              const err = e as { stdout?: string; stderr?: string; message?: string };
+              const detail =
+                `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
+              channel.appendLine(`Run failed: ${detail.substring(0, 200)}`);
+              updateTimelineEntry(runEntry, { status: 'error', detail: _timelineSnippet(detail, 500) });
+              actionResults.push({
+                action: `run:${action.command}`,
+                status: 'error',
+                detail: detail.substring(0, 500),
+              });
+            }
+            continue;
+          }
+
+          // Confirmation for all other write actions — asked in the panel
+          const confirmMsg = _doConfirmMessage(action);
+          const writeEntry = addTimelineEntry({
+            kind: 'action',
+            title: confirmMsg,
+            status: 'pending',
+          });
+          let confirmed = autoConfirm;
+          if (!confirmed) {
+            confirmed =
+              (await requestChoice(writeEntry, undefined, ['Confirm', 'Skip'])) === 'Confirm';
+          }
+
+          if (!confirmed) {
+            updateTimelineEntry(writeEntry, { status: 'skipped' });
+            actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
+            continue;
+          }
+
+          try {
+            const result = await _executeWriteAction(action, filePath, rootPath, formatAfterEdit);
+            if (result === 'ok') {completedActions++;}
+            actionResults.push({
+              action: `${action.type}:${action.path}`,
+              status: result === 'ok' ? 'ok' : 'error',
+              detail: result === 'ok' ? undefined : result,
+            });
+            updateTimelineEntry(writeEntry, {
+              title: _doActionLabel(action),
+              status: result === 'ok' ? 'ok' : 'error',
+              detail: result === 'ok' ? undefined : result,
+            });
+            if (result === 'ok') {
+              channel.appendLine(`✓ ${_doActionLabel(action)}`);
+            } else {
+              channel.appendLine(`✗ Failed: ${result}`);
+            }
+          } catch (e) {
+            const detail = e instanceof Error ? e.message : 'Unknown error';
+            channel.appendLine(`✗ Failed: ${detail}`);
+            updateTimelineEntry(writeEntry, { status: 'error', detail });
+            actionResults.push({
+              action: `${action.type}:${action.path}`,
+              status: 'error',
+              detail,
+            });
+          }
+        }
+
+        if (actionResults.length > 0) {
+          feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
+        }
+
+        if (feedbackParts.length === 0) {break;}
+
+        messages.push({
+          role: 'user',
+          content:
+            feedbackParts.join('\n\n') +
+            '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
+        });
+
+        roundCount++;
+      }
+
+      if (roundCount >= maxRounds && !taskComplete && !abortController.signal.aborted) {
+        channel.appendLine(`Max rounds (${maxRounds}) reached.`);
+        addTimelineEntry({ kind: 'info', title: `Max rounds (${maxRounds}) reached`, status: 'error' });
+      }
+    } catch (error) {
+      if (!abortController.signal.aborted) {
+        errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      }
+    } finally {
+      endTaskSession();
+    }
+
+    if (errorMsg) {
+      channel.appendLine(`\nError: ${errorMsg}`);
+      addTimelineEntry({ kind: 'error', title: 'ASKII Do failed', detail: errorMsg });
+      setTaskStatus('error', errorMsg);
+      vscode.window.showErrorMessage(`ASKII Do failed: ${errorMsg}`);
+      sweepPendingEntries();
+      break;
+    }
+    if (abortController.signal.aborted) {
+      channel.appendLine(`\nCompleted ${completedActions} actions before stopping. (⌐■_■)`);
+      addTimelineEntry({ kind: 'info', title: 'Stopped by user' });
+      setTaskStatus('cancelled', `Completed ${completedActions} action(s) before stopping`);
+      sweepPendingEntries();
+      break;
+    }
+
+    setTaskStatus('done', `Completed ${completedActions} action(s)`);
+    if (!taskComplete) {
+      vscode.window.showInformationMessage(`ASKII Do: ${completedActions} actions completed.`);
+    }
+
+    // Keep-or-undo is answered in the panel; dismissing the panel keeps the
+    // changes (matching the old dialog's Esc behavior).
+    if (hasBackups(rootPath)) {
+      const choiceEntry = addTimelineEntry({
+        kind: 'confirm',
+        title: `${completedActions} action(s) completed`,
+        status: 'pending',
+      });
+      const choice = await requestChoice(
+        choiceEntry,
+        'Keep these changes?',
+        ['Keep changes', 'Undo all'],
+      );
+      if (choice === 'Undo all') {
+        const { restored, deleted } = restoreAllBackups(rootPath);
+        deleteAllBackups(rootPath);
+        channel.appendLine(
+          `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
+        );
+        updateTimelineEntry(choiceEntry, {
+          status: 'ok',
+          detail: `Restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
+        });
+        vscode.window.showInformationMessage(
+          `ASKII Do: Restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
+        );
+      } else if (choice === 'Keep changes') {
+        deleteAllBackups(rootPath);
+        updateTimelineEntry(choiceEntry, { status: 'ok' });
+      } else {
+        updateTimelineEntry(choiceEntry, { status: 'skipped' });
+      }
+    }
+
+    // Cancel pressed while the keep/undo choice was up ends the session.
+    if (abortController.signal.aborted) {
+      addTimelineEntry({ kind: 'info', title: 'Stopped by user' });
+      setTaskStatus('cancelled', 'Stopped by user');
+      sweepPendingEntries();
+      break;
+    }
+
+    currentTask = await waitForFollowUp();
+    if (currentTask && !beginTaskSession()) {
+      // Another command took the panel over while we were idle
+      break;
+    }
+  }
 }
 
 async function runBrowserTask(task: string) {
+  if (!beginTaskSession()) {
+    vscode.window.showInformationMessage('ASKII is already running a task — see the ASKII task panel.');
+    return;
+  }
+
   const config = vscode.workspace.getConfiguration('askii');
-  const maxRounds = config.get<number>('doMaxRounds') ?? 5;
+  const maxRounds = config.get<number>('doMaxRounds') ?? 20;
   const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
   const headless = config.get<boolean>('browserHeadless') ?? false;
   const chromePath = config.get<string>('chromePath') || detectBrowserExecutable();
 
   const outputChannel = vscode.window.createOutputChannel('ASKII Control (Browser)');
-  outputChannel.show(true);
   outputChannel.appendLine(`ASKII Control (Browser) started ${getRandomThinkingKaomoji()}`);
   outputChannel.appendLine(`Task: ${task}`);
   outputChannel.appendLine('');
 
   const abortController = new AbortController();
+  setTaskCanceller(() => {
+    abortController.abort();
+    outputChannel.appendLine('Stopped by user.');
+  });
 
-  await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: 'ASKII Control (Browser)',
-      cancellable: true,
-    },
-    async (_progress, token) => {
-      token.onCancellationRequested(() => {
-        abortController.abort();
-        outputChannel.appendLine('Stopped by user.');
-      });
+  acquireTaskPanel('ASKII Control (Browser)');
 
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const puppeteer = require('puppeteer-core') as typeof import('puppeteer-core');
-      let browser: import('puppeteer-core').Browser | undefined;
+  const puppeteer = require('puppeteer-core') as typeof import('puppeteer-core');
+  let browser: import('puppeteer-core').Browser | undefined;
+  let page: import('puppeteer-core').Page | undefined;
 
-      try {
+  let currentTask: string | null = task;
+
+  while (currentTask) {
+    if (currentTask !== task) {
+      outputChannel.appendLine(`\nTask: ${currentTask}`);
+    }
+    setTaskStatus('running', currentTask);
+
+    let round = 0;
+    let taskComplete = false;
+    let stoppedByChoice = false;
+    let errorMsg: string | null = null;
+    let errorLogged = false;
+
+    try {
+      if (!browser) {
         if (!chromePath) {
-          const msg =
-            'No Chromium-based browser found. Install Chrome or Edge, or set askii.chromePath to your browser executable (e.g. C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe).';
-          outputChannel.appendLine(`Error: ${msg}`);
-          vscode.window.showErrorMessage(`ASKII Control (Browser) failed: ${msg}`);
-          return;
+          throw new Error(
+            'No Chromium-based browser found. Install Chrome or Edge, or set askii.chromePath to your browser executable (e.g. C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe).',
+          );
         }
         outputChannel.appendLine('Launching browser...');
         outputChannel.appendLine(`Browser executable: ${chromePath}`);
@@ -937,98 +1193,162 @@ async function runBrowserTask(task: string) {
           args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
         });
 
-        const [page] = await browser.pages();
-        await page.setViewport(null);
+        const [firstPage] = await browser.pages();
+        await firstPage.setViewport(null);
+        page = firstPage;
+      }
 
-        let round = 0;
+      while (round < maxRounds && !abortController.signal.aborted) {
+        outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — capturing screenshot...`);
+        const roundEntry = addTimelineEntry({
+          kind: 'round',
+          title: `Round ${round + 1} of ${maxRounds}`,
+          status: 'pending',
+        });
 
-        while (round < maxRounds && !abortController.signal.aborted) {
-          outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — capturing screenshot...`);
+        const imageBase64 = await takePageScreenshot(page!);
+        const currentUrl = page!.url();
 
-          const imageBase64 = await takePageScreenshot(page);
-          const currentUrl = page.url();
+        outputChannel.appendLine(`Current URL: ${currentUrl}`);
+        updateTimelineEntry(roundEntry, {
+          screenshot: `data:image/png;base64,${imageBase64}`,
+          detail: currentUrl,
+        });
 
-          outputChannel.appendLine(`Current URL: ${currentUrl}`);
+        const systemPrompt = buildBrowserSystemPrompt();
+        const userPrompt =
+          round === 0
+            ? `Task: ${currentTask}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and determine the next action.`
+            : `Continuing task: ${currentTask}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and return the next action or DONE.`;
 
-          const systemPrompt = buildBrowserSystemPrompt();
-          const userPrompt =
-            round === 0
-              ? `Task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and determine the next action.`
-              : `Continuing task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and return the next action or DONE.`;
+        outputChannel.appendLine('Asking AI...');
+        const rawResponse = await getExtensionResponseWithImage(
+          `${systemPrompt}\n\n${userPrompt}`,
+          imageBase64,
+        );
 
-          outputChannel.appendLine('Asking AI...');
-          const rawResponse = await getExtensionResponseWithImage(
-            `${systemPrompt}\n\n${userPrompt}`,
-            imageBase64,
-          );
+        if (abortController.signal.aborted) {break;}
 
-          if (abortController.signal.aborted) break;
+        const parsed = parseBrowserResponse(rawResponse);
 
-          const parsed = parseBrowserResponse(rawResponse);
+        if (!parsed) {
+          outputChannel.appendLine('Error: could not parse AI response.');
+          outputChannel.appendLine(`Raw: ${rawResponse}`);
+          addTimelineEntry({
+            kind: 'error',
+            title: 'Could not parse AI response',
+            detail: _timelineSnippet(rawResponse, 1000),
+          });
+          errorMsg = 'Could not parse AI response.';
+          errorLogged = true;
+          break;
+        }
 
-          if (!parsed) {
-            outputChannel.appendLine('Error: could not parse AI response.');
-            outputChannel.appendLine(`Raw: ${rawResponse}`);
+        if (parsed.type === 'done') {
+          outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
+          outputChannel.appendLine(`Reasoning: ${parsed.reasoning}`);
+          updateTimelineEntry(roundEntry, { status: 'ok' });
+          addTimelineEntry({
+            kind: 'done',
+            title: 'Task complete',
+            detail: parsed.reasoning || undefined,
+          });
+          taskComplete = true;
+          break;
+        }
+
+        updateTimelineEntry(roundEntry, { status: 'ok' });
+
+        let stopped = false;
+        for (const action of parsed.actions) {
+          if (abortController.signal.aborted) {
+            stopped = true;
             break;
           }
 
-          if (parsed.type === 'done') {
-            outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
-            outputChannel.appendLine(`Reasoning: ${parsed.reasoning}`);
-            break;
-          }
+          const description = describeBrowserAction(action);
+          outputChannel.appendLine(`Action: ${description}`);
+          outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
 
-          let stopped = false;
-          for (const action of parsed.actions) {
-            if (abortController.signal.aborted) {
+          const actionEntry = addTimelineEntry({
+            kind: 'action',
+            title: description,
+            detail: action.reasoning,
+            status: 'pending',
+          });
+
+          if (!autoConfirm) {
+            const choice = await requestChoice(actionEntry, undefined, ['Execute', 'Stop']);
+            if (choice !== 'Execute' || abortController.signal.aborted) {
+              outputChannel.appendLine('Stopped by user.');
               stopped = true;
+              stoppedByChoice = true;
+              updateTimelineEntry(actionEntry, { status: 'skipped' });
               break;
             }
-
-            const description = describeBrowserAction(action);
-            outputChannel.appendLine(`Action: ${description}`);
-            outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
-
-            if (!autoConfirm) {
-              const choice = await vscode.window.showInformationMessage(
-                `ASKII Control (Browser): ${description}`,
-                { modal: false },
-                'Execute',
-                'Stop',
-              );
-              if (choice !== 'Execute' || abortController.signal.aborted) {
-                outputChannel.appendLine('Stopped by user.');
-                stopped = true;
-                break;
-              }
-            }
-
-            try {
-              await executeBrowserAction(action, page);
-              outputChannel.appendLine('Done.\n');
-            } catch (execErr) {
-              const msg = execErr instanceof Error ? execErr.message : 'Unknown error';
-              outputChannel.appendLine(`Action failed: ${msg}`);
-              vscode.window.showWarningMessage(
-                `ASKII Control (Browser): ${description} failed — ${msg}`,
-              );
-            }
           }
-          if (stopped) break;
 
-          round++;
+          try {
+            await executeBrowserAction(action, page!);
+            outputChannel.appendLine('Done.\n');
+            updateTimelineEntry(actionEntry, { status: 'ok' });
+          } catch (execErr) {
+            const msg = execErr instanceof Error ? execErr.message : 'Unknown error';
+            outputChannel.appendLine(`Action failed: ${msg}`);
+            updateTimelineEntry(actionEntry, {
+              status: 'error',
+              detail: `${action.reasoning}\nFailed: ${msg}`.trim(),
+            });
+            vscode.window.showWarningMessage(
+              `ASKII Control (Browser): ${description} failed — ${msg}`,
+            );
+          }
         }
+        if (stopped) {break;}
 
-        if (round >= maxRounds && !abortController.signal.aborted) {
-          outputChannel.appendLine(`Max rounds (${maxRounds}) reached.`);
-        }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        outputChannel.appendLine(`Error: ${errorMsg}`);
-        vscode.window.showErrorMessage(`ASKII Control (Browser) failed: ${errorMsg}`);
+        round++;
       }
-    },
-  );
+
+      if (round >= maxRounds && !taskComplete && !abortController.signal.aborted) {
+        outputChannel.appendLine(`Max rounds (${maxRounds}) reached.`);
+        addTimelineEntry({
+          kind: 'info',
+          title: `Max rounds (${maxRounds}) reached`,
+          status: 'error',
+        });
+      }
+    } catch (error) {
+      if (!abortController.signal.aborted) {
+        errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      }
+    } finally {
+      endTaskSession();
+    }
+
+    if (errorMsg) {
+      outputChannel.appendLine(`Error: ${errorMsg}`);
+      if (!errorLogged) {
+        addTimelineEntry({ kind: 'error', title: 'ASKII Control (Browser) failed', detail: errorMsg });
+      }
+      setTaskStatus('error', errorMsg);
+      vscode.window.showErrorMessage(`ASKII Control (Browser) failed: ${errorMsg}`);
+      sweepPendingEntries();
+      break;
+    }
+    if (abortController.signal.aborted || stoppedByChoice) {
+      addTimelineEntry({ kind: 'info', title: 'Stopped by user' });
+      setTaskStatus('cancelled', 'Stopped by user');
+      sweepPendingEntries();
+      break;
+    }
+
+    setTaskStatus('done', taskComplete ? 'Task complete' : `Finished after ${round} round(s)`);
+    currentTask = await waitForFollowUp();
+    if (currentTask && !beginTaskSession()) {
+      // Another command took the panel over while we were idle
+      break;
+    }
+  }
 }
 
 async function _applyFormat(filePath: string): Promise<void> {
@@ -1060,23 +1380,23 @@ async function _executeWriteAction(
     }
 
     case 'copy': {
-      if (!action.newPath) return 'copy requires newPath';
+      if (!action.newPath) {return 'copy requires newPath';}
       const destPath = sandboxPath(rootPath, action.newPath);
       const destDir = path.dirname(destPath);
-      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+      if (!fs.existsSync(destDir)) {fs.mkdirSync(destDir, { recursive: true });}
       fs.copyFileSync(filePath, destPath);
       return 'ok';
     }
 
     case 'create':
     case 'write': {
-      if (action.type === 'write') writeBackup(rootPath, filePath);
-      if (action.type === 'create') recordCreatedFile(rootPath, action.path!);
+      if (action.type === 'write') {writeBackup(rootPath, filePath);}
+      if (action.type === 'create') {recordCreatedFile(rootPath, action.path!);}
       const dir = path.dirname(filePath);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      if (!fs.existsSync(dir)) {fs.mkdirSync(dir, { recursive: true });}
       const content = action.content ? unescapeJsonString(action.content) : '';
       fs.writeFileSync(filePath, content);
-      if (formatAfterEdit) await _applyFormat(filePath);
+      if (formatAfterEdit) {await _applyFormat(filePath);}
       return 'ok';
     }
 
@@ -1100,7 +1420,7 @@ async function _executeWriteAction(
         }
         fs.writeFileSync(filePath, existing.replace(oldContent, newContent));
       }
-      if (formatAfterEdit) await _applyFormat(filePath);
+      if (formatAfterEdit) {await _applyFormat(filePath);}
       return 'ok';
     }
 
@@ -1111,11 +1431,11 @@ async function _executeWriteAction(
     }
 
     case 'rename': {
-      if (!action.newPath) return 'rename requires newPath';
+      if (!action.newPath) {return 'rename requires newPath';}
       writeBackup(rootPath, filePath);
       const newFilePath = sandboxPath(rootPath, action.newPath);
       const newDir = path.dirname(newFilePath);
-      if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
+      if (!fs.existsSync(newDir)) {fs.mkdirSync(newDir, { recursive: true });}
       fs.renameSync(filePath, newFilePath);
       return 'ok';
     }
@@ -1140,6 +1460,29 @@ function _doConfirmMessage(action: WorkspaceAction): string {
       return `${t}: ${action.path}?`;
     }
   }
+}
+
+function _doReadLabel(action: WorkspaceAction): string {
+  switch (action.type) {
+    case 'view':
+      return `View: ${action.path}`;
+    case 'list':
+      return `List: ${action.path}`;
+    case 'search':
+      return `Search: ${action.pattern}`;
+    case 'wiki_search':
+      return `Wiki search: ${action.query}`;
+    case 'code_search':
+      return `Code search: ${action.query}`;
+    default:
+      return action.type;
+  }
+}
+
+// Timeline details are rendered as text — keep them readable, not exhaustive
+function _timelineSnippet(text: string, max = 400): string {
+  const trimmed = text.trim();
+  return trimmed.length > max ? `${trimmed.substring(0, max)}…` : trimmed;
 }
 
 function _doActionLabel(action: WorkspaceAction): string {
@@ -1167,40 +1510,93 @@ function _doActionLabel(action: WorkspaceAction): string {
 
 export async function askiiReloadWikiCommand() {
   const config = vscode.workspace.getConfiguration('askii');
+  const wikiEnabled = config.get<boolean>('wikiEnabled') ?? false;
   const wikiPath = config.get<string>('wikiPath') ?? '';
-  if (!wikiPath) {
-    vscode.window.showErrorMessage('ASKII: Set askii.wikiPath in settings first.');
+  const codeWikiEnabled = config.get<boolean>('codeWikiEnabled') ?? false;
+
+  if (!wikiEnabled && !codeWikiEnabled) {
+    vscode.window.showInformationMessage(
+      'ASKII: No wikis enabled — turn on Wiki RAG or Code Wiki in settings first.',
+    );
     return;
   }
-  if (!fs.existsSync(wikiPath)) {
-    vscode.window.showErrorMessage(`ASKII: Wiki path not found: ${wikiPath}`);
-    return;
-  }
+
+  const summaries: string[] = [];
+  const warnings: string[] = [];
 
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: 'ASKII: Indexing wiki...',
+      title: 'ASKII: Reloading wikis...',
       cancellable: false,
     },
     async (progress) => {
-      try {
-        progress.report({ message: 'Reading .md files...' });
-        const data = buildWikiIndex(wikiPath);
+      const downloadProgress = (_file: string, receivedMB: number, totalMB: number) => {
+        progress.report({ message: `Downloading embedding model (${receivedMB}/${totalMB} MB)...` });
+      };
 
-        progress.report({ message: `Saving index (${data.chunkCount} chunks)...` });
-        saveWikiIndex(data, wikiPath);
+      // Docs wiki (vector index over .md files)
+      if (wikiEnabled) {
+        if (!wikiPath) {
+          warnings.push('docs wiki skipped — set askii.wikiPath');
+        } else if (!fs.existsSync(wikiPath)) {
+          warnings.push(`docs wiki skipped — path not found: ${wikiPath}`);
+        } else {
+          try {
+            progress.report({ message: 'Indexing wiki .md files...' });
+            const stats = await buildWikiIndex(wikiPath, {
+              onProgress: (stage, current, total) => {
+                if (stage === 'indexing') {
+                  progress.report({ message: `Wiki: file ${current}/${total}...` });
+                }
+              },
+              onDownloadProgress: downloadProgress,
+            });
+            summaries.push(`wiki: ${stats.chunkCount} chunks from ${stats.fileCount} file(s)`);
+          } catch (error) {
+            warnings.push(
+              `docs wiki failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            );
+          }
+        }
+      }
 
-        vscode.window.showInformationMessage(
-          `ASKII: Wiki ready — ${data.chunkCount} chunks from ${data.fileCount} file(s). (⌐■_■)`,
-        );
-      } catch (error) {
-        vscode.window.showErrorMessage(
-          `ASKII: Wiki reload failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        );
+      // Code wiki (vector index over workspace code)
+      if (codeWikiEnabled) {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!root) {
+          warnings.push('code wiki skipped — no workspace folder open');
+        } else {
+          try {
+            progress.report({ message: 'Indexing workspace code (code wiki)...' });
+            const stats = await rebuildCodeWikiIndex(root, {
+              onProgress: (stage, current, total) => {
+                if (stage === 'indexing') {
+                  progress.report({ message: `Code wiki: file ${current}/${total}...` });
+                }
+              },
+              onDownloadProgress: downloadProgress,
+            });
+            summaries.push(
+              `code wiki: ${stats.chunkCount} chunks from ${stats.fileCount} file(s) ` +
+                `(${stats.embeddedFiles} embedded, ${stats.cachedFiles} reused)`,
+            );
+          } catch (error) {
+            warnings.push(
+              `code wiki failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            );
+          }
+        }
       }
     },
   );
+
+  if (summaries.length > 0) {
+    vscode.window.showInformationMessage(`ASKII: ${summaries.join(' — ')} (⌐■_■)`);
+  }
+  if (warnings.length > 0) {
+    vscode.window.showWarningMessage(`ASKII: ${warnings.join(' — ')}`);
+  }
 }
 
 export async function askiiControlCommand() {
@@ -1223,7 +1619,7 @@ export async function askiiControlCommand() {
     { placeHolder: 'What should ASKII control?' },
   );
 
-  if (!mode) return;
+  if (!mode) {return;}
 
   // Then: ask for the task
   const instruction = await vscode.window.showInputBox({
@@ -1237,7 +1633,7 @@ export async function askiiControlCommand() {
         : 'e.g., Open Notepad and type hello world',
   });
 
-  if (!instruction) return;
+  if (!instruction) {return;}
 
   if (mode.target === 'browser') {
     await runBrowserTask(instruction);
@@ -1257,7 +1653,7 @@ async function runScreenControlTask(instruction: string) {
   }
 
   const config = vscode.workspace.getConfiguration('askii');
-  const maxRounds = config.get<number>('doMaxRounds') ?? 5;
+  const maxRounds = config.get<number>('doMaxRounds') ?? 20;
   const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
 
   // Monitor selection
@@ -1269,15 +1665,19 @@ async function runScreenControlTask(instruction: string) {
         monitors.map((m) => ({ label: m.name, id: m.id })),
         { placeHolder: 'Select monitor to control' },
       );
-      if (!pick) return;
+      if (!pick) {return;}
       monitorId = pick.id;
     }
   } catch {
     // proceed with default monitor
   }
 
+  if (!beginTaskSession()) {
+    vscode.window.showInformationMessage('ASKII is already running a task — see the ASKII task panel.');
+    return;
+  }
+
   const outputChannel = vscode.window.createOutputChannel('ASKII Control');
-  outputChannel.show(true);
   outputChannel.appendLine(`ASKII Control started ${getRandomThinkingKaomoji()}`);
   outputChannel.appendLine(`Instruction: ${instruction}`);
   outputChannel.appendLine('');
@@ -1288,146 +1688,233 @@ async function runScreenControlTask(instruction: string) {
   let prevScreenshot: string | undefined;
   let systemInfo: SystemInfo | undefined;
 
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: 'ASKII Control', cancellable: true },
-    async (_progress, token) => {
-      token.onCancellationRequested(() => {
-        abortController.abort();
-        outputChannel.appendLine('Stopped by user.');
-      });
+  setTaskCanceller(() => {
+    abortController.abort();
+    outputChannel.appendLine('Stopped by user.');
+  });
 
-      try {
-        while (round < maxRounds && !abortController.signal.aborted) {
-          outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — taking screenshot...`);
+  acquireTaskPanel('ASKII Control');
 
-          const {
-            base64: imageBase64,
-            width: screenW,
-            height: screenH,
-            physWidth,
-            physHeight,
-          } = await takeScreenshot(monitorId);
+  let currentTask: string | null = instruction;
 
-          if (!systemInfo) {
-            systemInfo = await getSystemInfo(physWidth, physHeight);
-          }
+  while (currentTask) {
+    if (currentTask !== instruction) {
+      outputChannel.appendLine(`\nInstruction: ${currentTask}`);
+    }
+    setTaskStatus('running', currentTask);
 
-          const screenChanged = prevScreenshot === undefined || prevScreenshot !== imageBase64;
-          if (prevScreenshot !== undefined && !screenChanged) {
-            outputChannel.appendLine('Warning: screen unchanged since last action.');
-          }
-          prevScreenshot = imageBase64;
+    round = 0;
+    let taskComplete = false;
+    let stoppedByChoice = false;
+    let errorMsg: string | null = null;
+    let errorLogged = false;
 
-          const prompt =
-            round === 0
-              ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action(s).`
-              : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and return the next action(s) or DONE.`;
+    try {
+      while (round < maxRounds && !abortController.signal.aborted) {
+        outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — taking screenshot...`);
+        const roundEntry = addTimelineEntry({
+          kind: 'round',
+          title: `Round ${round + 1} of ${maxRounds}`,
+          status: 'pending',
+        });
 
-          outputChannel.appendLine('Asking AI...');
-          const rawResponse = await getExtensionResponseWithImage(
-            `${buildControlSystemPrompt(screenW, screenH, systemInfo, history)}\n\n${prompt}`,
-            imageBase64,
-          );
+        const {
+          base64: imageBase64,
+          width: screenW,
+          height: screenH,
+          physWidth,
+          physHeight,
+        } = await takeScreenshot(monitorId);
 
-          if (abortController.signal.aborted) {
-            break;
-          }
+        if (!systemInfo) {
+          systemInfo = await getSystemInfo(physWidth, physHeight);
+        }
 
-          const parsed = parseControlResponse(rawResponse);
+        const screenChanged = prevScreenshot === undefined || prevScreenshot !== imageBase64;
+        if (prevScreenshot !== undefined && !screenChanged) {
+          outputChannel.appendLine('Warning: screen unchanged since last action.');
+        }
+        prevScreenshot = imageBase64;
 
-          if (!parsed) {
-            outputChannel.appendLine('Error: could not parse AI response.');
-            outputChannel.appendLine(`Raw: ${rawResponse}`);
-            break;
-          }
+        updateTimelineEntry(roundEntry, {
+          screenshot: `data:image/png;base64,${imageBase64}`,
+          detail: screenChanged ? undefined : 'Screen unchanged since last action.',
+        });
 
-          if (parsed.type === 'done') {
-            outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
-            outputChannel.appendLine(`Reasoning: ${parsed.reasoning}`);
-            break;
-          }
+        const prompt =
+          round === 0
+            ? `Instruction to complete: ${currentTask}\n\nAnalyze the screenshot and determine the next action(s).`
+            : `Continuing instruction: ${currentTask}\n\nAnalyze the updated screenshot and return the next action(s) or DONE.`;
 
-          let { actions } = parsed;
+        outputChannel.appendLine('Asking AI...');
+        const rawResponse = await getExtensionResponseWithImage(
+          `${buildControlSystemPrompt(screenW, screenH, systemInfo, history)}\n\n${prompt}`,
+          imageBase64,
+        );
 
-          // Log all planned actions
-          actions.forEach((a, i) => {
-            const label = actions.length > 1 ? `Action ${i + 1}/${actions.length}` : 'Action';
-            outputChannel.appendLine(`${label}: ${describeAction(a as ControlAction)}`);
-            outputChannel.appendLine(`Reasoning: ${a.reasoning}`);
+        if (abortController.signal.aborted) {
+          break;
+        }
+
+        const parsed = parseControlResponse(rawResponse);
+
+        if (!parsed) {
+          outputChannel.appendLine('Error: could not parse AI response.');
+          outputChannel.appendLine(`Raw: ${rawResponse}`);
+          addTimelineEntry({
+            kind: 'error',
+            title: 'Could not parse AI response',
+            detail: _timelineSnippet(rawResponse, 1000),
           });
+          errorMsg = 'Could not parse AI response.';
+          errorLogged = true;
+          break;
+        }
 
-          // Confirm
-          if (!autoConfirm) {
-            const label =
-              actions.length === 1
-                ? describeAction(actions[0] as ControlAction)
-                : `${actions.length} actions`;
-            const choice = await vscode.window.showInformationMessage(
-              `ASKII Control: ${label}`,
-              { modal: false },
-              'Execute',
-              'Stop',
-            );
-            if (choice !== 'Execute' || abortController.signal.aborted) {
-              outputChannel.appendLine('Stopped by user.');
-              break;
+        if (parsed.type === 'done') {
+          outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
+          outputChannel.appendLine(`Reasoning: ${parsed.reasoning}`);
+          updateTimelineEntry(roundEntry, { status: 'ok' });
+          addTimelineEntry({
+            kind: 'done',
+            title: 'Task complete',
+            detail: parsed.reasoning || undefined,
+          });
+          taskComplete = true;
+          break;
+        }
+
+        updateTimelineEntry(roundEntry, { status: 'ok' });
+
+        const { actions } = parsed;
+
+        // Planned actions show in the timeline before the batch confirmation
+        const plannedEntries = actions.map((a) =>
+          addTimelineEntry({
+            kind: 'action',
+            title: describeAction(a as ControlAction),
+            detail: a.reasoning,
+            status: 'pending',
+          }),
+        );
+        actions.forEach((a, i) => {
+          const label = actions.length > 1 ? `Action ${i + 1}/${actions.length}` : 'Action';
+          outputChannel.appendLine(`${label}: ${describeAction(a as ControlAction)}`);
+          outputChannel.appendLine(`Reasoning: ${a.reasoning}`);
+        });
+
+        // Confirm
+        if (!autoConfirm) {
+          const batchLabel =
+            actions.length === 1
+              ? describeAction(actions[0] as ControlAction)
+              : `${actions.length} actions`;
+          const confirmTarget =
+            plannedEntries.length > 0 ? plannedEntries[plannedEntries.length - 1] : roundEntry;
+          const choice = await requestChoice(confirmTarget, `Execute ${batchLabel}?`, [
+            'Execute',
+            'Stop',
+          ]);
+          if (choice !== 'Execute' || abortController.signal.aborted) {
+            outputChannel.appendLine('Stopped by user.');
+            stoppedByChoice = true;
+            for (const id of plannedEntries) {
+              updateTimelineEntry(id, { status: 'skipped' });
             }
-            // Small delay between confirmation and execution
-            await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+            break;
           }
+          // Small delay between confirmation and execution
+          await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+        }
 
-          // Resolve click_text actions to coordinates via a second LLM call
-          for (const a of actions) {
-            if ((a as ControlAction).action === 'click_text') {
-              const ct = a as { action: 'click_text'; text: string; reasoning: string };
-              try {
-                const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
-                const raw = await getExtensionResponseWithImage(resolvePrompt, imageBase64);
-                const m = raw.match(/\{[\s\S]*?\}/);
-                if (m) {
-                  const coords = JSON.parse(m[0]);
-                  if (typeof coords.x === 'number' && typeof coords.y === 'number') {
-                    Object.assign(a, { action: 'mouse_left_click', x: coords.x, y: coords.y });
-                    outputChannel.appendLine(`Resolved "${ct.text}" → (${coords.x}, ${coords.y})`);
-                  }
+        // Resolve click_text actions to coordinates via a second LLM call
+        for (let i = 0; i < actions.length; i++) {
+          const a = actions[i] as ControlAction;
+          if (a.action === 'click_text') {
+            const ct = a as { action: 'click_text'; text: string; reasoning: string };
+            try {
+              const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
+              const raw = await getExtensionResponseWithImage(resolvePrompt, imageBase64);
+              const m = raw.match(/\{[\s\S]*?\}/);
+              if (m) {
+                const coords = JSON.parse(m[0]);
+                if (typeof coords.x === 'number' && typeof coords.y === 'number') {
+                  Object.assign(a, { action: 'mouse_left_click', x: coords.x, y: coords.y });
+                  outputChannel.appendLine(`Resolved "${ct.text}" → (${coords.x}, ${coords.y})`);
+                  updateTimelineEntry(plannedEntries[i], {
+                    detail: `Resolved "${ct.text}" → (${coords.x}, ${coords.y})`,
+                  });
                 }
-              } catch {
-                outputChannel.appendLine(
-                  `Warning: could not resolve text "${ct.text}" to coordinates`,
-                );
               }
+            } catch {
+              outputChannel.appendLine(
+                `Warning: could not resolve text "${ct.text}" to coordinates`,
+              );
+              addTimelineEntry({
+                kind: 'info',
+                title: `Could not resolve "${ct.text}" to coordinates`,
+                status: 'error',
+              });
             }
           }
-
-          // Execute sequence
-          for (const a of actions) {
-            if (abortController.signal.aborted) break;
-            await executeControlAction(
-              a as ControlAction,
-              screenW,
-              screenH,
-              abortController.signal,
-            );
-            history.push({
-              round: round + 1,
-              description: describeAction(a as ControlAction),
-              reasoning: a.reasoning,
-              screenChanged: true,
-            });
-          }
-          outputChannel.appendLine('Done.\n');
-
-          round++;
         }
 
-        if (round >= maxRounds && !abortController.signal.aborted) {
-          outputChannel.appendLine(`Max rounds (${maxRounds}) reached.`);
+        // Execute sequence
+        for (let i = 0; i < actions.length; i++) {
+          const a = actions[i] as ControlAction;
+          if (abortController.signal.aborted) {break;}
+          await executeControlAction(a, screenW, screenH, abortController.signal);
+          history.push({
+            round: round + 1,
+            description: describeAction(a),
+            reasoning: a.reasoning,
+            screenChanged: true,
+          });
+          updateTimelineEntry(plannedEntries[i], { status: 'ok' });
         }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        outputChannel.appendLine(`Error: ${errorMsg}`);
-        vscode.window.showErrorMessage(`ASKII Control failed: ${errorMsg}`);
+        outputChannel.appendLine('Done.\n');
+
+        round++;
       }
-    },
-  );
+
+      if (round >= maxRounds && !taskComplete && !abortController.signal.aborted) {
+        outputChannel.appendLine(`Max rounds (${maxRounds}) reached.`);
+        addTimelineEntry({
+          kind: 'info',
+          title: `Max rounds (${maxRounds}) reached`,
+          status: 'error',
+        });
+      }
+    } catch (error) {
+      if (!abortController.signal.aborted) {
+        errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      }
+    } finally {
+      endTaskSession();
+    }
+
+    if (errorMsg) {
+      outputChannel.appendLine(`Error: ${errorMsg}`);
+      if (!errorLogged) {
+        addTimelineEntry({ kind: 'error', title: 'ASKII Control failed', detail: errorMsg });
+      }
+      setTaskStatus('error', errorMsg);
+      vscode.window.showErrorMessage(`ASKII Control failed: ${errorMsg}`);
+      sweepPendingEntries();
+      break;
+    }
+    if (abortController.signal.aborted || stoppedByChoice) {
+      addTimelineEntry({ kind: 'info', title: 'Stopped by user' });
+      setTaskStatus('cancelled', 'Stopped by user');
+      sweepPendingEntries();
+      break;
+    }
+
+    setTaskStatus('done', taskComplete ? 'Task complete' : `Finished after ${round} round(s)`);
+    currentTask = await waitForFollowUp();
+    if (currentTask && !beginTaskSession()) {
+      // Another command took the panel over while we were idle
+      break;
+    }
+  }
 }
