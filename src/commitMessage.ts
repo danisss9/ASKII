@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getExtensionResponse } from './providers';
 import { buildCommitMessageSystemPrompt, getCommitMessageStyle } from './commitMessageStyle';
+import { getGitRepository, rootUriFromArg, type GitRepositoryLike } from './git';
 
 // Sentinel returned by providers when the model produces no text.
 const NO_RESPONSE = 'No response';
@@ -11,9 +12,6 @@ const NO_RESPONSE = 'No response';
 // context window or latency. The file summary is always sent in full.
 const MAX_DIFF_CHARS = 12_000;
 
-// Commit messages are short — keep generation tight.
-const COMMIT_MAX_TOKENS = 256;
-
 // The repository's recent commit messages are sent to the model as style
 // examples so generated messages match the user's existing habits.
 const MAX_RECENT_COMMITS = 10;
@@ -21,72 +19,19 @@ const MAX_RECENT_COMMITS = 10;
 // Cap each example message so huge commit bodies don't dominate the prompt.
 const MAX_EXAMPLE_MESSAGE_CHARS = 500;
 
-/** Minimal shape of a commit entry returned by the Git extension's log(). */
-interface GitLogCommitLike {
-  message?: string;
+// Context key that swaps the SCM sparkle button for a stop button.
+const RUNNING_CONTEXT_KEY = 'askii.commitMessageRunning';
+
+// Aborts the in-flight generation; set only while one is running.
+let activeGeneration: AbortController | undefined;
+
+function setRunning(running: boolean): void {
+  void vscode.commands.executeCommand('setContext', RUNNING_CONTEXT_KEY, running);
 }
 
-interface GitRepositoryLike {
-  inputBox: { value: string };
-  diff(cached?: boolean): Promise<string>;
-  log?(options?: { maxEntries?: number }): Promise<GitLogCommitLike[]>;
-  state: {
-    indexChanges?: { uri: vscode.Uri; status: number }[];
-    workingTreeChanges?: { uri: vscode.Uri; status: number }[];
-  };
-  rootUri: vscode.Uri;
-}
-
-interface GitApiLike {
-  repositories: GitRepositoryLike[];
-}
-
-/**
- * Acquires the built-in vscode.git extension's API and returns the repository
- * to operate on. Prefers the repository the command was invoked on (the
- * Source Control view passes its SourceControl), then the one whose root
- * contains the active editor's file; falls back to the first repository.
- * Returns null with an actionable reason if Git is unavailable or no repo is open.
- */
-async function getGitRepository(
-  requestedRoot?: vscode.Uri,
-): Promise<{ repo: GitRepositoryLike; reason?: string } | { repo: null; reason: string }> {
-  const gitExt = vscode.extensions.getExtension('vscode.git');
-  if (!gitExt) {
-    return { repo: null, reason: 'The built-in Git extension is not available.' };
-  }
-  if (!gitExt.isActive) {
-    await gitExt.activate();
-  }
-  const api = (gitExt.exports as { getAPI?(version: number): GitApiLike })?.getAPI?.(1);
-  if (!api || api.repositories.length === 0) {
-    return { repo: null, reason: 'No Git repository found in the current workspace.' };
-  }
-
-  if (requestedRoot) {
-    const requested = api.repositories.find(
-      (repo) => repo.rootUri.toString() === requestedRoot.toString(),
-    );
-    if (requested) {
-      return { repo: requested };
-    }
-  }
-
-  const active = vscode.window.activeTextEditor;
-  if (active) {
-    const activePath = active.document.uri.fsPath;
-    for (const repo of api.repositories) {
-      try {
-        const rel = path.relative(repo.rootUri.fsPath, activePath);
-        if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
-          return { repo };
-        }
-      } catch {
-        // ignore — fall through to default
-      }
-    }
-  }
-  return { repo: api.repositories[0] };
+/** Stops the in-flight commit message generation (the SCM stop button). */
+export function cancelCommitMessageCommand(): void {
+  activeGeneration?.abort();
 }
 
 /**
@@ -223,12 +168,24 @@ function cleanCommitMessage(raw: string): string {
 }
 
 export async function generateCommitMessageCommand(sourceControl?: unknown): Promise<void> {
+  if (activeGeneration) {
+    return; // already running — the SCM button is a stop button meanwhile
+  }
+  const abortController = new AbortController();
+  activeGeneration = abortController;
+  setRunning(true);
+  try {
+    await generateCommitMessage(sourceControl, abortController.signal);
+  } finally {
+    activeGeneration = undefined;
+    setRunning(false);
+  }
+}
+
+async function generateCommitMessage(sourceControl: unknown, signal: AbortSignal): Promise<void> {
   const config = vscode.workspace.getConfiguration('askii');
 
-  // The scm/title button passes the clicked SourceControl; the command palette
-  // and status-bar menu pass nothing (or an unrelated argument).
-  const rootUri = (sourceControl as { rootUri?: unknown } | undefined)?.rootUri;
-  const { repo, reason } = await getGitRepository(rootUri instanceof vscode.Uri ? rootUri : undefined);
+  const { repo, reason } = await getGitRepository(rootUriFromArg(sourceControl));
   if (!repo) {
     const choice = await vscode.window.showErrorMessage(`ASKII: ${reason}`, 'Open Source Control');
     if (choice === 'Open Source Control') {
@@ -261,16 +218,24 @@ export async function generateCommitMessageCommand(sourceControl?: unknown): Pro
     {
       location: vscode.ProgressLocation.SourceControl,
       title: 'ASKII: Generating commit message…',
-      cancellable: false,
+      cancellable: true,
     },
-    async () => {
+    async (_progress, token) => {
+      const cancelSub = token.onCancellationRequested(() => activeGeneration?.abort());
       try {
         const raw = await getExtensionResponse(
           userPrompt,
           system,
           config.get<string>('llmInlinePlatform'),
           config.get<string>('llmInlineModel'),
+          signal,
         );
+
+        // Some providers ignore the signal — drop a result that arrives late.
+        if (signal.aborted) {
+          vscode.window.setStatusBarMessage('ASKII: Commit message generation stopped.', 3000);
+          return;
+        }
 
         if (!raw || raw.trim() === NO_RESPONSE) {
           vscode.window.showWarningMessage(
@@ -290,8 +255,14 @@ export async function generateCommitMessageCommand(sourceControl?: unknown): Pro
         repo.inputBox.value = cleaned;
         vscode.window.showInformationMessage('ASKII: Commit message generated! (⌐■_■)');
       } catch (e) {
+        if (signal.aborted) {
+          vscode.window.setStatusBarMessage('ASKII: Commit message generation stopped.', 3000);
+          return;
+        }
         const msg = e instanceof Error ? e.message : String(e);
         vscode.window.showErrorMessage(`ASKII: Failed to generate commit message: ${msg}`);
+      } finally {
+        cancelSub.dispose();
       }
     },
   );

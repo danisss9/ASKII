@@ -20,7 +20,8 @@ import {
   INLINE_ACCEPT_COMMAND,
   completionCache,
 } from './inlineCompletion';
-import { generateCommitMessageCommand } from './commitMessage';
+import { cancelCommitMessageCommand, generateCommitMessageCommand } from './commitMessage';
+import { cancelCodeReviewCommand, codeReviewCommand } from './codeReview';
 import { askiiNoteCommand } from './notesPanel';
 import { startNoteScheduler, stopNoteScheduler } from './notesScheduler';
 import { initializeProviderSecrets, migrateLegacyApiKeys } from './providerSecrets';
@@ -103,6 +104,15 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('askii.generateCommitMessage', generateCommitMessageCommand),
   );
   context.subscriptions.push(
+    vscode.commands.registerCommand('askii.cancelCommitMessage', cancelCommitMessageCommand),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('askii.codeReviewUncommitted', codeReviewCommand),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('askii.cancelCodeReview', cancelCodeReviewCommand),
+  );
+  context.subscriptions.push(
     vscode.commands.registerCommand('askii.noteTask', (args?: { selectId?: string }) =>
       askiiNoteCommand(context, args),
     ),
@@ -140,6 +150,11 @@ export async function activate(context: vscode.ExtensionContext) {
           label: '$(screen-full) ASKII Control',
           description: 'Screen or browser',
           command: 'askii.controlTask',
+        },
+        {
+          label: '$(checklist) ASKII Code Review',
+          description: 'Review uncommitted changes',
+          command: 'askii.codeReviewUncommitted',
         },
         {
           label: '$(note) ASKII Note',

@@ -6,6 +6,11 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Added
+
+- **Code review of uncommitted changes**: a new Source Control toolbar button, **ASKII Git: Code Review Uncommitted Changes**, reviews staged, unstaged and untracked changes with the Ask / Edit / Do model. The review panel lists each problem with its severity, location and a recommendation. **Auto Fix** applies a model-generated fix as an undoable edit, **Fixed It** marks a problem fixed by hand, and a **Show fixed** toggle hides fixed problems
+- **Stop buttons in Source Control**: while a code review or commit message generation runs, its toolbar button turns into a stop button that cancels it
+
 ### Changed
 
 - **Keybindings moved to `Ctrl+Alt+K <letter>`** (`Cmd+Alt+K` on macOS): the `Ctrl+Shift+K` chords shadowed VS Code's built-in **Delete Line**, and `Ctrl+Shift+A S` shadowed **Toggle Block Comment** on Linux. Every ASKII command now shares one prefix — `A` Ask, `E` Edit, `D` Do, `C` Control, `N` Note, `W` Reload Wikis, `X` Clear Cache, `S` Open Setup

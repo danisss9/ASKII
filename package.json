@@ -107,6 +107,24 @@
         "icon": "$(sparkle)"
       },
       {
+        "command": "askii.cancelCommitMessage",
+        "title": "ASKII Git: Stop Generating Commit Message",
+        "category": "ASKII",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "askii.codeReviewUncommitted",
+        "title": "ASKII Git: Code Review Uncommitted Changes",
+        "category": "ASKII",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "askii.cancelCodeReview",
+        "title": "ASKII Git: Stop Code Review",
+        "category": "ASKII",
+        "icon": "$(debug-stop)"
+      },
+      {
         "command": "askii.noteTask",
         "title": "ASKII Note",
         "category": "ASKII",
@@ -117,14 +135,37 @@
       "scm/title": [
         {
           "command": "askii.generateCommitMessage",
-          "group": "navigation",
-          "when": "scmProvider == git"
+          "group": "navigation@1",
+          "when": "scmProvider == git && !askii.commitMessageRunning"
+        },
+        {
+          "command": "askii.cancelCommitMessage",
+          "group": "navigation@1",
+          "when": "scmProvider == git && askii.commitMessageRunning"
+        },
+        {
+          "command": "askii.codeReviewUncommitted",
+          "group": "navigation@2",
+          "when": "scmProvider == git && !askii.codeReviewRunning"
+        },
+        {
+          "command": "askii.cancelCodeReview",
+          "group": "navigation@2",
+          "when": "scmProvider == git && askii.codeReviewRunning"
         }
       ],
       "commandPalette": [
         {
           "command": "askii.generateCommitMessage",
           "when": "false"
+        },
+        {
+          "command": "askii.cancelCommitMessage",
+          "when": "askii.commitMessageRunning"
+        },
+        {
+          "command": "askii.cancelCodeReview",
+          "when": "askii.codeReviewRunning"
         }
       ]
     },
@@ -142,12 +183,12 @@
             "askiicloud"
           ],
           "default": "askiicloud",
-          "description": "LLM platform to use for ASKII Ask, Edit and Do (ollama, lmstudio, openai, anthropic, opencodego, or askiicloud)"
+          "description": "LLM platform to use for ASKII Ask, Edit, Do and code review (ollama, lmstudio, openai, anthropic, opencodego, or askiicloud)"
         },
         "askii.llmModel": {
           "type": "string",
           "default": "askii-smart",
-          "description": "Model id to use for ASKII Ask, Edit and Do. Set to a model id supported by askii.llmPlatform (e.g. askii-smart, gpt-5-mini, claude-sonnet-4-6, glm-5.2, gemma4:e4b)."
+          "description": "Model id to use for ASKII Ask, Edit, Do and code review. Set to a model id supported by askii.llmPlatform (e.g. askii-smart, gpt-5-mini, claude-sonnet-4-6, glm-5.2, gemma4:e4b)."
         },
         "askii.llmInlinePlatform": {
           "type": "string",

@@ -87,7 +87,15 @@ Both wikis run **[embeddinggemma2](https://huggingface.co/onnx-community/embeddi
 
 ### Commit messages
 
-A **✦** button in the Source Control view toolbar generates a commit message from your staged (or working-tree) diff straight into the input box. It styles the message after your repo's last 10 commits, honors `askii.commitMessageStyle` (`oneliner` / `brief` / `descriptive`), and appends your own rules from the `.md` file in `askii.commitMessageInstructions`.
+A **✦** button in the Source Control view toolbar generates a commit message from your staged (or working-tree) diff straight into the input box. It styles the message after your repo's last 10 commits, honors `askii.commitMessageStyle` (`oneliner` / `brief` / `descriptive`), and appends your own rules from the `.md` file in `askii.commitMessageInstructions`. While it runs, the button turns into a **■ stop** button that cancels it.
+
+### Code review
+
+The **Code Review Uncommitted Changes** button (checklist icon) in the Source Control toolbar sends all uncommitted changes (staged, unstaged and untracked files) to the Ask / Edit / Do model. It opens a review panel that lists each problem with its severity, a `file:line` link and a recommendation. While the review runs, the button turns into a **■ stop** button that cancels it.
+
+- **Auto Fix** asks the model to fix that one problem and applies the fix to the file as an unsaved edit (`Ctrl+Z` undoes it)
+- **Fixed It** marks a problem you fixed yourself; **Reopen** undoes the mark
+- **Show fixed** hides or shows the problems that are already fixed
 
 ## LLM platforms
 
@@ -104,7 +112,7 @@ Each feature group picks its own platform and model, so you can mix providers:
 
 | Feature group                                   | Platform                  | Model                  | Default model |
 | ----------------------------------------------- | ------------------------- | ---------------------- | ------------- |
-| Ask / Edit / Do                                 | `askii.llmPlatform`       | `askii.llmModel`       | `askii-smart` |
+| Ask / Edit / Do, code review                   | `askii.llmPlatform`       | `askii.llmModel`       | `askii-smart` |
 | Inline suggestions, completion, commit messages | `askii.llmInlinePlatform` | `askii.llmInlineModel` | `askii-fast`  |
 | Control / Note (vision)                         | `askii.llmVisionPlatform` | `askii.llmVisionModel` | `askii-smart` |
 

@@ -193,7 +193,7 @@ export function getWorkspaceStructure(dirPath: string): string {
  * Returns the [...] that opens at text[start], matching brackets outside JSON
  * strings, or null if it never closes (e.g. output cut off mid-array).
  */
-function balancedArrayAt(text: string, start: number): string | null {
+export function balancedArrayAt(text: string, start: number): string | null {
   let depth = 0;
   let inString = false;
   for (let i = start; i < text.length; i++) {
