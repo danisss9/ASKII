@@ -8,9 +8,10 @@ import * as path from 'path';
 // (~314 MB q8) and cached under ~/.askii/models, shared by the CLI and the
 // VS Code extension.
 //
-// ONNX backend: when the native onnxruntime-node is installed (published CLI)
-// it runs as-is; in the extension it is replaced by our WASM shim
-// (stubs/onnxruntime-node), which forwards "cpu" sessions to onnxruntime-web.
+// ONNX backend: Transformers.js is bundled into both the extension and the
+// CLI; its runtime `onnxruntime-node` load is redirected to our WASM shim
+// (stubs/onnxruntime-node, built into dist/onnxruntime-node), which forwards
+// "cpu" sessions to the bundled onnxruntime-web.
 //
 // Retrieval follows the model card's instruction prefixes:
 //   documents → "title: none | text: {content}"
@@ -90,34 +91,21 @@ export interface EmbedTextsOptions {
 type Extractor = any;
 
 /**
- * Redirects @huggingface/transformers' unconditional `require('onnxruntime-node')`
- * (and `sharp`) to the tiny WASM shims copied next to the bundle. The native
- * runtime is a ~300 MB platform-specific package, so bundles ship without it;
- * resolution only ever succeeds from inside @huggingface/transformers' own
- * nested node_modules, which a top-level bundle can never reach.
+ * Redirects @huggingface/transformers' unconditional runtime
+ * `require('onnxruntime-node')` (made through createRequire, so the bundler
+ * cannot rewrite it) to the WASM shim built next to the bundle. The native
+ * runtime is a ~300 MB platform-specific package, so bundles ship without it.
  */
-function redirectNativeBackends(): void {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require.resolve('onnxruntime-node');
-    return; // native runtime resolvable — use it
-  } catch {
-    // not resolvable from here — fall through to the shims
-  }
+function redirectNativeBackend(): void {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Module = require('module') as {
       _resolveFilename: (request: string, ...rest: unknown[]) => string;
     };
-    const shimDir = __dirname;
+    const shim = path.join(__dirname, 'onnxruntime-node', 'index.js');
     const original = Module._resolveFilename;
     Module._resolveFilename = function (request: string, ...rest: unknown[]) {
-      if (request === 'onnxruntime-node') {
-        request = path.join(shimDir, 'onnxruntime-node');
-      } else if (request === 'sharp') {
-        request = path.join(shimDir, 'sharp-stub');
-      }
-      return original.call(this, request, ...rest);
+      return original.call(this, request === 'onnxruntime-node' ? shim : request, ...rest);
     };
   } catch {
     // without the redirect, transformers reports the missing native runtime
@@ -130,7 +118,7 @@ async function getExtractor(onProgress?: EmbedderProgress): Promise<Extractor> {
   // Reuse the in-flight load; only the first caller reports download progress.
   if (!extractorPromise) {
     extractorPromise = (async () => {
-      redirectNativeBackends();
+      redirectNativeBackend();
       const { pipeline, env } = await import('@huggingface/transformers');
       const cacheDir = path.join(os.homedir(), '.askii', 'models');
       env.cacheDir = cacheDir;

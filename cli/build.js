@@ -1,19 +1,22 @@
 const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
+const { embeddingAlias, buildOnnxRuntimeShim } = require('../stubs/build');
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
 
-// The embedding stack runs on the WASM ONNX backend: these two tiny shims are
-// copied next to the bundle so the embedder can redirect onnxruntime-node and
-// sharp to them (the ~300 MB native runtime is never shipped in dev trees).
-function copyEmbeddingShims() {
-  fs.cpSync(path.resolve(__dirname, '..', 'stubs', 'onnxruntime-node'), path.resolve(__dirname, 'dist', 'onnxruntime-node'), { recursive: true });
-  fs.cpSync(path.resolve(__dirname, '..', 'stubs', 'sharp'), path.resolve(__dirname, 'dist', 'sharp-stub'), { recursive: true });
+// screenshot-desktop's Windows backend reads its capture script and manifest
+// from __dirname at runtime, which after bundling is dist/ — copy them there.
+function copyScreenCaptureAssets() {
+  const win32Dir = path.join(path.dirname(require.resolve('screenshot-desktop/package.json')), 'lib', 'win32');
+  for (const file of fs.readdirSync(win32Dir)) {
+    if (!file.endsWith('.js')) fs.copyFileSync(path.join(win32Dir, file), path.resolve(__dirname, 'dist', file));
+  }
 }
 
 async function main() {
+  await buildOnnxRuntimeShim(path.resolve(__dirname, 'dist'), production);
   const ctx = await esbuild.context({
     entryPoints: ['index.ts'],
     bundle: true,
@@ -23,27 +26,16 @@ async function main() {
     sourcesContent: false,
     platform: 'node',
     outfile: 'dist/index.js',
-    // The local embedding stack (embeddinggemma2 via Transformers.js) stays
-    // external: it ships as real node_modules so its .wasm assets resolve.
-    external: [
-      '@huggingface/transformers',
-      '@huggingface/jinja',
-      '@huggingface/tokenizers',
-      'onnxruntime-web',
-      'onnxruntime-common',
-      'onnxruntime-node',
-      'sharp',
-      'flatbuffers',
-      'guid-typescript',
-      'long',
-      'platform',
-      'protobufjs',
-    ],
+    // The local embedding stack (embeddinggemma2 via Transformers.js) is
+    // bundled; only onnxruntime-node stays external — the embedder redirects
+    // it to the WASM shim built into dist/onnxruntime-node (stubs/build.js).
+    external: ['onnxruntime-node'],
     banner: {
       js: '#!/usr/bin/env node\nconst __origEmit = process.emit; process.emit = function(e, ...a) { if (e === "warning" && a[0] && a[0].code === "DEP0040") return false; return __origEmit.call(this, e, ...a); };',
     },
     alias: {
       '@common': path.resolve(__dirname, '..', 'common'),
+      ...embeddingAlias,
     },
     logLevel: 'info',
   });
@@ -52,7 +44,7 @@ async function main() {
     await ctx.watch();
   } else {
     await ctx.rebuild();
-    copyEmbeddingShims();
+    copyScreenCaptureAssets();
     await ctx.dispose();
   }
 }

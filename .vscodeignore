@@ -17,33 +17,6 @@ cli/**
 scripts/**
 stubs/**
 scratch/**
-# The local embedding stack (embeddinggemma2 via Transformers.js) ships as
-# node_modules — pure JS + WASM. The native onnxruntime-node (~300 MB) and
-# sharp are NOT shipped: the embedder redirects them to the WASM shims that
-# esbuild copies into dist/.
-!node_modules/@huggingface/transformers/**
-!node_modules/@huggingface/jinja/**
-!node_modules/@huggingface/tokenizers/**
-!node_modules/onnxruntime-web/**
-!node_modules/onnxruntime-common/**
-!node_modules/flatbuffers/**
-!node_modules/guid-typescript/**
-!node_modules/long/**
-!node_modules/platform/**
-!node_modules/protobufjs/**
-# Only the wasm-CPU variant of onnxruntime-web is used — drop the other
-# backend bundles, their maps and type stubs (~120 MB of dead weight).
-node_modules/onnxruntime-web/dist/*jsep*
-node_modules/onnxruntime-web/dist/*jspi*
-node_modules/onnxruntime-web/dist/*asyncify*
-node_modules/onnxruntime-web/dist/*webgl*
-node_modules/onnxruntime-web/dist/*all*
-node_modules/onnxruntime-web/dist/*bundle*
-node_modules/onnxruntime-web/dist/*map*
-node_modules/onnxruntime-web/types/**
-node_modules/@huggingface/transformers/types/**
-node_modules/@huggingface/transformers/dist/*.map
-node_modules/@huggingface/transformers/node_modules/**/*.map
-node_modules/@huggingface/transformers/node_modules/**/*.d.ts
-node_modules/@huggingface/tokenizers/types/**
-node_modules/@huggingface/tokenizers/dist/*.map
+# The local embedding stack (embeddinggemma2 via Transformers.js + the
+# onnxruntime-web WASM runtime) is bundled into dist/ by esbuild — the VSIX is
+# packaged with --no-dependencies, so nothing from node_modules ships.

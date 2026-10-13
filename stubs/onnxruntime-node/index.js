@@ -6,34 +6,23 @@
 //
 // Reason: the native runtime is ~300 MB of per-platform binaries — far too
 // heavy to ship inside askii — while the WASM runtime is ~14 MB and
-// platform-independent. When the real onnxruntime-node is installed (e.g. the
-// published CLI), this shim is not used and the native fast path applies.
+// platform-independent.
+//
+// stubs/build.js bundles this file together with onnxruntime-web into
+// dist/onnxruntime-node/ and copies the wasm binary and its loader next to it,
+// so the extension and the CLI need no node_modules at runtime.
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
 const ortWeb = require('onnxruntime-web');
 
 // Transformers.js defaults wasmPaths to a CDN URL — fine in browsers, but
-// Node's ESM loader rejects the blob: URLs it produces. Point it at the local
-// onnxruntime-web dist (as a file:// URL — the .mjs loader import()s it, and
-// on Windows a bare path parses as a "c:" protocol).
-const ortDist = path.dirname(require.resolve('onnxruntime-web'));
+// Node's ESM loader rejects the blob: URLs it produces. Point it at the wasm
+// files shipped next to this bundle (as a file:// URL — the .mjs loader
+// import()s it, and on Windows a bare path parses as a "c:" protocol).
 // Trailing slash is required — ORT concatenates wasmPaths + filename as raw
-// strings, so "…/dist" would yield "…/distort-wasm-simd-threaded.wasm".
-ortWeb.env.wasm.wasmPaths = url.pathToFileURL(path.join(ortDist, path.sep)).href;
-
-// ORT's node build resolves its wasm factory module relative to the package
-// root rather than dist/ — make sure the loader files exist where it looks.
-try {
-  const pkgRoot = path.dirname(ortDist);
-  for (const file of ['ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm']) {
-    const from = path.join(ortDist, file);
-    const to = path.join(pkgRoot, file);
-    if (fs.existsSync(from) && !fs.existsSync(to)) fs.copyFileSync(from, to);
-  }
-} catch {
-  // best-effort — the dist copies remain available as a fallback
-}
+// strings, so "…/dir" would yield "…/dirort-wasm-simd-threaded.wasm".
+ortWeb.env.wasm.wasmPaths = url.pathToFileURL(path.join(__dirname, path.sep)).href;
 
 function toWasmProviders(providers) {
   if (!providers) return providers;

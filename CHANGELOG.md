@@ -4,6 +4,12 @@ All notable changes to the "askii" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Docs wiki / code wiki failed to load the embedding model** (`Cannot find package '@huggingface/transformers'`): the 0.6.0 VSIX is packaged with `--no-dependencies`, so the embedding stack that was meant to ship as `node_modules` never made it in. The embeddinggemma2 stack (Transformers.js, tokenizers, onnxruntime-web's WASM runtime) is now bundled into `dist/` for both the extension and the CLI — `dist/onnxruntime-node/` holds the bundled WASM shim plus `ort-wasm-simd-threaded.wasm` and its loader — so neither needs `node_modules` at runtime. The CLI no longer installs `@huggingface/transformers` / `onnxruntime-web` (and with them the ~300 MB native onnxruntime-node and sharp) as runtime dependencies; it now runs on the same WASM backend as the extension
+
 ## [0.6.0] - 2026-10-10
 
 ### Added

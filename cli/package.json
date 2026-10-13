@@ -33,21 +33,21 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
-    "@huggingface/transformers": "^4.3.1",
     "@lmstudio/sdk": "^1.5.0",
     "ignore": "^7.0.5",
     "jimp": "^0.22.12",
     "minisearch": "^7.2.0",
     "ollama": "^0.6.3",
-    "onnxruntime-web": "^1.31.0-dev.20260914-8d85527a0",
     "openai": "^6.25.0",
     "puppeteer-core": "^24.3.0",
     "screenshot-desktop": "^1.12.7"
   },
   "devDependencies": {
+    "@huggingface/transformers": "^4.3.1",
     "@types/node": "22.x",
     "@types/screenshot-desktop": "^1.15.0",
     "esbuild": "^0.27.2",
+    "onnxruntime-web": "^1.31.0-dev.20260914-8d85527a0",
     "typescript": "^5.9.3"
   }
 }
