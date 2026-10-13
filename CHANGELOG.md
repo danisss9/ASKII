@@ -6,6 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-13
+
 ### Added
 
 - **Code review of uncommitted changes**: a new Source Control toolbar button, **ASKII Git: Code Review Uncommitted Changes**, reviews staged, unstaged and untracked changes with the Ask / Edit / Do model. The review panel lists each problem with its severity, location and a recommendation. **Auto Fix** applies a model-generated fix as an undoable edit, **Fixed It** marks a problem fixed by hand, and a **Show fixed** toggle hides fixed problems
