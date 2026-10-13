@@ -104,7 +104,8 @@ async function fireTrigger(note: NoteEntry): Promise<void> {
   } else {
     notes[idx].fired = true;
   }
-  notes[idx].missed = false;
+  // `missed` is left as arm() set it (true when firing late) so the panel's
+  // missed badge can show; snooze and dismiss clear it.
   saveNotes(_context, notes);
 
   playReminderSound();
@@ -116,13 +117,15 @@ async function fireTrigger(note: NoteEntry): Promise<void> {
       ? ` (repeats ${describeRecurrence(recur)})`
       : '';
   const body = `${title}${when}: ${notes[idx].summary ?? notes[idx].text}${contextSummary(notes[idx])}`;
+  const snoozeMins = vscode.workspace.getConfiguration('askii').get<number>('noteSnoozeMinutes') ?? 10;
+  const snoozeLabel = `Snooze ${snoozeMins}m`;
   const buttons = isTask
     ? event
-      ? (['Open', 'Done', 'Dismiss'] as const)
-      : (['Open', 'Done', 'Snooze 10m'] as const)
+      ? ['Open', 'Done', 'Dismiss']
+      : ['Open', 'Done', snoozeLabel]
     : event
-      ? (['Open', 'Dismiss'] as const)
-      : (['Open', 'Snooze 10m', 'Dismiss'] as const);
+      ? ['Open', 'Dismiss']
+      : ['Open', snoozeLabel, 'Dismiss'];
   const choice = await vscode.window.showInformationMessage(body, { modal: false }, ...buttons);
 
   if (choice === 'Open') {
@@ -135,20 +138,25 @@ async function fireTrigger(note: NoteEntry): Promise<void> {
       fresh[i].fired = true;
       saveNotes(_context, fresh);
     }
-  } else if (choice === 'Snooze 10m') {
-    const config = vscode.workspace.getConfiguration('askii');
-    const mins = config.get<number>('noteSnoozeMinutes') ?? 10;
+  } else if (choice === snoozeLabel) {
     const fresh = loadNotes(_context);
     const i = fresh.findIndex((n) => n.id === note.id);
     if (i !== -1) {
       fresh[i].fired = false;
       fresh[i].missed = false;
-      fresh[i].dueAt = new Date(Date.now() + mins * 60_000).toISOString();
+      fresh[i].dueAt = new Date(Date.now() + snoozeMins * 60_000).toISOString();
+      saveNotes(_context, fresh);
+    }
+  } else if (choice === 'Dismiss') {
+    const fresh = loadNotes(_context);
+    const i = fresh.findIndex((n) => n.id === note.id);
+    if (i !== -1 && fresh[i].missed) {
+      fresh[i].missed = false;
       saveNotes(_context, fresh);
     }
   }
-  // 'Dismiss' (or a rolled-forward recurring trigger): stored state already
-  // reflects what happens next.
+  // No choice (toast closed) or a rolled-forward recurring trigger: stored
+  // state already reflects what happens next.
 
   rescheduleAll(loadNotes(_context));
   _notesChangedEmitter.fire();

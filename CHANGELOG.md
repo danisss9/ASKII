@@ -6,9 +6,36 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Changed
+
+- **Keybindings moved to `Ctrl+Alt+K <letter>`** (`Cmd+Alt+K` on macOS): the `Ctrl+Shift+K` chords shadowed VS Code's built-in **Delete Line**, and `Ctrl+Shift+A S` shadowed **Toggle Block Comment** on Linux. Every ASKII command now shares one prefix — `A` Ask, `E` Edit, `D` Do, `C` Control, `N` Note, `W` Reload Wikis, `X` Clear Cache, `S` Open Setup
+
 ### Fixed
 
 - **Docs wiki / code wiki failed to load the embedding model** (`Cannot find package '@huggingface/transformers'`): the 0.6.0 VSIX is packaged with `--no-dependencies`, so the embedding stack that was meant to ship as `node_modules` never made it in. The embeddinggemma2 stack (Transformers.js, tokenizers, onnxruntime-web's WASM runtime) is now bundled into `dist/` for both the extension and the CLI — `dist/onnxruntime-node/` holds the bundled WASM shim plus `ort-wasm-simd-threaded.wasm` and its loader — so neither needs `node_modules` at runtime. The CLI no longer installs `@huggingface/transformers` / `onnxruntime-web` (and with them the ~300 MB native onnxruntime-node and sharp) as runtime dependencies; it now runs on the same WASM backend as the extension
+- **ASKII Control screen mode failed on Windows** (`ENOENT: no such file or directory, open '…\dist\screenCapture_1.3.2.bat'`): `screenshot-desktop`'s Windows backend loads its capture script and `app.manifest` from next to its own code, but bundling moved that code into `dist/` without them. Both build scripts now copy the backend's non-JS assets into `dist/`, so screen capture works in the extension and the CLI
+- **Do agent (extension + CLI)**:
+  - `run` actions were always reported as BLOCKED — the path sandbox check ran on actions that have no path. The extension now also runs commands asynchronously instead of freezing the extension host
+  - Written code was corrupted: escape sequences were decoded a second time after JSON parsing (`"a\nb"` in a string literal became a real line break), and `modify` expanded `$&` / `$$` / `` $` `` / `$'` in replacement text. A `modify` without `oldContent` or a line range no longer prepends text to the file; line-range edits keep CRLF endings
+  - Undo could lose data: `create` over an existing file overwrote it without a backup and Undo then deleted it, a second edit to the same file replaced the original backup, and `copy` / `rename` destinations were never undone
+  - `code_search` actions were silently dropped, and an unparseable or truncated model response ended the task as "complete" — the model is now asked to answer again
+- **Code wiki / docs wiki index corrupted on incremental rebuilds**: files indexed after others in the same embedding batch recorded the wrong chunk range, so the next rebuild mapped reused chunks to the wrong file and text, and reused chunks lost their headings (code-wiki hits showed `[undefined]` instead of the file)
+- **Inline completion** dropped leading newlines and indentation (a completion after `{` was glued onto the brace)
+- **Inline explanations** could appear on a line the cursor had already left
+- **ASKII Edit**: the edit is no longer applied to a stale range when the file changed while waiting for the model, and Undo with `formatAfterEdit` no longer reverts one step too many when formatting changed nothing
+- **ASKII Note panel**: re-classifying no longer reverts changes made meanwhile, closing the panel during a clarifying question no longer hangs (the note is saved as plain), reopening the panel no longer keeps an invisible filter, and **Open** on a reminder now highlights the entry
+- **ASKII Note reminders**: the missed/overdue badge never appeared, and the Snooze button always said "10m" whatever `askii.noteSnoozeMinutes` was set to
+- **Commit message** from the Source Control title button now uses the repository it was clicked on in multi-repo workspaces
+- **Provider validation** now runs at startup, and no longer warns about half-saved settings while the setup panel saves
+- **ASKII Control (Browser)**: a headless browser is closed when the task ends instead of lingering, and a browser window closed between follow-ups is relaunched. `click_text` clicks the actual link/button instead of an outer wrapper and reports when no element matches; `host:port` addresses without a scheme (`myapp.local:5173`) navigate correctly
+- **ASKII Control (Screen)**: on Windows, punctuation keys pressed the wrong key (`.` sent Delete, `-` Insert, `[` the Windows key); key and modifier names are now case-insensitive (`ctrl+s` no longer types "s"), and long `keyboard_input` text no longer fails on the 8191-character command-line limit
+- **Note time parsing**: `every 30 seconds` became every 30 days, words starting with a month name were read as dates (`2 junit tests` → June 2), and `later today` / `today at 5` rolled over to tomorrow
+- **CLI**:
+  - Flag values were taken as the command or task text — `askii -p lmstudio ask …` failed with "Unknown command: lmstudio", and `control --ollama-model llava …` / `do --dir ./x …` sent the flag values to the model
+  - REPL `/commit` never stripped fences or listed files (double-escaped newlines); it now shares the `commit` command's implementation, which also handles diffs over 1 MB
+  - `control --target browser --headless` never exited; headed mode now waits for the window to be closed
+  - Ctrl+C was swallowed by readline: `/do` quit the REPL instead of returning to the prompt, and `do` / `control` kept running
+  - REPL `/platform` kept the previous server URL, `/note` exited the REPL on any error and ignored `--shot` and clarifying questions, `/do --max-rounds N` was ignored, and commands typed while another was running ran concurrently
 
 ## [0.6.0] - 2026-10-10
 

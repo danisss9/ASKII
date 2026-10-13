@@ -175,6 +175,12 @@ export function normalizeNavigateUrl(input: string, baseUrl: string): string {
     return 'http://' + raw;
   }
 
+  // host:port without a scheme ("myapp.local:5173/x", "dev-box:8080") — the
+  // scheme check below would otherwise read "myapp.local:" as a scheme
+  if (/^(?!(?:tel|sms|mailto|about|data|javascript|file):)[^\s/?#:]+:\d{1,5}(?:[/?#]|$)/i.test(raw)) {
+    return 'http://' + raw;
+  }
+
   // Already has a scheme (https:, http:, about:, edge://, ...)
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return raw;
 
@@ -220,20 +226,32 @@ export async function executeBrowserAction(action: BrowserAction, page: Page): P
         action.amount,
       );
       break;
-    case 'click_text':
-      await page.evaluate((targetText: string) => {
-        const el = Array.from(
-          document.querySelectorAll('button, a, input, [role="button"], label, *'),
-        ).find(
-          (e) =>
-            e.textContent?.trim() === targetText ||
-            (e as HTMLInputElement).value?.trim() === targetText,
-        );
-        if (el) {
-          (el as HTMLElement).click();
+    case 'click_text': {
+      const clicked = await page.evaluate((targetText: string) => {
+        const matches = (e: Element) =>
+          e.textContent?.trim() === targetText ||
+          (e as HTMLInputElement).value?.trim() === targetText;
+        // Interactive elements first. Otherwise take the deepest match (last in
+        // document order): a wrapper <li>/<div> with the same text comes first,
+        // and clicking it would not trigger the link/button inside.
+        const el =
+          Array.from(
+            document.querySelectorAll('button, a, input, [role="button"], [role="link"], label'),
+          ).find(matches) ??
+          Array.from(document.querySelectorAll('body *'))
+            .filter(matches)
+            .pop();
+        if (!el) {
+          return false;
         }
+        (el as HTMLElement).click();
+        return true;
       }, action.text);
+      if (!clicked) {
+        throw new Error(`No element with text "${action.text}" found on the page`);
+      }
       break;
+    }
     case 'DONE':
       break;
   }

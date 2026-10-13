@@ -299,6 +299,11 @@ const MONTH_NAMES = [
   'november',
   'december',
 ];
+/**
+ * A month name or its abbreviation, captured — and nothing longer: a loose
+ * "jun[a-z]*" would read "2 junit tests" as June 2 and "mark 3" as March 3.
+ */
+const MONTH_RE = String.raw`(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b\.?`;
 
 // Time-of-day defaults for part-of-day words (24h clock).
 const PART_DEFAULT: Record<string, number> = {
@@ -529,14 +534,14 @@ export function parseReminderTimeLocal(text: string, now: Date = new Date()): st
   const md =
     t.match(
       new RegExp(
-        String.raw`\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?` +
+        String.raw`\b${MONTH_RE}\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?` +
           TRAILING_TOD +
           String.raw`\b`,
       ),
     ) ??
     t.match(
       new RegExp(
-        String.raw`\b(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?:\s*,?\s*(\d{4}))?` +
+        String.raw`\b(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?${MONTH_RE}(?:\s*,?\s*(\d{4}))?` +
           TRAILING_TOD +
           String.raw`\b`,
       ),
@@ -848,9 +853,28 @@ export function parseReminderTimeLocal(text: string, now: Date = new Date()): st
     new RegExp(String.raw`\b(?:today|later\s+today)` + TRAILING_TOD + String.raw`\b`),
   );
   if (todayAt) {
-    const tod = todFromGroups(todayAt, 1);
-    const d = new Date(now);
-    return rollForward(atTime(d, tod ? tod.h : 9, tod ? tod.m : 0), now).toISOString();
+    // "today" phrases stay on today. noon/midnight match without capturing,
+    // hence the extractExplicitTime fallback.
+    const tod = todFromGroups(todayAt, 1) ?? extractExplicitTime(todayAt[0]);
+    if (!tod) {
+      // Bare "today" / "later today": 9:00 if still ahead, else a few hours
+      // out — but not past the evening (and never tomorrow)
+      const nine = atTime(now, 9, 0);
+      if (nine.getTime() > now.getTime()) {return nine.toISOString();}
+      const evening = atTime(now, 22, 0);
+      const later = Math.min(now.getTime() + 3 * HOUR, Math.max(evening.getTime(), now.getTime() + HOUR / 2));
+      return new Date(later).toISOString();
+    }
+    let candidate = atTime(now, tod.h, tod.m);
+    // Like bare "at 5": an hour without an am/pm hint that has passed is PM
+    const hinted = /\d\s*(?:a\.?m\.?|p\.?m\.?)(?![a-z])|\b(?:morning|afternoon|evening|night)\b/.test(
+      todayAt[0],
+    );
+    if (!hinted && tod.h < 12 && candidate.getTime() <= now.getTime()) {
+      const pm = atTime(now, tod.h + 12, tod.m);
+      if (pm.getTime() > now.getTime()) {candidate = pm;}
+    }
+    return rollForward(candidate, now).toISOString();
   }
   const thisPart = t.match(
     new RegExp(
@@ -979,7 +1003,13 @@ export function parseRecurrence(text: string, now: Date = new Date()): RecurRule
     /\b(?:every|each)\s+(\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)\b/,
   );
   if (m) {
-    return { type: 'interval', interval: parseInt(m[1], 10), unit: intervalUnit(m[2]) };
+    const n = parseInt(m[1], 10);
+    // Rules have minute granularity — "every 30 seconds" is every minute, not
+    // (as intervalUnit's fallback would make it) every 30 days
+    if (/^s/.test(m[2])) {
+      return { type: 'interval', interval: Math.max(1, Math.ceil(n / 60)), unit: 'minute' };
+    }
+    return { type: 'interval', interval: n, unit: intervalUnit(m[2]) };
   }
 
   // "every other day/week/month"
@@ -1083,7 +1113,7 @@ export function parseRecurrence(text: string, now: Date = new Date()): RecurRule
   m = t.match(
     new RegExp(
       String.raw`\b(?:every\s+years?|yearly|annually)\s+on\s+(?:the\s+)?` +
-        String.raw`(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?|(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?)\b`,
+        String.raw`(?:${MONTH_RE}\s+(\d{1,2})(?:st|nd|rd|th)?|(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?${MONTH_RE})\b`,
     ),
   );
   if (m) {

@@ -20,19 +20,26 @@ import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentContext: vscode.ExtensionContext | undefined;
 let notesChangedSub: vscode.Disposable | undefined;
+// Entry to highlight (e.g. "Open" on a reminder). Sent as `selected` with every
+// list refresh — the webview re-renders the whole list, wiping any class it
+// added on its own, and its init requestList reply arrives after our messages.
+let selectedId: string | undefined;
 
 export async function askiiNoteCommand(
   context: vscode.ExtensionContext,
   args?: { selectId?: string },
 ): Promise<void> {
   currentContext = context;
+  if (args?.selectId) {
+    selectedId = args.selectId;
+  }
 
   if (currentPanel) {
     currentPanel.reveal(vscode.ViewColumn.Active, false);
+    refreshList();
     if (args?.selectId) {
       currentPanel.webview.postMessage({ type: 'selectEntry', id: args.selectId });
     }
-    refreshList();
     return;
   }
 
@@ -68,6 +75,10 @@ export async function askiiNoteCommand(
     currentPanel = undefined;
     notesChangedSub?.dispose();
     notesChangedSub = undefined;
+    // A reopened panel starts unfiltered (its search box and chips reset too)
+    lastQuery = '';
+    lastKinds = [];
+    selectedId = undefined;
   });
 
   currentPanel = panel;
@@ -108,7 +119,7 @@ function refreshList(query?: string, kinds?: NoteKind[]): void {
         .asWebviewUri(vscode.Uri.file(n.screenshotPath))
         .toString();
     }
-    return { ...n, screenshotUri, recurLabel: n.recur ? describeRecurrence(n.recur) : undefined, eventLabel: n.event ? describeEventTrigger(n.event) : undefined };
+    return { ...n, selected: n.id === selectedId, screenshotUri, recurLabel: n.recur ? describeRecurrence(n.recur) : undefined, eventLabel: n.event ? describeEventTrigger(n.event) : undefined };
   });
   currentPanel.webview.postMessage({ type: 'entries', entries, stats });
 }
@@ -140,7 +151,7 @@ async function handleWebviewMessage(
       const text = typeof m.text === 'string' ? m.text.trim() : '';
       if (!text) {break;}
       const attachScreenshot = m.attachScreenshot === true;
-      panel.webview.postMessage({
+      postToPanel(panel, {
         type: 'status',
         status: 'thinking',
         kaomoji: getRandomThinkingKaomoji(),
@@ -156,7 +167,7 @@ async function handleWebviewMessage(
       // Clarifying-question loop (max 2 rounds)
       let rounds = 0;
       while (cls.needsClarification && cls.clarifyingQuestion && rounds < 2) {
-        panel.webview.postMessage({
+        postToPanel(panel, {
           type: 'clarify',
           question: cls.clarifyingQuestion,
         });
@@ -187,7 +198,7 @@ async function handleWebviewMessage(
       saveNotes(context, notes);
       rescheduleAll(notes);
 
-      panel.webview.postMessage({ type: 'status', status: 'done', kaomoji: getRandomKaomoji() });
+      postToPanel(panel, { type: 'status', status: 'done', kaomoji: getRandomKaomoji() });
       refreshList();
       break;
     }
@@ -225,7 +236,7 @@ async function handleWebviewMessage(
       const text = typeof m.text === 'string' ? m.text : '';
       if (!id) {break;}
       if (updateNoteText(context, id, text)) {
-        panel.webview.postMessage({ type: 'status', status: 'done', kaomoji: getRandomKaomoji() });
+        postToPanel(panel, { type: 'status', status: 'done', kaomoji: getRandomKaomoji() });
       }
       refreshList();
       break;
@@ -234,18 +245,26 @@ async function handleWebviewMessage(
     case 'reclassify': {
       const id = typeof m.id === 'string' ? m.id : '';
       if (!id) {break;}
-      const notes = loadNotes(context);
-      const i = notes.findIndex((n) => n.id === id);
-      if (i === -1) {break;}
+      const before = loadNotes(context).find((n) => n.id === id);
+      if (!before) {break;}
       // Optionally apply an in-progress edit before re-running classification.
-      if (typeof m.text === 'string' && m.text.trim()) {notes[i].text = m.text.trim();}
-      const n = notes[i];
-      panel.webview.postMessage({
+      const text = typeof m.text === 'string' && m.text.trim() ? m.text.trim() : before.text;
+      postToPanel(panel, {
         type: 'status',
         status: 'thinking',
         kaomoji: getRandomThinkingKaomoji(),
       });
-      const cls = await classifyNoteInput(n.text, n.context ?? {});
+      const cls = await classifyNoteInput(text, before.context ?? {});
+      // Reload after the LLM call: other entries may have changed meanwhile
+      // (deleted, toggled, a reminder fired) and must not be reverted.
+      const notes = loadNotes(context);
+      const n = notes.find((entry) => entry.id === id);
+      if (!n) {
+        postToPanel(panel, { type: 'status', status: 'done', kaomoji: getRandomKaomoji() });
+        refreshList();
+        break;
+      }
+      n.text = text;
       n.kind = cls.kind;
       n.tags = cls.tags;
       n.summary = cls.summary;
@@ -261,7 +280,7 @@ async function handleWebviewMessage(
       n.event = triggered ? (cls.event ?? undefined) : undefined;
       saveNotes(context, notes);
       rescheduleAll(notes);
-      panel.webview.postMessage({ type: 'status', status: 'done', kaomoji: getRandomKaomoji() });
+      postToPanel(panel, { type: 'status', status: 'done', kaomoji: getRandomKaomoji() });
       refreshList();
       break;
     }
@@ -317,19 +336,32 @@ async function handleWebviewMessage(
   }
 }
 
+/** postMessage that is a no-op once the panel was closed mid-operation. */
+function postToPanel(panel: vscode.WebviewPanel, msg: unknown): void {
+  if (currentPanel === panel) {
+    void panel.webview.postMessage(msg);
+  }
+}
+
 function waitForClarifyAnswer(panel: vscode.WebviewPanel): Promise<string | null> {
+  if (currentPanel !== panel) {return Promise.resolve(null);} // already closed
   return new Promise((resolve) => {
-    const disp = panel.webview.onDidReceiveMessage((msg: unknown) => {
+    const finish = (answer: string | null) => {
+      msgSub.dispose();
+      disposeSub.dispose();
+      resolve(answer);
+    };
+    const msgSub = panel.webview.onDidReceiveMessage((msg: unknown) => {
       if (typeof msg !== 'object' || msg === null) {return;}
       const m = msg as { type: string; answer?: unknown };
       if (m.type === 'clarifyAnswer') {
-        disp.dispose();
-        resolve(typeof m.answer === 'string' && m.answer.trim() ? m.answer.trim() : null);
+        finish(typeof m.answer === 'string' && m.answer.trim() ? m.answer.trim() : null);
       } else if (m.type === 'clarifyCancel') {
-        disp.dispose();
-        resolve(null);
+        finish(null);
       }
     });
+    // Closing the panel mid-question cancels it — the note is still saved, as plain
+    const disposeSub = panel.onDidDispose(() => finish(null));
   });
 }
 

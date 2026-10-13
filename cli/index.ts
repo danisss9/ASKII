@@ -6,14 +6,16 @@ import {
   executeSearchAction,
   buildDoSystemPrompt,
   writeBackup,
-  recordCreatedFile,
+  backupOrRecordCreated,
+  applyModifyAction,
+  INVALID_ACTIONS_FEEDBACK,
   deleteAllBackups,
   restoreAllBackups,
   hasBackups,
   type WorkspaceAction,
   type ActionResult,
 } from '@common/workspace';
-import { unescapeJsonString, extractCode } from '@common/utils';
+import { decodeIfDoubleEscaped, extractCode } from '@common/utils';
 import { buildWikiIndex, hasWikiIndex, searchWiki } from '@common/wiki';
 import {
   rebuildCodeWikiIndex,
@@ -87,6 +89,8 @@ import * as os from 'os';
 interface Config {
   platform: 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego' | 'askiicloud';
   url: string;
+  ollamaUrl: string;
+  lmStudioUrl: string;
   model: string;
   openaiApiKey: string;
   openaiBaseURL: string | undefined;
@@ -119,7 +123,9 @@ function hasFlag(flags: string[], ...names: string[]): boolean {
   return names.some((n) => flags.includes(n));
 }
 
-const CONTROL_VALUE_FLAGS = new Set([
+// Every flag that takes a value (everything passed to getFlagValue) — their
+// values must not be mistaken for the command or the task/question text.
+const VALUE_FLAGS = new Set([
   '-p',
   '--platform',
   '--ollama-url',
@@ -136,26 +142,32 @@ const CONTROL_VALUE_FLAGS = new Set([
   '--opencodego-url',
   '--askiicloud-key',
   '--askiicloud-model',
+  '--model',
   '--mode',
   '--max-rounds',
   '--target',
   '--chrome-path',
+  '--dir',
+  '--wiki-path',
+  '-c',
+  '--code',
+  '--lang',
+  '--file',
+  '-f',
 ]);
 
-function getControlTaskArgs(argv: string[], command: string): string[] {
-  const commandIndex = argv.indexOf(command);
-  if (commandIndex === -1) return [];
-
-  const args: string[] = [];
-  for (let i = commandIndex + 1; i < argv.length; i++) {
-    const token = argv[i];
+/** Non-flag tokens, skipping each value flag's value (same rule as getFlagValue). */
+function getPositionals(tokens: string[]): string[] {
+  const positionals: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
     if (token.startsWith('-')) {
-      if (CONTROL_VALUE_FLAGS.has(token)) i++;
+      if (VALUE_FLAGS.has(token) && tokens[i + 1] && !tokens[i + 1].startsWith('-')) i++;
       continue;
     }
-    args.push(token);
+    positionals.push(token);
   }
-  return args;
+  return positionals;
 }
 
 function getConfig(flags: string[]): Config {
@@ -221,6 +233,8 @@ function getConfig(flags: string[]): Config {
   return {
     platform,
     url: platform === 'lmstudio' ? lmStudioUrl : ollamaUrl,
+    ollamaUrl,
+    lmStudioUrl,
     model: modelMap[platform] ?? ollamaModel,
     openaiApiKey,
     openaiBaseURL,
@@ -396,6 +410,7 @@ function executeCliWriteAction(
       const destPath = sandboxPath(workDir, action.newPath);
       const destDir = path.dirname(destPath);
       if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+      backupOrRecordCreated(workDir, destPath);
       fs.copyFileSync(filePath, destPath);
       console.error(`  ✓ Copied: ${action.path} → ${action.newPath}`);
       return 'ok';
@@ -403,38 +418,26 @@ function executeCliWriteAction(
 
     case 'create':
     case 'write': {
-      if (action.type === 'write') writeBackup(workDir, filePath);
-      if (action.type === 'create') recordCreatedFile(workDir, action.path!);
+      // Either type may target an existing file — back it up rather than
+      // recording it as created (undo would otherwise delete the original).
+      backupOrRecordCreated(workDir, filePath);
       const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      const content = action.content ? unescapeJsonString(action.content) : '';
-      fs.writeFileSync(filePath, content);
+      fs.writeFileSync(filePath, decodeIfDoubleEscaped(action.content ?? ''));
       console.error(`  ✓ ${action.type === 'create' ? 'Created' : 'Wrote'}: ${action.path}`);
       return 'ok';
     }
 
     case 'modify': {
+      const result = applyModifyAction(fs.readFileSync(filePath, 'utf-8'), action);
+      if ('error' in result) return result.error;
       writeBackup(workDir, filePath);
-      const existing = fs.readFileSync(filePath, 'utf-8');
-      if (action.startLine !== undefined || action.endLine !== undefined) {
-        const lines = existing.split('\n');
-        const start = (action.startLine ?? 1) - 1;
-        const end = action.endLine ?? lines.length;
-        const replacement = (action.newContent ? unescapeJsonString(action.newContent) : '').split(
-          '\n',
-        );
-        lines.splice(start, end - start, ...replacement);
-        fs.writeFileSync(filePath, lines.join('\n'));
-        console.error(`  ✓ Modified (lines ${action.startLine}–${action.endLine}): ${action.path}`);
-      } else {
-        const oldContent = action.oldContent ? unescapeJsonString(action.oldContent) : '';
-        const newContent = action.newContent ? unescapeJsonString(action.newContent) : '';
-        if (oldContent && !existing.includes(oldContent)) {
-          return `oldContent not found in ${action.path}`;
-        }
-        fs.writeFileSync(filePath, existing.replace(oldContent, newContent));
-        console.error(`  ✓ Modified: ${action.path}`);
-      }
+      fs.writeFileSync(filePath, result.text);
+      console.error(
+        action.startLine !== undefined || action.endLine !== undefined
+          ? `  ✓ Modified (lines ${action.startLine}–${action.endLine}): ${action.path}`
+          : `  ✓ Modified: ${action.path}`,
+      );
       return 'ok';
     }
 
@@ -451,6 +454,7 @@ function executeCliWriteAction(
       const newFilePath = sandboxPath(workDir, action.newPath);
       const newDir = path.dirname(newFilePath);
       if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
+      backupOrRecordCreated(workDir, newFilePath);
       fs.renameSync(filePath, newFilePath);
       console.error(`  ✓ Renamed: ${action.path} → ${action.newPath}`);
       return 'ok';
@@ -576,6 +580,8 @@ function mergeConfigOverride(base: Config, tokens: string[]): Config {
   const platform = getFlagValue(tokens, '-p', '--platform');
   if (platform) {
     result.platform = platform as Config['platform'];
+    // Ollama and LM Studio listen on different servers (http vs ws)
+    result.url = platform === 'lmstudio' ? result.lmStudioUrl : result.ollamaUrl;
     // Switch to the platform's default model unless an explicit model flag is also present
     result.model = PLATFORM_DEFAULT_MODELS[platform] ?? result.model;
   }
@@ -683,11 +689,14 @@ async function runReplDo(
       messages.push({ role: 'assistant', content: responseText });
 
       const actions = parseWorkspaceActions(responseText);
+      if (actions === null) {
+        console.error('  ✗ Response was not a valid JSON action array — asking again.');
+        messages.push({ role: 'user', content: INVALID_ACTIONS_FEEDBACK });
+        roundCount++;
+        continue;
+      }
       if (actions.length === 0) {
         console.error('No actions returned. Done.');
-        if (responseText.trim()) {
-          console.error(`Raw (first 500): ${responseText.substring(0, 500)}`);
-        }
         break;
       }
 
@@ -758,20 +767,7 @@ async function runReplDo(
       const actionResults: ActionResult[] = [];
 
       for (const action of writeActions) {
-        let filePath: string;
-        try {
-          filePath = sandboxPath(workDir, action.path!);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : 'Path error';
-          console.error(`  ✗ BLOCKED: ${msg}`);
-          actionResults.push({
-            action: `${action.type}:${action.path}`,
-            status: 'error',
-            detail: msg,
-          });
-          continue;
-        }
-
+        // run has no path — handle it before the sandbox check
         if (action.type === 'run') {
           console.error(`  → Run: ${action.command}`);
           const ok = await confirm(
@@ -807,6 +803,21 @@ async function runReplDo(
               detail: detail.substring(0, 500),
             });
           }
+          continue;
+        }
+
+        let filePath: string;
+        try {
+          if (!action.path) throw new Error(`${action.type} requires path`);
+          filePath = sandboxPath(workDir, action.path);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'Path error';
+          console.error(`  ✗ BLOCKED: ${msg}`);
+          actionResults.push({
+            action: `${action.type}:${action.path}`,
+            status: 'error',
+            detail: msg,
+          });
           continue;
         }
 
@@ -880,7 +891,7 @@ async function handleReplInput(
   setConfig: (c: Config) => void,
   askHistory: ChatMessage[],
   rl: readline.Interface,
-  replSigintHandler: () => void,
+  setInterrupt: (handler: (() => void) | null) => void,
 ): Promise<boolean> {
   const trimmed = line.trim();
   if (!trimmed) return false;
@@ -1051,95 +1062,43 @@ async function handleReplInput(
 
       case '/do': {
         const doTokens = rest.split(/\s+/).filter(Boolean);
-        const localFlags = doTokens.filter((t) => t.startsWith('-'));
-        const taskWords = doTokens.filter((t) => !t.startsWith('-'));
-        const task = taskWords.join(' ');
+        const task = getPositionals(doTokens).join(' ');
         if (!task) {
           console.error('Usage: /do <task> [--max-rounds N] [--yes]');
           return false;
         }
-        const doConfig = mergeConfigOverride(config, localFlags);
+        const doConfig = mergeConfigOverride(config, doTokens);
 
         const abortController = new AbortController();
-        process.removeAllListeners('SIGINT');
-        process.once('SIGINT', () => {
+        setInterrupt(() => {
+          if (abortController.signal.aborted) return;
           abortController.abort();
           console.error('\n\nCancelled (Ctrl+C). Returning to prompt...');
         });
+        // Keep reading keypresses during the run so Ctrl+C is seen (the line
+        // handler paused rl, which would leave it buffered until the next prompt).
+        // Throws if input already ended (piped stdin) — nothing to read then.
+        try {
+          rl.resume();
+        } catch {
+          // readline closed
+        }
 
         await runReplDo(task, doConfig, rl, abortController);
-
-        process.removeAllListeners('SIGINT');
-        process.on('SIGINT', replSigintHandler);
         return false;
       }
 
       case '/commit': {
         // Generate a commit message from staged/working-tree diff and print to stdout.
-        const { execSync } = await import('child_process');
-        const workDir = process.cwd();
-        const MAX_DIFF_CHARS = 12_000;
-        const COMMIT_SYSTEM_PROMPT = `You are an expert at writing Git commit messages.\nGiven a list of changed files and a unified diff, write a single, well-formed Git commit message.\nRules:\n- Use the Conventional Commits format when appropriate (type(scope): subject).\n- The first line is the subject: imperative mood, <= 72 characters, no trailing period.\n- Optionally follow with a blank line and a concise body explaining the \"why\" (not the \"what\").\n- Output ONLY the raw commit message text — no markdown fences, no quotes, no \"Commit message:\" label, no preamble.\n- If the diff is empty or trivial, output a single short subject line describing the change.`;
-        const cleanCommitMessage = (raw: string): string => {
-          let text = raw.trim();
-          const fenceMatch = text.match(/^```[a-zA-Z]*\\n([\\s\\S]*?)\\n```$/);
-          if (fenceMatch) text = fenceMatch[1].trim();
-          text = text.replace(/^(commit\\s*message|message)\\s*[:\\-]\\s*/i, '');
-          if (
-            (text.startsWith('"') && text.endsWith('"')) ||
-            (text.startsWith("'") && text.endsWith("'"))
-          ) {
-            text = text.slice(1, -1).trim();
-          }
-          return text.trim();
-        };
-        const git = (args: string[]): string => {
-          try {
-            return execSync('git ' + args.join(' '), { cwd: workDir, encoding: 'utf-8' });
-          } catch {
-            return '';
-          }
-        };
         try {
-          if (git(['rev-parse', '--is-inside-work-tree']).trim() !== 'true') {
-            console.error('Error: not inside a git repository');
-            return false;
-          }
-          let raw = git(['diff', '--cached']);
-          let hasStaged = raw.trim().length > 0;
-          if (!hasStaged) raw = git(['diff']);
-          const nameStatus = hasStaged
-            ? git(['diff', '--cached', '--name-only'])
-            : git(['status', '--porcelain', '--untracked-files=no']);
-          const changedFiles = nameStatus
-            .split('\\n')
-            .map((l) => l.trim())
-            .filter(Boolean)
-            .map((l) => l.replace(/^\\S+\\s+/, '').replace(/^\"|\"$/g, ''))
-            .map((f) => path.basename(f));
-          if (!raw.trim() && changedFiles.length === 0) {
+          const message = await generateCliCommitMessage(process.cwd(), config);
+          if (message === null) {
             console.error('ASKII: No changes to commit. (´･_･`)');
-            return false;
-          }
-          const diff =
-            raw.length > MAX_DIFF_CHARS
-              ? `${raw.slice(0, MAX_DIFF_CHARS)}\\n…[diff truncated]`
-              : raw;
-          const scope = hasStaged ? 'staged' : 'working-tree';
-          const fileSummary =
-            changedFiles.length > 0 ? changedFiles.join('\\n') : '(no file list available)';
-          const userPrompt =
-            `Changed files (${scope}):\\n${fileSummary}\\n\\n` +
-            `Unified diff (${scope}):\\n${diff || '(empty)'}\\n\\n` +
-            `Write the commit message now.`;
-          console.error(`ASKII is generating a commit message... ${getRandomThinkingKaomoji()}`);
-          const response = await getResponse(config, userPrompt, COMMIT_SYSTEM_PROMPT);
-          const cleaned = cleanCommitMessage(response);
-          if (!cleaned) {
+          } else if (!message) {
             console.error('ASKII: The model returned no commit message. Try again.');
-            return false;
+          } else {
+            console.log(message);
           }
-          console.log(cleaned);
         } catch (e) {
           console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
         }
@@ -1149,9 +1108,18 @@ async function handleReplInput(
       case '/note': {
         // /note <subcommand> [args...] — same as the top-level `note` command
         const noteTokens = rest.split(/\s+/).filter(Boolean);
-        const noteSub = noteTokens[0] ?? 'list';
-        const noteArgs = noteTokens.slice(1);
-        await runNoteCommand(noteSub, noteArgs, [], config);
+        const notePositionals = getPositionals(noteTokens);
+        const noteSub = notePositionals[0] ?? 'list';
+        const noteArgs = notePositionals.slice(1);
+        try {
+          // rl enables the clarifying-question loop; flags carry e.g. --shot
+          await runNoteCommand(noteSub, noteArgs, noteTokens, config, rl);
+        } catch (e) {
+          // CommandFailed already printed its message
+          if (!(e instanceof CommandFailed)) {
+            console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+          }
+        }
         return false;
       }
 
@@ -1192,46 +1160,75 @@ async function startRepl(initialConfig: Config): Promise<void> {
   });
 
   let exiting = false;
+  let busy = false;
+
+  const bye = () => {
+    console.error('\nBye! ( •_•)>⌐■-■ (⌐■_■)');
+    process.exit(0);
+  };
 
   const replSigintHandler = () => {
+    exiting = true;
     console.error('\n\nBye! ( •_•)>⌐■-■ (⌐■_■)');
     rl.close();
     process.exit(0);
   };
-  process.on('SIGINT', replSigintHandler);
+  // A running command (e.g. /do) can claim Ctrl+C to cancel itself instead of
+  // quitting. On a TTY readline holds stdin in raw mode, so Ctrl+C arrives as
+  // rl's 'SIGINT' event, not as a process signal — listen for both.
+  let interruptHandler: (() => void) | null = null;
+  const setInterrupt = (handler: (() => void) | null) => {
+    interruptHandler = handler;
+  };
+  const onInterrupt = () => (interruptHandler ?? replSigintHandler)();
+  rl.on('SIGINT', onInterrupt);
+  process.on('SIGINT', onInterrupt);
 
   rl.setPrompt('> ');
   rl.prompt();
 
-  rl.on('line', async (rawLine: string) => {
-    if (exiting) return;
+  // Commands run one at a time: lines typed (or piped) while one is running
+  // wait their turn instead of running concurrently. rl.question answers
+  // (confirm prompts) bypass this queue.
+  const queue: string[] = [];
+  let inputClosed = false;
+
+  const drain = async () => {
+    busy = true;
     rl.pause();
-
-    const shouldExit = await handleReplInput(
-      rawLine,
-      config,
-      setConfig,
-      askHistory,
-      rl,
-      replSigintHandler,
-    );
-
-    if (shouldExit) {
-      exiting = true;
-      console.error('\nBye! ( •_•)>⌐■-■ (⌐■_■)');
-      rl.close();
-      process.exit(0);
-    } else {
-      rl.resume();
-      rl.prompt();
+    while (queue.length > 0) {
+      const rawLine = queue.shift()!;
+      let shouldExit = false;
+      try {
+        shouldExit = await handleReplInput(rawLine, config, setConfig, askHistory, rl, setInterrupt);
+      } catch (e) {
+        console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+      } finally {
+        setInterrupt(null);
+      }
+      if (shouldExit) {
+        exiting = true;
+        rl.close();
+        bye();
+      }
     }
+    busy = false;
+    // Piped input ended while commands were still running
+    if (inputClosed) bye();
+    rl.resume();
+    rl.prompt();
+  };
+
+  rl.on('line', (rawLine: string) => {
+    if (exiting) return;
+    queue.push(rawLine);
+    if (!busy) void drain();
   });
 
   rl.on('close', () => {
-    if (!exiting) {
-      console.error('\nBye! ( •_•)>⌐■-■ (⌐■_■)');
-    }
-    process.exit(0);
+    inputClosed = true;
+    // Let a running command finish first — drain() exits when it's done
+    if (!exiting && !busy) bye();
   });
 }
 
@@ -1745,16 +1742,22 @@ function noteList(query: string): void {
   results.forEach((r, i) => printNoteEntry(r.entry, i + 1));
 }
 
+/**
+ * A command failed after printing its own error/usage message. Thrown instead
+ * of process.exit(1) so the REPL survives; one-shot commands exit with code 1.
+ */
+class CommandFailed extends Error {}
+
 function noteToggleDone(id: string): void {
   const notes = loadCliNotes();
   const i = notes.findIndex((n) => n.id === id);
   if (i === -1) {
     console.error(`Error: no entry with id "${id}"`);
-    process.exit(1);
+    throw new CommandFailed();
   }
   if (notes[i].kind !== 'task') {
     console.error(`Error: entry ${id} is a ${notes[i].kind}, not a task`);
-    process.exit(1);
+    throw new CommandFailed();
   }
   notes[i].done = !notes[i].done;
   saveCliNotes(notes);
@@ -1766,7 +1769,7 @@ function noteDelete(id: string): void {
   const i = notes.findIndex((n) => n.id === id);
   if (i === -1) {
     console.error(`Error: no entry with id "${id}"`);
-    process.exit(1);
+    throw new CommandFailed();
   }
   const removed = notes.splice(i, 1)[0];
   saveCliNotes(notes);
@@ -1818,7 +1821,7 @@ async function runNoteCommand(
         console.error('  askii note add "task: fix the login bug, high priority"');
         console.error('  askii note add "remind me to check the build in 30 minutes"');
         console.error('  askii note add --shot "remember this screen state"');
-        process.exit(1);
+        throw new CommandFailed();
       }
       console.error(`ASKII Note is classifying... ${getRandomThinkingKaomoji()}`);
       await noteAdd(text, flags, config, rl);
@@ -1834,7 +1837,7 @@ async function runNoteCommand(
       const query = args.join(' ');
       if (!query) {
         console.error('Usage: askii note search "<query>"');
-        process.exit(1);
+        throw new CommandFailed();
       }
       noteList(query);
       break;
@@ -1844,7 +1847,7 @@ async function runNoteCommand(
       const id = args[0];
       if (!id) {
         console.error('Usage: askii note done <id>');
-        process.exit(1);
+        throw new CommandFailed();
       }
       noteToggleDone(id);
       break;
@@ -1855,7 +1858,7 @@ async function runNoteCommand(
       const id = args[0];
       if (!id) {
         console.error('Usage: askii note delete <id>');
-        process.exit(1);
+        throw new CommandFailed();
       }
       noteDelete(id);
       break;
@@ -1896,7 +1899,7 @@ Examples:
     default: {
       console.error(`Unknown note subcommand: ${sub}`);
       console.error('Run `askii note help` for usage.');
-      process.exit(1);
+      throw new CommandFailed();
     }
   }
 }
@@ -1919,13 +1922,16 @@ async function runScreenControl(instruction: string, config: Config): Promise<vo
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const abortController = new AbortController();
 
-  // Handle Ctrl+C gracefully
-  process.once('SIGINT', () => {
+  // Handle Ctrl+C gracefully. On a TTY readline holds stdin in raw mode, so
+  // Ctrl+C arrives as rl's 'SIGINT' event rather than a process signal.
+  const stop = () => {
     abortController.abort();
     console.error('\n\nStopped by user (Ctrl+C).');
     rl.close();
     process.exit(0);
-  });
+  };
+  process.once('SIGINT', stop);
+  rl.on('SIGINT', stop);
 
   try {
     console.error(`ASKII Control (Screen) starting... ${getRandomThinkingKaomoji()}`);
@@ -2103,16 +2109,22 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const abortController = new AbortController();
 
-  process.once('SIGINT', () => {
-    abortController.abort();
-    console.error('\n\nStopped by user (Ctrl+C).');
-    rl.close();
-    process.exit(0);
-  });
-
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const puppeteer = require('puppeteer-core') as typeof import('puppeteer-core');
   let browser: import('puppeteer-core').Browser | undefined;
+
+  // On a TTY readline holds stdin in raw mode, so Ctrl+C arrives as rl's
+  // 'SIGINT' event rather than a process signal — listen for both.
+  const stop = () => {
+    abortController.abort();
+    console.error('\n\nStopped by user (Ctrl+C).');
+    rl.close();
+    void Promise.resolve(browser?.close())
+      .catch(() => undefined)
+      .finally(() => process.exit(0));
+  };
+  process.once('SIGINT', stop);
+  rl.on('SIGINT', stop);
 
   try {
     console.error(`ASKII Control (Browser) starting... ${getRandomThinkingKaomoji()}`);
@@ -2218,12 +2230,160 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
     console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     process.exit(1);
   }
+
+  // The launched browser keeps the event loop alive. Headless: close it so the
+  // CLI exits. Headed: leave it for inspection — Puppeteer kills it when Node
+  // exits, so wait until the user closes the window (or presses Ctrl+C).
+  if (browser?.connected) {
+    if (config.headless) {
+      await browser.close();
+    } else {
+      console.error('Browser left open — close it (or press Ctrl+C) to exit.');
+      const openBrowser = browser;
+      await new Promise<void>((resolve) => openBrowser.once('disconnected', () => resolve()));
+    }
+  }
+}
+
+/**
+ * Generates a commit message from the staged (or, failing that, working-tree)
+ * git diff in workDir. Shared by the `commit` command and the REPL's /commit;
+ * mirrors src/commitMessage.ts in the extension. Returns null when there is
+ * nothing to commit and '' when the model returned no message; throws when
+ * workDir is not a git repository or the LLM call fails.
+ */
+async function generateCliCommitMessage(workDir: string, config: Config): Promise<string | null> {
+  const { execSync } = await import('child_process');
+
+  const MAX_DIFF_CHARS = 12_000;
+  // The repository's recent commit messages are sent to the model as style
+  // examples so generated messages match the user's existing habits.
+  const MAX_RECENT_COMMITS = 10;
+  // Cap each example message so huge commit bodies don't dominate the prompt.
+  const MAX_EXAMPLE_MESSAGE_CHARS = 500;
+
+  const COMMIT_SYSTEM_PROMPT = `You are an expert at writing Git commit messages.
+Given a list of changed files and a unified diff, write a single, well-formed Git commit message.
+Rules:
+- Use the Conventional Commits format when appropriate (type(scope): subject).
+- The first line is the subject: imperative mood, <= 72 characters, no trailing period.
+- Optionally follow with a blank line and a concise body explaining the "why" (not the "what").
+- Output ONLY the raw commit message text — no markdown fences, no quotes, no "Commit message:" label, no preamble.
+- If the diff is empty or trivial, output a single short subject line describing the change.`;
+
+  function cleanCommitMessage(raw: string): string {
+    let text = raw.trim();
+    const fenceMatch = text.match(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/);
+    if (fenceMatch) text = fenceMatch[1].trim();
+    text = text.replace(/^(commit\s*message|message)\s*[:\-]\s*/i, '');
+    if (
+      (text.startsWith('"') && text.endsWith('"')) ||
+      (text.startsWith("'") && text.endsWith("'"))
+    ) {
+      text = text.slice(1, -1).trim();
+    }
+    return text.trim();
+  }
+
+  function git(args: string[]): string {
+    try {
+      // Large buffer: a big staged diff (e.g. a lockfile) would otherwise
+      // overflow the 1 MB default and silently come back empty.
+      return execSync('git ' + args.join(' '), {
+        cwd: workDir,
+        encoding: 'utf-8',
+        maxBuffer: 64 * 1024 * 1024,
+      });
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Formats one example commit message: caps its length and indents wrapped
+   * lines so multi-line messages stay nested under their numbered bullet.
+   */
+  function formatExampleMessage(message: string): string {
+    const normalized = message.replace(/\r\n/g, '\n').trim();
+    const capped =
+      normalized.length > MAX_EXAMPLE_MESSAGE_CHARS
+        ? `${normalized.slice(0, MAX_EXAMPLE_MESSAGE_CHARS)}…`
+        : normalized;
+    return capped.replace(/\n/g, '\n   ');
+  }
+
+  // Recent commit messages give the model concrete style examples. Returns
+  // '' when the log is unavailable (no commits yet) so the prompt omits it.
+  function collectRecentCommitMessages(): string {
+    const raw = git(['log', '-n', String(MAX_RECENT_COMMITS), '-z', '--format=%B']);
+    if (!raw.trim()) {
+      return '';
+    }
+    const messages = raw
+      .split('\0')
+      .map((m) => m.trim())
+      .filter(Boolean)
+      .map(formatExampleMessage);
+    if (messages.length === 0) {
+      return '';
+    }
+    return (
+      'Recent commit messages (style examples from this repository):\n' +
+      messages.map((m, i) => `${i + 1}. ${m}`).join('\n')
+    );
+  }
+
+  // Confirm we are inside a git repo.
+  if (git(['rev-parse', '--is-inside-work-tree']).trim() !== 'true') {
+    throw new Error('not inside a git repository');
+  }
+
+  // Prefer staged diff; fall back to working-tree diff.
+  let raw = git(['diff', '--cached']);
+  const hasStaged = raw.trim().length > 0;
+  if (!hasStaged) {
+    raw = git(['diff']);
+  }
+
+  // File list (staged or working-tree).
+  const nameStatus = hasStaged
+    ? git(['diff', '--cached', '--name-only'])
+    : git(['status', '--porcelain', '--untracked-files=no']);
+  const changedFiles = nameStatus
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => l.replace(/^\S+\s+/, '').replace(/^"|"$/g, ''))
+    .map((f) => path.basename(f));
+
+  if (!raw.trim() && changedFiles.length === 0) {
+    return null;
+  }
+
+  const diff =
+    raw.length > MAX_DIFF_CHARS ? `${raw.slice(0, MAX_DIFF_CHARS)}\n…[diff truncated]` : raw;
+
+  const scope = hasStaged ? 'staged' : 'working-tree';
+  const fileSummary =
+    changedFiles.length > 0 ? changedFiles.join('\n') : '(no file list available)';
+  const examples = collectRecentCommitMessages();
+  const userPrompt =
+    `Changed files (${scope}):\n${fileSummary}\n\n` +
+    `Unified diff (${scope}):\n${diff || '(empty)'}\n\n` +
+    (examples ? `${examples}\n\n` : '') +
+    (examples
+      ? 'Write the commit message now, matching the style of the example messages above.'
+      : 'Write the commit message now.');
+
+  console.error(`ASKII is generating a commit message... ${getRandomThinkingKaomoji()}`);
+  const response = await getResponse(config, userPrompt, COMMIT_SYSTEM_PROMPT);
+  return cleanCommitMessage(response);
 }
 
 async function main() {
   const argv = process.argv.slice(2);
   const flags = argv;
-  const positional = argv.filter((a) => !a.startsWith('-'));
+  const positional = getPositionals(argv);
   const command = positional[0] ?? '';
 
   if (hasFlag(flags, '-h', '--help') || command === 'help') {
@@ -2330,137 +2490,22 @@ async function main() {
     }
   } else if (command === 'commit') {
     // Generate a commit message from the staged (or working-tree) git diff
-    // and print it to stdout. Mirrors src/commitMessage.ts in the extension.
-    const { execSync } = await import('child_process');
-    const workDir = getFlagValue(flags, '--dir') || process.cwd();
-
-    const MAX_DIFF_CHARS = 12_000;
-    // The repository's recent commit messages are sent to the model as style
-    // examples so generated messages match the user's existing habits.
-    const MAX_RECENT_COMMITS = 10;
-    // Cap each example message so huge commit bodies don't dominate the prompt.
-    const MAX_EXAMPLE_MESSAGE_CHARS = 500;
-
-    const COMMIT_SYSTEM_PROMPT = `You are an expert at writing Git commit messages.
-Given a list of changed files and a unified diff, write a single, well-formed Git commit message.
-Rules:
-- Use the Conventional Commits format when appropriate (type(scope): subject).
-- The first line is the subject: imperative mood, <= 72 characters, no trailing period.
-- Optionally follow with a blank line and a concise body explaining the "why" (not the "what").
-- Output ONLY the raw commit message text — no markdown fences, no quotes, no "Commit message:" label, no preamble.
-- If the diff is empty or trivial, output a single short subject line describing the change.`;
-
-    function cleanCommitMessage(raw: string): string {
-      let text = raw.trim();
-      const fenceMatch = text.match(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/);
-      if (fenceMatch) text = fenceMatch[1].trim();
-      text = text.replace(/^(commit\s*message|message)\s*[:\-]\s*/i, '');
-      if (
-        (text.startsWith('"') && text.endsWith('"')) ||
-        (text.startsWith("'") && text.endsWith("'"))
-      ) {
-        text = text.slice(1, -1).trim();
-      }
-      return text.trim();
-    }
-
-    function git(args: string[]): string {
-      try {
-        return execSync('git ' + args.join(' '), { cwd: workDir, encoding: 'utf-8' });
-      } catch {
-        return '';
-      }
-    }
-
-    /**
-     * Formats one example commit message: caps its length and indents wrapped
-     * lines so multi-line messages stay nested under their numbered bullet.
-     */
-    function formatExampleMessage(message: string): string {
-      const normalized = message.replace(/\r\n/g, '\n').trim();
-      const capped =
-        normalized.length > MAX_EXAMPLE_MESSAGE_CHARS
-          ? `${normalized.slice(0, MAX_EXAMPLE_MESSAGE_CHARS)}…`
-          : normalized;
-      return capped.replace(/\n/g, '\n   ');
-    }
-
-    // Recent commit messages give the model concrete style examples. Returns
-    // '' when the log is unavailable (no commits yet) so the prompt omits it.
-    function collectRecentCommitMessages(): string {
-      const raw = git(['log', '-n', String(MAX_RECENT_COMMITS), '-z', '--format=%B']);
-      if (!raw.trim()) {
-        return '';
-      }
-      const messages = raw
-        .split('\0')
-        .map((m) => m.trim())
-        .filter(Boolean)
-        .map(formatExampleMessage);
-      if (messages.length === 0) {
-        return '';
-      }
-      return (
-        'Recent commit messages (style examples from this repository):\n' +
-        messages.map((m, i) => `${i + 1}. ${m}`).join('\n')
-      );
-    }
-
+    // and print it to stdout.
     try {
-      // Confirm we are inside a git repo.
-      const insideRepo = git(['rev-parse', '--is-inside-work-tree']).trim();
-      if (insideRepo !== 'true') {
-        console.error('Error: not inside a git repository');
-        process.exit(1);
-      }
-
-      // Prefer staged diff; fall back to working-tree diff.
-      let raw = git(['diff', '--cached']);
-      let hasStaged = raw.trim().length > 0;
-      if (!hasStaged) {
-        raw = git(['diff']);
-      }
-
-      // File list (staged or working-tree).
-      const nameStatus = hasStaged
-        ? git(['diff', '--cached', '--name-only'])
-        : git(['status', '--porcelain', '--untracked-files=no']);
-      const changedFiles = nameStatus
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .map((l) => l.replace(/^\S+\s+/, '').replace(/^"|"$/g, ''))
-        .map((f) => path.basename(f));
-
-      if (!raw.trim() && changedFiles.length === 0) {
+      const message = await generateCliCommitMessage(
+        getFlagValue(flags, '--dir') || process.cwd(),
+        config,
+      );
+      if (message === null) {
         console.error('ASKII: No changes to commit. (´･_･`)');
         process.exit(0);
       }
-
-      const diff =
-        raw.length > MAX_DIFF_CHARS ? `${raw.slice(0, MAX_DIFF_CHARS)}\n…[diff truncated]` : raw;
-
-      const scope = hasStaged ? 'staged' : 'working-tree';
-      const fileSummary =
-        changedFiles.length > 0 ? changedFiles.join('\n') : '(no file list available)';
-      const examples = collectRecentCommitMessages();
-      const userPrompt =
-        `Changed files (${scope}):\n${fileSummary}\n\n` +
-        `Unified diff (${scope}):\n${diff || '(empty)'}\n\n` +
-        (examples ? `${examples}\n\n` : '') +
-        (examples
-          ? 'Write the commit message now, matching the style of the example messages above.'
-          : 'Write the commit message now.');
-
-      console.error(`ASKII is generating a commit message... ${getRandomThinkingKaomoji()}`);
-      const response = await getResponse(config, userPrompt, COMMIT_SYSTEM_PROMPT);
-      const cleaned = cleanCommitMessage(response);
-      if (!cleaned) {
+      if (!message) {
         console.error('ASKII: The model returned no commit message. Try again.');
         process.exit(1);
       }
       // Print only the commit message to stdout (pipe-friendly).
-      console.log(cleaned);
+      console.log(message);
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);
@@ -2528,7 +2573,7 @@ Rules:
       process.exit(1);
     }
   } else if (command === 'do') {
-    const task = getControlTaskArgs(argv, command).join(' ');
+    const task = positional.slice(1).join(' ');
 
     if (!task) {
       console.error('Error: provide a task as an argument');
@@ -2545,12 +2590,16 @@ Rules:
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
     const abortController = new AbortController();
 
-    process.once('SIGINT', () => {
+    // On a TTY readline holds stdin in raw mode, so Ctrl+C arrives as rl's
+    // 'SIGINT' event rather than a process signal — listen for both.
+    const stop = () => {
       abortController.abort();
       console.error('\n\nStopped by user (Ctrl+C).');
       rl.close();
       process.exit(0);
-    });
+    };
+    process.once('SIGINT', stop);
+    rl.on('SIGINT', stop);
 
     try {
       const workspaceStructure = getWorkspaceStructure(workDir);
@@ -2587,11 +2636,14 @@ Rules:
         messages.push({ role: 'assistant', content: responseText });
 
         const actions = parseWorkspaceActions(responseText);
+        if (actions === null) {
+          console.error('  ✗ Response was not a valid JSON action array — asking again.');
+          messages.push({ role: 'user', content: INVALID_ACTIONS_FEEDBACK });
+          roundCount++;
+          continue;
+        }
         if (actions.length === 0) {
           console.error('No actions returned. Done.');
-          if (responseText.trim()) {
-            console.error(`Raw (first 500): ${responseText.substring(0, 500)}`);
-          }
           break;
         }
 
@@ -2666,22 +2718,8 @@ Rules:
         const actionResults: ActionResult[] = [];
 
         for (const action of writeActions) {
-          // Sandbox validation
-          let filePath: string;
-          try {
-            filePath = sandboxPath(workDir, action.path!);
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : 'Path error';
-            console.error(`  ✗ BLOCKED: ${msg}`);
-            actionResults.push({
-              action: `${action.type}:${action.path}`,
-              status: 'error',
-              detail: msg,
-            });
-            continue;
-          }
-
           if (action.type === 'run') {
+            // run has no path, so it skips the sandbox check below.
             // run ALWAYS requires explicit confirmation — ignores -y/--yes
             console.error(`  → Run: ${action.command}`);
             const ok = await confirm(
@@ -2717,6 +2755,22 @@ Rules:
                 detail: detail.substring(0, 500),
               });
             }
+            continue;
+          }
+
+          // Sandbox validation
+          let filePath: string;
+          try {
+            if (!action.path) throw new Error(`${action.type} requires path`);
+            filePath = sandboxPath(workDir, action.path);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : 'Path error';
+            console.error(`  ✗ BLOCKED: ${msg}`);
+            actionResults.push({
+              action: `${action.type}:${action.path}`,
+              status: 'error',
+              detail: msg,
+            });
             continue;
           }
 
@@ -2814,7 +2868,15 @@ Rules:
     // ASKII Note — notes / tasks / reminders, persisted to ~/.askii/notes.json
     const subcommand = positional[1] ?? 'list';
     const noteArgs = positional.slice(2);
-    await runNoteCommand(subcommand, noteArgs, flags, config);
+    try {
+      await runNoteCommand(subcommand, noteArgs, flags, config);
+    } catch (e) {
+      // CommandFailed already printed its message
+      if (!(e instanceof CommandFailed)) {
+        console.error(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+      }
+      process.exit(1);
+    }
   } else {
     console.error(`Unknown command: ${command}`);
     printHelp();

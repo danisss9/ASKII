@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { decodeIfDoubleEscaped } from './utils';
 
 export interface WorkspaceAction {
   type:
@@ -38,12 +39,20 @@ export type ActionResult = {
 const BACKUP_DIR = path.join('.askii', 'backups');
 const CREATED_LOG = path.join('.askii', 'created.json');
 
-/** Copy filePath into .askii/backups/, preserving relative path. No-op if file doesn't exist. */
+function backupPathFor(workspaceRoot: string, filePath: string): string {
+  return path.join(workspaceRoot, BACKUP_DIR, path.relative(workspaceRoot, filePath));
+}
+
+/**
+ * Copy filePath into .askii/backups/, preserving relative path. No-op if file
+ * doesn't exist, or if it was already backed up this session — the first
+ * backup holds the pre-session original that "Undo all" must restore.
+ */
 export function writeBackup(workspaceRoot: string, filePath: string): void {
   try {
     if (!fs.existsSync(filePath)) {return;}
-    const rel = path.relative(workspaceRoot, filePath);
-    const backupPath = path.join(workspaceRoot, BACKUP_DIR, rel);
+    const backupPath = backupPathFor(workspaceRoot, filePath);
+    if (fs.existsSync(backupPath)) {return;}
     fs.mkdirSync(path.dirname(backupPath), { recursive: true });
     fs.copyFileSync(filePath, backupPath);
   } catch {
@@ -51,9 +60,27 @@ export function writeBackup(workspaceRoot: string, filePath: string): void {
   }
 }
 
-/** Record a newly created file so it can be deleted on restore. */
+/**
+ * Prepare to write a file the agent did not necessarily create: an existing
+ * file is backed up, a new one is recorded as created so undo removes it.
+ */
+export function backupOrRecordCreated(workspaceRoot: string, filePath: string): void {
+  if (fs.existsSync(filePath)) {
+    writeBackup(workspaceRoot, filePath);
+  } else {
+    recordCreatedFile(workspaceRoot, path.relative(workspaceRoot, filePath));
+  }
+}
+
+/**
+ * Record a newly created file so it can be deleted on restore. Skipped when the
+ * path already has a backup (deleted then re-created) — undo restores it instead.
+ */
 export function recordCreatedFile(workspaceRoot: string, relativePath: string): void {
   try {
+    if (fs.existsSync(backupPathFor(workspaceRoot, path.resolve(workspaceRoot, relativePath)))) {
+      return;
+    }
     const logPath = path.join(workspaceRoot, CREATED_LOG);
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     let list: string[] = [];
@@ -162,7 +189,40 @@ export function getWorkspaceStructure(dirPath: string): string {
   return structure;
 }
 
-export function parseWorkspaceActions(responseText: string): WorkspaceAction[] {
+/**
+ * Returns the [...] that opens at text[start], matching brackets outside JSON
+ * strings, or null if it never closes (e.g. output cut off mid-array).
+ */
+function balancedArrayAt(text: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === '\\') {i++;}
+      else if (c === '"') {inString = false;}
+    } else if (c === '"') {
+      inString = true;
+    } else if (c === '[') {
+      depth++;
+    } else if (c === ']') {
+      depth--;
+      if (depth === 0) {return text.slice(start, i + 1);}
+    }
+  }
+  return null;
+}
+
+/** Feedback sent back to the model when its response could not be parsed. */
+export const INVALID_ACTIONS_FEEDBACK =
+  'Your last response was not a valid JSON array of actions (it may have been cut off). ' +
+  'Respond with ONLY a JSON array. For large files prefer several smaller modify actions over one huge write.';
+
+/**
+ * Parses the model's action array. Returns null when no valid JSON array could
+ * be found — distinct from [] ("task complete") so callers can ask again.
+ */
+export function parseWorkspaceActions(responseText: string): WorkspaceAction[] | null {
   const ALL_TYPES = [
     'view',
     'create',
@@ -173,31 +233,77 @@ export function parseWorkspaceActions(responseText: string): WorkspaceAction[] {
     'list',
     'search',
     'wiki_search',
+    'code_search',
     'run',
     'copy',
     'mkdir',
   ];
-  try {
-    const jsonMatch = responseText.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      throw new Error('No JSON array found in response');
-    }
+  const text = responseText.trim().replace(/^```[^\n]*\n?/, '').replace(/\n?```$/, '');
 
-    const actions = JSON.parse(jsonMatch[0]) as WorkspaceAction[];
-
-    if (!Array.isArray(actions)) {
-      throw new Error('Response is not an array');
-    }
-
-    return actions.filter((action) => {
-      if (!action.type) {return false;}
-      return ALL_TYPES.includes(action.type);
-    });
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    console.error('Failed to parse workspace actions:', errorMsg);
-    return [];
+  // Whole response first, then the balanced [...] starting at each of the
+  // first few '[' — prose around the array may itself contain brackets.
+  const candidates = [text];
+  for (
+    let start = text.indexOf('['), tries = 0;
+    start !== -1 && tries < 20;
+    start = text.indexOf('[', start + 1), tries++
+  ) {
+    const slice = balancedArrayAt(text, start);
+    if (slice) {candidates.push(slice);}
   }
+
+  for (const candidate of candidates) {
+    let actions: unknown;
+    try {
+      actions = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(actions)) {continue;}
+    return (actions as WorkspaceAction[]).filter(
+      (action) => !!action && typeof action.type === 'string' && ALL_TYPES.includes(action.type),
+    );
+  }
+  console.error('Failed to parse workspace actions: no valid JSON array found in response');
+  return null;
+}
+
+/**
+ * Applies a modify action to a file's text. Line-range modifies replace
+ * [startLine, endLine] (1-indexed, inclusive) keeping the file's line endings;
+ * string modifies replace the first occurrence of oldContent literally.
+ * Returns the new text, or an error message.
+ */
+export function applyModifyAction(
+  existing: string,
+  action: WorkspaceAction,
+): { text: string } | { error: string } {
+  if (action.startLine !== undefined || action.endLine !== undefined) {
+    const eol = existing.includes('\r\n') ? '\r\n' : '\n';
+    const lines = existing.split(/\r?\n/);
+    const start = Math.max(0, (action.startLine ?? 1) - 1);
+    const end = Math.max(start, action.endLine ?? lines.length);
+    const replacement = decodeIfDoubleEscaped(action.newContent ?? '').split(/\r?\n/);
+    lines.splice(start, end - start, ...replacement);
+    return { text: lines.join(eol) };
+  }
+
+  if (!action.oldContent) {
+    return { error: `modify requires oldContent or startLine/endLine (${action.path})` };
+  }
+  let oldContent = action.oldContent;
+  let newContent = action.newContent ?? '';
+  if (!existing.includes(oldContent)) {
+    // The model may have double-escaped the snippet — retry with it decoded
+    const decoded = decodeIfDoubleEscaped(oldContent);
+    if (decoded === oldContent || !existing.includes(decoded)) {
+      return { error: `oldContent not found in ${action.path}` };
+    }
+    oldContent = decoded;
+    newContent = decodeIfDoubleEscaped(newContent);
+  }
+  // Function replacer: a string replacement would expand $&, $$, $` and $'
+  return { text: existing.replace(oldContent, () => newContent) };
 }
 
 /** Resolves relativePath under workspaceRoot and throws if it escapes the root. */

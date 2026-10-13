@@ -9,29 +9,29 @@ export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => map[c]);
 }
 
-export function escapeJsonString(str: string): string {
-  return str
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '\\r')
-    .replace(/\t/g, '\\t');
-}
-
-export function unescapeJsonString(str: string): string {
-  return str
-    .replace(/\\n/g, '\n')
-    .replace(/\\r/g, '\r')
-    .replace(/\\t/g, '\t')
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, '\\');
+/**
+ * Action strings arrive already decoded by JSON.parse. Some models escape them
+ * twice, which shows up as content with no real newline but literal "\n"
+ * sequences — only then is a second JSON-string decode applied. Anything else
+ * (including code that legitimately contains "\n" in a string literal) is
+ * returned untouched.
+ */
+export function decodeIfDoubleEscaped(str: string): string {
+  if (str.includes('\n') || !str.includes('\\n')) {return str;}
+  try {
+    // Escape bare quotes and raw tabs/CRs so the text forms one valid JSON string
+    const quoted = str.replace(/(?<!\\)"/g, '\\"').replace(/\t/g, '\\t').replace(/\r/g, '\\r');
+    return JSON.parse(`"${quoted}"`) as string;
+  } catch {
+    return str;
+  }
 }
 
 export function extractCode(response: string): string {
   let code = response.trim();
   if (code.startsWith('```')) {
     code = code
-      .replace(/^```[a-z]*\n?/, '')
+      .replace(/^```[^\n]*\n?/, '')
       .replace(/\n?```$/, '')
       .trim();
   }

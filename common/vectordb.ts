@@ -431,7 +431,11 @@ export async function rebuildVectorIndex(
       const oldRecord = oldReadable ? oldFilesByPath.get(relPath) : undefined;
       const canReuse = !!oldRecord && oldRecord.size === stat.size && oldRecord.mtimeMs === stat.mtimeMs;
 
-      if (canReuse && oldRecord && oldChunkMeta) {
+      if (canReuse && oldRecord && oldChunkMeta && oldMeta) {
+        // Earlier files' queued chunks must land first — the output is ordered
+        // by chunkCursor, and the reused block is written immediately below.
+        await flushBatch();
+
         // Copy the quantized vectors/scales/norms and chunk text blocks verbatim
         const count = oldRecord.chunkCount;
         const vecStart = oldRecord.chunkIndex * dim;
@@ -475,7 +479,8 @@ export async function rebuildVectorIndex(
         for (let c = 0; c < count; c++) {
           const ci = oldRecord.chunkIndex + c;
           pathIdxs.push(pathIdx);
-          headingIdxs.push(oldChunkMeta.headingIdx[ci]);
+          // Re-intern: the old index points into the previous heading table
+          headingIdxs.push(internHeading(oldMeta.headings[oldChunkMeta.headingIdx[ci]]));
           startLines.push(oldChunkMeta.startLine[ci]);
           endLines.push(oldChunkMeta.endLine[ci]);
           offsets.push(byteCursor);
@@ -505,7 +510,8 @@ export async function rebuildVectorIndex(
       if (looksBinary(content)) continue;
 
       const chunks = spec.chunk(relPath, content);
-      const firstChunk = chunkCursor;
+      // Chunks still queued for embedding come before this file's
+      const firstChunk = chunkCursor + pending.length;
       const pathIdx = internPath(relPath);
       let fileChunkCount = 0;
       for (const chunk of chunks) {

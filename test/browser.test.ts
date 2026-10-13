@@ -67,6 +67,12 @@ test('normalizeNavigateUrl adds schemes and resolves relative paths', () => {
     'https://en.wikipedia.org/wiki/Main_Page',
   );
   assert.strictEqual(normalizeNavigateUrl('//other.com/x', base), 'https://other.com/x');
+  assert.strictEqual(
+    normalizeNavigateUrl('myapp.local:5173/x', base),
+    'http://myapp.local:5173/x',
+  );
+  assert.strictEqual(normalizeNavigateUrl('dev-box:8080', base), 'http://dev-box:8080');
+  assert.strictEqual(normalizeNavigateUrl('tel:12345', base), 'tel:12345');
   assert.strictEqual(normalizeNavigateUrl('about:blank', base), 'about:blank');
   assert.strictEqual(normalizeNavigateUrl(' https://example.com ', base), 'https://example.com');
   assert.strictEqual(normalizeNavigateUrl('"https://example.com"', base), 'https://example.com');

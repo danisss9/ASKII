@@ -43,13 +43,14 @@ interface GitApiLike {
 
 /**
  * Acquires the built-in vscode.git extension's API and returns the repository
- * to operate on. Prefers the repository whose root contains the active editor's
- * file; falls back to the first repository. Returns null with an actionable
- * reason if Git is unavailable or no repo is open.
+ * to operate on. Prefers the repository the command was invoked on (the
+ * Source Control view passes its SourceControl), then the one whose root
+ * contains the active editor's file; falls back to the first repository.
+ * Returns null with an actionable reason if Git is unavailable or no repo is open.
  */
-async function getGitRepository(): Promise<
-  { repo: GitRepositoryLike; reason?: string } | { repo: null; reason: string }
-> {
+async function getGitRepository(
+  requestedRoot?: vscode.Uri,
+): Promise<{ repo: GitRepositoryLike; reason?: string } | { repo: null; reason: string }> {
   const gitExt = vscode.extensions.getExtension('vscode.git');
   if (!gitExt) {
     return { repo: null, reason: 'The built-in Git extension is not available.' };
@@ -60,6 +61,15 @@ async function getGitRepository(): Promise<
   const api = (gitExt.exports as { getAPI?(version: number): GitApiLike })?.getAPI?.(1);
   if (!api || api.repositories.length === 0) {
     return { repo: null, reason: 'No Git repository found in the current workspace.' };
+  }
+
+  if (requestedRoot) {
+    const requested = api.repositories.find(
+      (repo) => repo.rootUri.toString() === requestedRoot.toString(),
+    );
+    if (requested) {
+      return { repo: requested };
+    }
   }
 
   const active = vscode.window.activeTextEditor;
@@ -212,10 +222,13 @@ function cleanCommitMessage(raw: string): string {
   return text.trim();
 }
 
-export async function generateCommitMessageCommand(): Promise<void> {
+export async function generateCommitMessageCommand(sourceControl?: unknown): Promise<void> {
   const config = vscode.workspace.getConfiguration('askii');
 
-  const { repo, reason } = await getGitRepository();
+  // The scm/title button passes the clicked SourceControl; the command palette
+  // and status-bar menu pass nothing (or an unrelated argument).
+  const rootUri = (sourceControl as { rootUri?: unknown } | undefined)?.rootUri;
+  const { repo, reason } = await getGitRepository(rootUri instanceof vscode.Uri ? rootUri : undefined);
   if (!repo) {
     const choice = await vscode.window.showErrorMessage(`ASKII: ${reason}`, 'Open Source Control');
     if (choice === 'Open Source Control') {

@@ -179,6 +179,18 @@ suite('common/vectordb', () => {
       assert.strictEqual(second.cachedFiles, 2);
       assert.strictEqual(second.chunkCount, first.chunkCount);
 
+      // Reused chunks still map to their own file, text and heading — b.py's
+      // chunks sat behind a.ts's in the first build's embedding queue.
+      for (const [token, file] of [
+        ['beta', 'b.py'],
+        ['alpha', 'a.ts'],
+      ]) {
+        const reused = await searchVectorIndex(indexDir, `${token} ${token}`, 'test-model', fakeEmbed, 3);
+        assert.strictEqual(reused[0].source, file);
+        assert.ok(reused[0].content.includes(`${token} line`));
+        assert.ok(reused[0].heading?.startsWith(`${file} (lines`), `heading: ${reused[0].heading}`);
+      }
+
       // Change b.py with an explicitly different mtime (Windows mtime granularity)
       write(root, 'b.py', lines(70, 'gamma'));
       const future = new Date(Date.now() + 10_000);

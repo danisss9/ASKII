@@ -201,17 +201,24 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   // Validate provider config at startup and re-validate on settings changes.
+  // Debounced: the setup panel saves several settings one after another, and
+  // validating between those writes reports half-saved configs as problems.
+  let validationTimer: NodeJS.Timeout | undefined;
   function runValidation() {
-    validateProviderConfig().then((problem) => {
-      if (problem) {
-        vscode.window.showWarningMessage(problem, 'Open Setup').then((choice) => {
-          if (choice === 'Open Setup') {
-            vscode.commands.executeCommand('askii.openSetup');
-          }
-        });
-      }
-    });
+    clearTimeout(validationTimer);
+    validationTimer = setTimeout(() => {
+      validateProviderConfig().then((problem) => {
+        if (problem) {
+          vscode.window.showWarningMessage(problem, 'Open Setup').then((choice) => {
+            if (choice === 'Open Setup') {
+              vscode.commands.executeCommand('askii.openSetup');
+            }
+          });
+        }
+      });
+    }, 750);
   }
+  context.subscriptions.push({ dispose: () => clearTimeout(validationTimer) });
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -237,6 +244,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
   if (await shouldOpenSetupAutomatically(context)) {
     await openSetupPanel(context);
+  } else {
+    // First-run setup walks through providers itself; otherwise check now
+    runValidation();
   }
 }
 

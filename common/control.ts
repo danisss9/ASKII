@@ -583,17 +583,23 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 // === WIN32 HELPERS ===
 
-/** Run a PowerShell script safely using base64 encoding to avoid quoting issues. */
+/**
+ * Run a PowerShell script safely using base64 encoding to avoid quoting issues.
+ * Spawned directly (not through cmd.exe, whose 8191-char command-line limit a
+ * long keyboard_input script would exceed).
+ */
 function runPowerShell(script: string): void {
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
-  execSync(`powershell -NonInteractive -NoProfile -EncodedCommand ${encoded}`, { stdio: 'ignore' });
+  execFileSync('powershell', ['-NonInteractive', '-NoProfile', '-EncodedCommand', encoded], {
+    stdio: 'ignore',
+  });
 }
 
 /** Run a PowerShell script and capture its stdout output. Returns empty string on failure. */
 function runPowerShellCapture(script: string): string {
   try {
     const encoded = Buffer.from(script, 'utf16le').toString('base64');
-    return execSync(`powershell -NonInteractive -NoProfile -EncodedCommand ${encoded}`, {
+    return execFileSync('powershell', ['-NonInteractive', '-NoProfile', '-EncodedCommand', encoded], {
       stdio: ['ignore', 'pipe', 'ignore'],
     })
       .toString()
@@ -739,6 +745,76 @@ function win32Scroll(normX: number, normY: number, delta: number, horizontal: bo
   runPowerShell(psLines.join('\n'));
 }
 
+// Canonical key/modifier names (as listed in the system prompt), keyed by their
+// lower-cased spellings so "ctrl+s", "CTRL+S" and "Control+S" all resolve.
+const KEY_ALIASES: Record<string, string> = {
+  ctrl: 'Ctrl',
+  control: 'Ctrl',
+  ctl: 'Ctrl',
+  shift: 'Shift',
+  alt: 'Alt',
+  option: 'Alt',
+  opt: 'Alt',
+  win: 'Win',
+  windows: 'Win',
+  lwin: 'Win',
+  super: 'Win',
+  meta: 'Win',
+  rwin: 'RWin',
+  cmd: 'Cmd',
+  command: 'Cmd',
+  enter: 'Enter',
+  return: 'Enter',
+  tab: 'Tab',
+  esc: 'Escape',
+  escape: 'Escape',
+  backspace: 'Backspace',
+  delete: 'Delete',
+  del: 'Delete',
+  insert: 'Insert',
+  ins: 'Insert',
+  space: 'Space',
+  spacebar: 'Space',
+  up: 'Up',
+  arrowup: 'Up',
+  down: 'Down',
+  arrowdown: 'Down',
+  left: 'Left',
+  arrowleft: 'Left',
+  right: 'Right',
+  arrowright: 'Right',
+  home: 'Home',
+  end: 'End',
+  pageup: 'PageUp',
+  pgup: 'PageUp',
+  pagedown: 'PageDown',
+  pgdn: 'PageDown',
+};
+for (let n = 1; n <= 12; n++) {
+  KEY_ALIASES[`f${n}`] = `F${n}`;
+}
+
+/**
+ * Splits a key_press combo into canonical parts: "ctrl+shift+S" →
+ * ["Ctrl", "Shift", "s"]. Single characters are lower-cased — an upper-case
+ * letter would make osascript/xdotool add an implicit Shift.
+ */
+function normalizeKeyCombo(key: string): string[] {
+  const raw = key.trim();
+  // "Ctrl++" means the "+" key itself
+  const plusKey = raw.length > 1 && raw.endsWith('++');
+  const parts = (plusKey ? raw.slice(0, -2) : raw)
+    .split('+')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (plusKey || raw === '+') {
+    parts.push('+');
+  }
+  return parts.map(
+    (p) => KEY_ALIASES[p.toLowerCase()] ?? (p.length === 1 ? p.toLowerCase() : p),
+  );
+}
+
 // VK code map for key_press on Windows
 const VK_CODES: Record<string, number> = {
   Backspace: 0x08,
@@ -781,14 +857,40 @@ const VK_MODS: Record<string, number> = {
   Cmd: 0x5b,
 };
 
+// US-layout punctuation keys. Their ASCII codes are different virtual keys
+// ('.' = 0x2E is VK_DELETE, '-' = 0x2D is VK_INSERT, '[' = 0x5B is VK_LWIN, …).
+const VK_OEM: Record<string, number> = {
+  ';': 0xba,
+  '=': 0xbb,
+  '+': 0xbb,
+  ',': 0xbc,
+  '-': 0xbd,
+  '.': 0xbe,
+  '/': 0xbf,
+  '`': 0xc0,
+  '[': 0xdb,
+  '\\': 0xdc,
+  ']': 0xdd,
+  "'": 0xde,
+};
+
 function resolveVk(key: string): number {
   if (key in VK_CODES) return VK_CODES[key];
-  if (key.length === 1) return key.toUpperCase().charCodeAt(0);
+  if (key in VK_OEM) {
+    return VK_OEM[key];
+  }
+  // VK codes for A–Z and 0–9 equal their upper-case ASCII codes
+  if (/^[a-z0-9]$/i.test(key)) {
+    return key.toUpperCase().charCodeAt(0);
+  }
   return -1;
 }
 
 function win32KeyPress(key: string): void {
-  const parts = key.split('+');
+  const parts = normalizeKeyCombo(key);
+  if (parts.length === 0) {
+    return;
+  }
   const mainVk = resolveVk(parts[parts.length - 1]);
   if (mainVk < 0) return;
   const modVks = parts
@@ -861,7 +963,10 @@ const MAC_MODS: Record<string, string> = {
 };
 
 function macKeyPress(key: string): void {
-  const parts = key.split('+');
+  const parts = normalizeKeyCombo(key);
+  if (parts.length === 0) {
+    return;
+  }
   const mainKey = parts[parts.length - 1];
   const modifiers = parts
     .slice(0, -1)
@@ -898,6 +1003,8 @@ const XDOTOOL_KEY_NAMES: Record<string, string> = {
   End: 'End',
   PageUp: 'Prior',
   PageDown: 'Next',
+  Insert: 'Insert',
+  Win: 'super',
   Space: 'space',
   F1: 'F1',
   F2: 'F2',
@@ -921,7 +1028,10 @@ const XDOTOOL_MODS: Record<string, string> = {
 };
 
 function linuxKeyPress(key: string): void {
-  const parts = key.split('+');
+  const parts = normalizeKeyCombo(key);
+  if (parts.length === 0) {
+    return;
+  }
   const mainKey = parts[parts.length - 1];
   const modifiers = parts
     .slice(0, -1)

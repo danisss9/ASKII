@@ -276,23 +276,31 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
   }
 
   private cleanResponse(raw: string, linePrefix: string): string {
-    let text = raw.trim();
+    // Only trailing whitespace is noise — leading newlines/indentation are part
+    // of the completion (e.g. "\n  return 1;" after "{", or " 42;" after "x =").
+    let text = raw.trimEnd();
 
     // Strip markdown fences (```lang ... ```)
-    if (text.startsWith('```')) {
-      const lines = text.split('\n');
+    if (text.trimStart().startsWith('```')) {
+      const lines = text.trimStart().split('\n');
       lines.shift(); // remove opening fence
-      if (lines.length > 0 && lines[lines.length - 1].startsWith('```')) {
+      if (lines.length > 0 && lines[lines.length - 1].trim().startsWith('```')) {
         lines.pop(); // remove closing fence
       }
-      text = lines.join('\n').trim();
+      text = lines.join('\n').trimEnd();
     }
 
     // If the model echoed the current line prefix at the start, strip it
+    // (with or without the line's indentation)
+    const bareText = text.trimStart();
+    const barePrefix = linePrefix.trimStart();
     if (linePrefix && text.startsWith(linePrefix)) {
       text = text.slice(linePrefix.length);
+    } else if (barePrefix && bareText.startsWith(barePrefix)) {
+      text = bareText.slice(barePrefix.length);
     }
 
-    return text.trim();
+    // Nothing but whitespace is not a useful completion
+    return text.trim() ? text : '';
   }
 }

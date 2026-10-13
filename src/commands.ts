@@ -39,7 +39,9 @@ import {
   executeSearchAction,
   buildDoSystemPrompt,
   writeBackup,
-  recordCreatedFile,
+  backupOrRecordCreated,
+  applyModifyAction,
+  INVALID_ACTIONS_FEEDBACK,
   deleteAllBackups,
   restoreAllBackups,
   hasBackups,
@@ -47,7 +49,7 @@ import {
   type ActionResult,
 } from '@common/workspace';
 import { type ChatMessage } from '@common/providers';
-import { escapeHtml, unescapeJsonString, extractCode } from '@common/utils';
+import { escapeHtml, decodeIfDoubleEscaped, extractCode } from '@common/utils';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import {
   buildControlSystemPrompt,
@@ -589,6 +591,7 @@ export async function askiiEditCommand() {
   const hasSelection = !selection.isEmpty;
   const selectedText = hasSelection ? editor.document.getText(selection) : null;
   const fullFileText = editor.document.getText();
+  const snapshotVersion = editor.document.version;
 
   const languageId = editor.document.languageId ?? '';
   const fileName = path.basename(editor.document.fileName);
@@ -653,8 +656,16 @@ export async function askiiEditCommand() {
     // The original text being replaced (selection or full file)
     const originalText = selectedText ?? fullFileText;
 
+    // The selection/range snapshot is only valid for the text it was taken from
+    if (editor.document.version !== snapshotVersion) {
+      vscode.window.showWarningMessage(
+        'ASKII Edit: the file changed while ASKII was editing — edit not applied. (´･_･`)',
+      );
+      return;
+    }
+
     // ── Apply the edit immediately ────────────────────────────────────────────
-    await editor.edit((editBuilder: vscode.TextEditorEdit) => {
+    const applied = await editor.edit((editBuilder: vscode.TextEditorEdit) => {
       if (hasSelection && selectedText !== null) {
         editBuilder.replace(selection, code);
       } else {
@@ -665,9 +676,18 @@ export async function askiiEditCommand() {
         editBuilder.replace(fullRange, code);
       }
     });
+    if (!applied) {
+      vscode.window.showErrorMessage('ASKII Edit: the edit could not be applied to the editor.');
+      return;
+    }
 
+    // Formatting only adds an undo step when it actually changed something
+    let formatted = false;
     if (formatAfterEdit) {
+      const versionBeforeFormat = editor.document.version;
+      await vscode.window.showTextDocument(editor.document, editor.viewColumn);
       await vscode.commands.executeCommand('editor.action.formatDocument');
+      formatted = editor.document.version !== versionBeforeFormat;
     }
 
     // ── Show diff + undo offer ────────────────────────────────────────────────
@@ -697,7 +717,7 @@ export async function askiiEditCommand() {
     if (undoChoice === 'Undo') {
       // Re-focus the original editor so undo targets the right document
       await vscode.window.showTextDocument(editor.document, editor.viewColumn);
-      if (formatAfterEdit) {
+      if (formatted) {
         await vscode.commands.executeCommand('undo');
       }
       await vscode.commands.executeCommand('undo');
@@ -808,11 +828,19 @@ export async function askiiDoCommand() {
         messages.push({ role: 'assistant', content: responseText });
 
         const actions = parseWorkspaceActions(responseText);
+        if (actions === null) {
+          channel.appendLine('Response was not a valid JSON action array — asking again.');
+          addTimelineEntry({
+            kind: 'info',
+            title: 'Unreadable response — asking the model again',
+            status: 'error',
+          });
+          messages.push({ role: 'user', content: INVALID_ACTIONS_FEEDBACK });
+          roundCount++;
+          continue;
+        }
         if (actions.length === 0) {
           channel.appendLine('No actions returned. Done.');
-          if (responseText.trim()) {
-            channel.appendLine(`Raw (first 500): ${responseText.substring(0, 500)}`);
-          }
           addTimelineEntry({
             kind: 'done',
             title: 'Task complete',
@@ -921,26 +949,7 @@ export async function askiiDoCommand() {
         for (const action of writeActions) {
           if (abortController.signal.aborted) {break;}
 
-          // Sandbox check
-          let filePath: string;
-          try {
-            filePath = sandboxPath(rootPath, action.path!);
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : 'Path error';
-            channel.appendLine(`BLOCKED: ${msg}`);
-            addTimelineEntry({
-              kind: 'error',
-              title: `Blocked: ${_doConfirmMessage(action)}`,
-              detail: msg,
-            });
-            actionResults.push({
-              action: `${action.type}:${action.path}`,
-              status: 'error',
-              detail: msg,
-            });
-            continue;
-          }
-
+          // run has no path — handle it before the sandbox check
           if (action.type === 'run') {
             channel.appendLine(`Run: ${action.command}`);
             const runEntry = addTimelineEntry({
@@ -959,8 +968,11 @@ export async function askiiDoCommand() {
               continue;
             }
             try {
-              const { execSync } = await import('child_process');
-              const output = execSync(action.command!, {
+              // Async exec: execSync would freeze the whole extension host
+              // (including the Cancel button) for up to the 30 s timeout.
+              const { exec } = await import('child_process');
+              const { promisify } = await import('util');
+              const { stdout: output } = await promisify(exec)(action.command!, {
                 cwd: rootPath,
                 encoding: 'utf-8',
                 timeout: 30000,
@@ -984,6 +996,27 @@ export async function askiiDoCommand() {
                 detail: detail.substring(0, 500),
               });
             }
+            continue;
+          }
+
+          // Sandbox check
+          let filePath: string;
+          try {
+            if (!action.path) {throw new Error(`${action.type} requires path`);}
+            filePath = sandboxPath(rootPath, action.path);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : 'Path error';
+            channel.appendLine(`BLOCKED: ${msg}`);
+            addTimelineEntry({
+              kind: 'error',
+              title: `Blocked: ${_doConfirmMessage(action)}`,
+              detail: msg,
+            });
+            actionResults.push({
+              action: `${action.type}:${action.path}`,
+              status: 'error',
+              detail: msg,
+            });
             continue;
           }
 
@@ -1179,6 +1212,12 @@ async function runBrowserTask(task: string) {
     let errorLogged = false;
 
     try {
+      // Relaunch if the user closed the window (or its tab) since the last task
+      if (browser && (!browser.connected || !page || page.isClosed())) {
+        await browser.close().catch(() => undefined);
+        browser = undefined;
+        page = undefined;
+      }
       if (!browser) {
         if (!chromePath) {
           throw new Error(
@@ -1349,6 +1388,12 @@ async function runBrowserTask(task: string) {
       break;
     }
   }
+
+  // The session is over. A headless browser is invisible and would otherwise
+  // linger until VS Code exits; a visible one is left open for the user.
+  if (browser && headless) {
+    await browser.close().catch(() => undefined);
+  }
 }
 
 async function _applyFormat(filePath: string): Promise<void> {
@@ -1384,42 +1429,28 @@ async function _executeWriteAction(
       const destPath = sandboxPath(rootPath, action.newPath);
       const destDir = path.dirname(destPath);
       if (!fs.existsSync(destDir)) {fs.mkdirSync(destDir, { recursive: true });}
+      backupOrRecordCreated(rootPath, destPath);
       fs.copyFileSync(filePath, destPath);
       return 'ok';
     }
 
     case 'create':
     case 'write': {
-      if (action.type === 'write') {writeBackup(rootPath, filePath);}
-      if (action.type === 'create') {recordCreatedFile(rootPath, action.path!);}
+      // Either type may target an existing file — back it up rather than
+      // recording it as created (undo would otherwise delete the original).
+      backupOrRecordCreated(rootPath, filePath);
       const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) {fs.mkdirSync(dir, { recursive: true });}
-      const content = action.content ? unescapeJsonString(action.content) : '';
-      fs.writeFileSync(filePath, content);
+      fs.writeFileSync(filePath, decodeIfDoubleEscaped(action.content ?? ''));
       if (formatAfterEdit) {await _applyFormat(filePath);}
       return 'ok';
     }
 
     case 'modify': {
+      const result = applyModifyAction(fs.readFileSync(filePath, 'utf-8'), action);
+      if ('error' in result) {return result.error;}
       writeBackup(rootPath, filePath);
-      const existing = fs.readFileSync(filePath, 'utf-8');
-      if (action.startLine !== undefined || action.endLine !== undefined) {
-        const lines = existing.split('\n');
-        const start = (action.startLine ?? 1) - 1;
-        const end = action.endLine ?? lines.length;
-        const replacement = (action.newContent ? unescapeJsonString(action.newContent) : '').split(
-          '\n',
-        );
-        lines.splice(start, end - start, ...replacement);
-        fs.writeFileSync(filePath, lines.join('\n'));
-      } else {
-        const oldContent = action.oldContent ? unescapeJsonString(action.oldContent) : '';
-        const newContent = action.newContent ? unescapeJsonString(action.newContent) : '';
-        if (oldContent && !existing.includes(oldContent)) {
-          return `oldContent not found in ${action.path}`;
-        }
-        fs.writeFileSync(filePath, existing.replace(oldContent, newContent));
-      }
+      fs.writeFileSync(filePath, result.text);
       if (formatAfterEdit) {await _applyFormat(filePath);}
       return 'ok';
     }
@@ -1436,6 +1467,7 @@ async function _executeWriteAction(
       const newFilePath = sandboxPath(rootPath, action.newPath);
       const newDir = path.dirname(newFilePath);
       if (!fs.existsSync(newDir)) {fs.mkdirSync(newDir, { recursive: true });}
+      backupOrRecordCreated(rootPath, newFilePath);
       fs.renameSync(filePath, newFilePath);
       return 'ok';
     }

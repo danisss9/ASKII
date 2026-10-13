@@ -23,45 +23,45 @@
     "keybindings": [
       {
         "command": "askii.openSetup",
-        "key": "ctrl+shift+a s",
-        "mac": "cmd+shift+a s"
+        "key": "ctrl+alt+k s",
+        "mac": "cmd+alt+k s"
       },
       {
         "command": "askii.askQuestion",
-        "key": "ctrl+shift+k a",
-        "mac": "cmd+shift+k a",
+        "key": "ctrl+alt+k a",
+        "mac": "cmd+alt+k a",
         "when": "editorTextFocus"
       },
       {
         "command": "askii.editCode",
-        "key": "ctrl+shift+k e",
-        "mac": "cmd+shift+k e",
+        "key": "ctrl+alt+k e",
+        "mac": "cmd+alt+k e",
         "when": "editorTextFocus"
       },
       {
         "command": "askii.doTask",
-        "key": "ctrl+shift+k d",
-        "mac": "cmd+shift+k d"
+        "key": "ctrl+alt+k d",
+        "mac": "cmd+alt+k d"
       },
       {
         "command": "askii.controlTask",
-        "key": "ctrl+shift+k c",
-        "mac": "cmd+shift+k c"
+        "key": "ctrl+alt+k c",
+        "mac": "cmd+alt+k c"
       },
       {
         "command": "askii.reloadWiki",
-        "key": "ctrl+shift+k w",
-        "mac": "cmd+shift+k w"
+        "key": "ctrl+alt+k w",
+        "mac": "cmd+alt+k w"
       },
       {
         "command": "askii.noteTask",
-        "key": "ctrl+shift+k n",
-        "mac": "cmd+shift+k n"
+        "key": "ctrl+alt+k n",
+        "mac": "cmd+alt+k n"
       },
       {
         "command": "askii.clearCache",
-        "key": "ctrl+shift+k x",
-        "mac": "cmd+shift+k x"
+        "key": "ctrl+alt+k x",
+        "mac": "cmd+alt+k x"
       }
     ],
     "commands": [

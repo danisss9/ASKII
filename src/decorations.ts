@@ -54,6 +54,19 @@ export async function updateDecorations(editor: vscode.TextEditor | undefined) {
     return;
   }
 
+  // Cancel the previous line's pending work first — every path below (off,
+  // blank line, cache hit) must stop its timers from drawing on a stale line.
+  if (currentAbortController) {
+    currentAbortController.abort();
+    currentAbortController = undefined;
+  }
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+  }
+  if (thinkingTimer) {
+    clearTimeout(thinkingTimer);
+  }
+
   const mode =
     vscode.workspace.getConfiguration('askii').get<string>('inlineHelperMode') || 'funny';
   if (mode === 'off') {
@@ -77,17 +90,6 @@ export async function updateDecorations(editor: vscode.TextEditor | undefined) {
   if (cached) {
     showDecoration(editor, position.line, cached.kaomoji, cached.explanation);
     return;
-  }
-
-  if (currentAbortController) {
-    currentAbortController.abort();
-  }
-
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-  }
-  if (thinkingTimer) {
-    clearTimeout(thinkingTimer);
   }
 
   const abortController = new AbortController();

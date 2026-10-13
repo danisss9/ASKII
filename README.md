@@ -7,21 +7,21 @@ An AI code assistant for VS Code with style — ask about your code, have it edi
 ## Quick start
 
 1. Install ASKII from the VS Code Marketplace — or build it from source (see [Development](#development))
-2. Run **ASKII: Open Setup** (`Ctrl+Shift+A S` / `Cmd+Shift+A S`) — a short wizard that walks you through provider, models, options and wiki setup
-3. Select some code and run **Ask ASKII** (`Ctrl+Shift+K A`)
+2. Run **ASKII: Open Setup** (`Ctrl+Alt+K S` / `Cmd+Alt+K S`) — a short wizard that walks you through provider, models, options and wiki setup
+3. Select some code and run **Ask ASKII** (`Ctrl+Alt+K A`)
 
 ## Commands
 
 | Command            | Keybinding       | What it does                                                                                                        |
 | ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Ask ASKII          | `Ctrl+Shift+K A` | Ask about the selected code (or anything) — answers stream into a markdown panel with follow-ups and a history view |
-| ASKII Edit         | `Ctrl+Shift+K E` | Replace the selection with an AI-edited version; review the diff and undo if needed                                 |
-| ASKII Do           | `Ctrl+Shift+K D` | Agentic workspace agent — explores, creates, modifies, renames and deletes files over multiple rounds               |
-| ASKII Control      | `Ctrl+Shift+K C` | Screen or browser agent — screenshot-driven mouse/keyboard control, or Puppeteer web automation                     |
-| ASKII Note         | `Ctrl+Shift+K N` | Notes / tasks / reminders panel with search and screenshots                                                         |
-| ASKII: Reload Wiki | `Ctrl+Shift+K W` | Rebuild the wiki RAG index                                                                                          |
-| ASKII: Clear Cache | `Ctrl+Shift+K X` | Clear cached inline explanations and completions                                                                    |
-| ASKII: Open Setup  | `Ctrl+Shift+A S` | Re-run the setup wizard                                                                                             |
+| Ask ASKII          | `Ctrl+Alt+K A`   | Ask about the selected code (or anything) — answers stream into a markdown panel with follow-ups and a history view |
+| ASKII Edit         | `Ctrl+Alt+K E`   | Replace the selection with an AI-edited version; review the diff and undo if needed                                 |
+| ASKII Do           | `Ctrl+Alt+K D`   | Agentic workspace agent — explores, creates, modifies, renames and deletes files over multiple rounds               |
+| ASKII Control      | `Ctrl+Alt+K C`   | Screen or browser agent — screenshot-driven mouse/keyboard control, or Puppeteer web automation                     |
+| ASKII Note         | `Ctrl+Alt+K N`   | Notes / tasks / reminders panel with search and screenshots                                                         |
+| ASKII: Reload Wiki | `Ctrl+Alt+K W`   | Rebuild the wiki RAG index                                                                                          |
+| ASKII: Clear Cache | `Ctrl+Alt+K X`   | Clear cached inline explanations and completions                                                                    |
+| ASKII: Open Setup  | `Ctrl+Alt+K S`   | Re-run the setup wizard                                                                                             |
 
 On macOS swap `Ctrl` for `Cmd`. The **(⌐■_■)** status-bar button opens a quick-access menu for all of these.
 

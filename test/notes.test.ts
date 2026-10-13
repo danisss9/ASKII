@@ -77,6 +77,22 @@ suite('parseReminderTimeLocal — day phrases', () => {
     assertDue('day after tomorrow', local(2026, 8, 12, 9, 0));
   });
 
+  test('"today" phrases stay on today', () => {
+    assertDue('later today', local(2026, 8, 10, 17, 30)); // 9:00 passed → a few hours out
+    assertDue('check the build today', local(2026, 8, 10, 17, 30));
+    assertDue('today at 5', local(2026, 8, 10, 17, 0)); // 5am passed, 5pm ahead
+    assertDue('today at 4:15', local(2026, 8, 10, 16, 15));
+    assertDue('today at 5pm', local(2026, 8, 10, 17, 0));
+    assert.strictEqual(
+      parseReminderTimeLocal('later today', new Date(2026, 8, 10, 7, 0)),
+      local(2026, 8, 10, 9, 0), // morning: 9:00 is still ahead
+    );
+    assert.strictEqual(
+      parseReminderTimeLocal('later today', new Date(2026, 8, 10, 21, 0)),
+      local(2026, 8, 10, 22, 0), // evening: capped, never tomorrow
+    );
+  });
+
   test('bare "at N" picks the next occurrence of that hour', () => {
     assertDue('at 5', local(2026, 8, 10, 17, 0)); // 5am passed, 5pm ahead
     assertDue('at 9', local(2026, 8, 10, 21, 0)); // 9pm is the next "9 o'clock"
@@ -111,6 +127,14 @@ suite('parseReminderTimeLocal — day phrases', () => {
     assertDue('jul 8 2027', local(2027, 6, 8, 9, 0));
     assertDue('july 8th at 3pm', local(2027, 6, 8, 15, 0)); // rolled to next year
     assertDue('8 july 2027', local(2027, 6, 8, 9, 0));
+    assertDue('sept 3 2027', local(2027, 8, 3, 9, 0));
+    assertDue('the 3rd of september 2027', local(2027, 8, 3, 9, 0));
+  });
+
+  test('words that merely start like a month are not dates', () => {
+    assertDue('write 2 junit tests in 3 hours', local(2026, 8, 10, 17, 30));
+    assertDue('fix 2 decorators in 1 hour', local(2026, 8, 10, 15, 30));
+    assertDue('call mark 3 times in 2 days', local(2026, 8, 12, 14, 30));
   });
 
   test('absolute ISO dates', () => {
@@ -258,6 +282,17 @@ suite('parseRecurrence', () => {
       type: 'interval',
       interval: 2,
       unit: 'day',
+    });
+    // Rules have minute granularity — seconds round up, never fall through to days
+    assert.deepStrictEqual(parseRecurrence('every 30 seconds', NOW), {
+      type: 'interval',
+      interval: 1,
+      unit: 'minute',
+    });
+    assert.deepStrictEqual(parseRecurrence('every 150 secs', NOW), {
+      type: 'interval',
+      interval: 3,
+      unit: 'minute',
     });
   });
 
