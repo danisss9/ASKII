@@ -152,11 +152,6 @@ export async function activate(context: vscode.ExtensionContext) {
           command: 'askii.controlTask',
         },
         {
-          label: '$(checklist) ASKII Code Review',
-          description: 'Review uncommitted changes',
-          command: 'askii.codeReviewUncommitted',
-        },
-        {
           label: '$(note) ASKII Note',
           description: 'Notes & reminders',
           command: 'askii.noteTask',

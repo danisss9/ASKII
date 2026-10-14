@@ -10,6 +10,7 @@ import {
   searchVectorIndex,
   hasVectorIndex,
   invalidateVectorCache,
+  VectorRebuildCancelledError,
   type EmbedFn,
   type VectorIndexSpec,
 } from '../common/vectordb';
@@ -246,6 +247,45 @@ suite('common/vectordb', () => {
       const hits = await searchVectorIndex(indexDir, 'good.ts alpha', 'test-model', fakeEmbed, 3);
       assert.ok(hits.length > 0);
       assert.ok(!hits[0].content.startsWith('good.ts')); // stored text is verbatim
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('an aborted rebuild rejects and leaves the previous index intact', async () => {
+    const root = makeTmpWorkspace();
+    const indexDir = path.join(root, '.askii', 'code-wiki');
+    try {
+      write(root, 'a.ts', lines(70, 'alpha'));
+      const first = await rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed);
+
+      write(root, 'b.py', lines(70, 'beta'));
+      const controller = new AbortController();
+      // Abort while the embedder is busy — the rebuild must stop waiting on it
+      const hangingEmbed: EmbedFn = (texts) => {
+        controller.abort();
+        return new Promise<number[][]>(() => {}).then(() => fakeEmbed(texts));
+      };
+      await assert.rejects(
+        rebuildVectorIndex(indexDir, 'test-model', specFor(root), hangingEmbed, {
+          signal: controller.signal,
+        }),
+        VectorRebuildCancelledError,
+      );
+
+      // Already-aborted signal rejects before touching anything
+      await assert.rejects(
+        rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed, {
+          signal: controller.signal,
+        }),
+        VectorRebuildCancelledError,
+      );
+
+      assert.ok(!fs.readdirSync(indexDir).some((f) => f.endsWith('.tmp')));
+      invalidateVectorCache(indexDir);
+      const hits = await searchVectorIndex(indexDir, 'alpha alpha', 'test-model', fakeEmbed, 50);
+      assert.strictEqual(hits.length, first.chunkCount);
+      assert.ok(hits.every((h) => h.source === 'a.ts'));
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -1555,16 +1555,21 @@ export async function askiiReloadWikiCommand() {
 
   const summaries: string[] = [];
   const warnings: string[] = [];
+  const abortController = new AbortController();
+  const { signal } = abortController;
 
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
       title: 'ASKII: Reloading wikis...',
-      cancellable: false,
+      cancellable: true,
     },
-    async (progress) => {
+    async (progress, token) => {
+      token.onCancellationRequested(() => abortController.abort());
       const downloadProgress = (_file: string, receivedMB: number, totalMB: number) => {
-        progress.report({ message: `Downloading embedding model (${receivedMB}/${totalMB} MB)...` });
+        progress.report({
+          message: `Downloading embedding model (${receivedMB.toFixed(0)}/${totalMB.toFixed(0)} MB)...`,
+        });
       };
 
       // Docs wiki (vector index over .md files)
@@ -1583,9 +1588,11 @@ export async function askiiReloadWikiCommand() {
                 }
               },
               onDownloadProgress: downloadProgress,
+              signal,
             });
             summaries.push(`wiki: ${stats.chunkCount} chunks from ${stats.fileCount} file(s)`);
           } catch (error) {
+            if (signal.aborted) return;
             warnings.push(
               `docs wiki failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
             );
@@ -1608,12 +1615,14 @@ export async function askiiReloadWikiCommand() {
                 }
               },
               onDownloadProgress: downloadProgress,
+              signal,
             });
             summaries.push(
               `code wiki: ${stats.chunkCount} chunks from ${stats.fileCount} file(s) ` +
                 `(${stats.embeddedFiles} embedded, ${stats.cachedFiles} reused)`,
             );
           } catch (error) {
+            if (signal.aborted) return;
             warnings.push(
               `code wiki failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
             );
@@ -1623,6 +1632,14 @@ export async function askiiReloadWikiCommand() {
     },
   );
 
+  if (signal.aborted) {
+    // Any wiki that finished before the cancel is still reported
+    const done = summaries.length > 0 ? ` (completed — ${summaries.join(' — ')})` : '';
+    vscode.window.showInformationMessage(
+      `ASKII: Wiki reload cancelled — existing indexes kept${done}`,
+    );
+    return;
+  }
   if (summaries.length > 0) {
     vscode.window.showInformationMessage(`ASKII: ${summaries.join(' — ')} (⌐■_■)`);
   }

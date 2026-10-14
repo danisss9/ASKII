@@ -25,6 +25,21 @@ export const EMBEDDING_DIM = 768;
 const HF_REPO = 'onnx-community/embeddinggemma-2-ONNX';
 const EMBEDDING_BATCH_SIZE = 8;
 
+// One cache for every ASKII process — the CLI and the VS Code extension both
+// read the weights from here, so they are downloaded once per machine.
+const MODEL_CACHE_DIR = path.join(os.homedir(), '.askii', 'models');
+const MODEL_REPO_DIR = path.join(MODEL_CACHE_DIR, ...HF_REPO.split('/'));
+// Files a q8 text-only load reads; when all exist, loading needs no network.
+const MODEL_FILES = [
+  'config.json',
+  'tokenizer.json',
+  'tokenizer_config.json',
+  'onnx/model_quantized.onnx',
+  'onnx/model_quantized.onnx_data',
+];
+const DOWNLOAD_LOCK = path.join(MODEL_CACHE_DIR, '.download.lock');
+const LOCK_POLL_MS = 1000;
+
 /**
  * The upstream repo is multimodal — its config makes Transformers.js create
  * vision/audio sessions that the WASM runtime cannot serve (their weights use
@@ -34,8 +49,8 @@ const EMBEDDING_BATCH_SIZE = 8;
  * suggests for text-only use. This also skips ~300 MB of vision/audio weight
  * downloads. Best-effort: on failure the stock config is used.
  */
-async function seedTextOnlyConfig(cacheDir: string): Promise<void> {
-  const configPath = path.join(cacheDir, 'onnx-community', 'embeddinggemma-2-ONNX', 'config.json');
+async function seedTextOnlyConfig(): Promise<void> {
+  const configPath = path.join(MODEL_REPO_DIR, 'config.json');
   let config: Record<string, unknown>;
   if (fs.existsSync(configPath)) {
     config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -64,13 +79,59 @@ async function seedTextOnlyConfig(cacheDir: string): Promise<void> {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 
   // Self-heal caches from earlier multimodal runs — those weights are never loaded
-  const onnxDir = path.join(cacheDir, 'onnx-community', 'embeddinggemma-2-ONNX', 'onnx');
+  const onnxDir = path.join(MODEL_REPO_DIR, 'onnx');
   try {
     for (const file of fs.readdirSync(onnxDir)) {
       if (/^(vision_encoder|audio_encoder)/.test(file)) fs.unlinkSync(path.join(onnxDir, file));
     }
   } catch {
     // cache dir not created yet — nothing to clean
+  }
+}
+
+function isModelCached(): boolean {
+  return MODEL_FILES.every((file) => fs.existsSync(path.join(MODEL_REPO_DIR, file)));
+}
+
+/** A lock is stale when its owner process is gone (crashed mid-download). */
+function isLockStale(): boolean {
+  try {
+    const pid = Number(fs.readFileSync(DOWNLOAD_LOCK, 'utf-8'));
+    if (!Number.isInteger(pid) || pid <= 0) {
+      // Owner has not written its pid yet — stale only if it never will
+      return Date.now() - fs.statSync(DOWNLOAD_LOCK).mtimeMs > 60_000;
+    }
+    process.kill(pid, 0); // throws ESRCH when the process no longer exists
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'EPERM'; // EPERM: alive, not ours
+  }
+}
+
+/**
+ * Serializes first-time downloads across processes, so a CLI run and the VS
+ * Code extension starting together on an empty cache download the weights
+ * once: the second waits, then loads from the cache the first filled.
+ */
+async function withDownloadLock<T>(fn: () => Promise<T>): Promise<T> {
+  fs.mkdirSync(MODEL_CACHE_DIR, { recursive: true });
+  for (;;) {
+    try {
+      fs.writeFileSync(DOWNLOAD_LOCK, String(process.pid), { flag: 'wx' });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    if (isLockStale()) {
+      fs.rmSync(DOWNLOAD_LOCK, { force: true });
+      continue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
+  }
+  try {
+    return await fn();
+  } finally {
+    fs.rmSync(DOWNLOAD_LOCK, { force: true });
   }
 }
 
@@ -120,30 +181,43 @@ async function getExtractor(onProgress?: EmbedderProgress): Promise<Extractor> {
     extractorPromise = (async () => {
       redirectNativeBackend();
       const { pipeline, env } = await import('@huggingface/transformers');
-      const cacheDir = path.join(os.homedir(), '.askii', 'models');
-      env.cacheDir = cacheDir;
+      env.cacheDir = MODEL_CACHE_DIR;
       env.allowLocalModels = false;
-      await seedTextOnlyConfig(cacheDir);
-      return pipeline('feature-extraction', HF_REPO, {
-        dtype: 'q8',
-        ...(onProgress
-          ? {
-              progress_callback: (info: { status?: string; file?: string; loaded?: number; total?: number }) => {
-                if (info.status === 'progress' && info.file && info.total) {
-                  onProgress(info.file, (info.loaded ?? 0) / 1e6, info.total / 1e6);
-                }
-              },
-            }
-          : {}),
-      });
+
+      // Transformers.js emits 'progress' while reading cached files too —
+      // report only files missing from the cache, i.e. real downloads.
+      const downloading = new Map<string, boolean>();
+      const isDownloading = (file: string): boolean => {
+        let missing = downloading.get(file);
+        if (missing === undefined) {
+          missing = !fs.existsSync(path.join(MODEL_REPO_DIR, file));
+          downloading.set(file, missing);
+        }
+        return missing;
+      };
+
+      const load = async () => {
+        await seedTextOnlyConfig();
+        return pipeline('feature-extraction', HF_REPO, {
+          dtype: 'q8',
+          ...(onProgress
+            ? {
+                progress_callback: (info: { status?: string; file?: string; loaded?: number; total?: number }) => {
+                  if (info.status === 'progress' && info.file && info.total && isDownloading(info.file)) {
+                    onProgress(info.file, (info.loaded ?? 0) / 1e6, info.total / 1e6);
+                  }
+                },
+              }
+            : {}),
+        });
+      };
+      return isModelCached() ? load() : withDownloadLock(load);
     })().catch((error) => {
       extractorPromise = null; // allow a retry on the next call
       throw new Error(
-        `Failed to load the local embedding model (${HF_REPO}) — first use downloads ~314 MB to ${path.join(
-          os.homedir(),
-          '.askii',
-          'models',
-        )}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        `Failed to load the local embedding model (${HF_REPO}) — first use downloads ~314 MB to ${MODEL_CACHE_DIR}: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
       );
     });
   }

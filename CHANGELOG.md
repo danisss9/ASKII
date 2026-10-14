@@ -6,6 +6,12 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-14
+
+### Added
+
+- **Cancel button for Reload Wikis**: the **ASKII: Reload Wikis** progress notification now has a **Cancel** button. Cancelling stops the rebuild at the next file or embedding batch (or right away while the embedding model is downloading) and keeps the existing indexes untouched; a wiki that finished before the cancel keeps its new index. `rebuildVectorIndex` takes an optional `signal` and rejects with `VectorRebuildCancelledError`
+
 ## [0.6.1] - 2026-10-13
 
 ### Added

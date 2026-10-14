@@ -63,6 +63,44 @@ export interface VectorIndexStats {
 
 export interface VectorRebuildOptions {
   onProgress?: (stage: 'indexing', current: number, total: number) => void;
+  /** Aborts the rebuild; the previous index is left intact. */
+  signal?: AbortSignal;
+}
+
+/** Thrown by rebuildVectorIndex when its signal is aborted. */
+export class VectorRebuildCancelledError extends Error {
+  constructor() {
+    super('Index rebuild cancelled');
+    this.name = 'VectorRebuildCancelledError';
+  }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new VectorRebuildCancelledError();
+}
+
+/**
+ * Resolves with `promise`, or rejects as soon as `signal` aborts. The embedder
+ * (and a first-use model download) keeps running in the background — it is a
+ * shared singleton — but the rebuild stops waiting on it.
+ */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  throwIfAborted(signal);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new VectorRebuildCancelledError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 export interface VectorHit {
@@ -384,7 +422,10 @@ export async function rebuildVectorIndex(
 
     const flushBatch = async (): Promise<void> => {
       if (pending.length === 0) return;
-      const vectors = await embedDocs(pending.map((p) => p.chunk.embedText ?? p.chunk.text));
+      const vectors = await untilAborted(
+        embedDocs(pending.map((p) => p.chunk.embedText ?? p.chunk.text)),
+        opts.signal,
+      );
       if (vectors.length !== pending.length) {
         throw new Error(
           `Embedding provider returned ${vectors.length} vectors for ${pending.length} inputs`,
@@ -423,6 +464,7 @@ export async function rebuildVectorIndex(
     };
 
     for (let fi = 0; fi < files.length; fi++) {
+      throwIfAborted(opts.signal);
       const entry = files[fi];
       opts.onProgress?.('indexing', fi + 1, files.length);
       const relPath = entry.relPath.replace(/\\/g, '/');
@@ -532,6 +574,8 @@ export async function rebuildVectorIndex(
       }
     }
     await flushBatch();
+    // Last chance to back out before the staged files replace the index
+    throwIfAborted(opts.signal);
 
     const meta: IndexMeta = {
       version: FORMAT_VERSION,
