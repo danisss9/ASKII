@@ -197,6 +197,25 @@ async function updateGlobalSettings(values: Record<string, unknown>): Promise<vo
   for (const [setting, value] of Object.entries(values)) {
     await config.update(setting, value, vscode.ConfigurationTarget.Global);
   }
+  // Setup saves user settings; a workspace value would silently win over them
+  const overridden = Object.keys(values).filter((setting) => {
+    const inspected = config.inspect(setting);
+    return inspected?.workspaceValue !== undefined || inspected?.workspaceFolderValue !== undefined;
+  });
+  if (overridden.length > 0) {
+    void vscode.window
+      .showWarningMessage(
+        `ASKII: saved to your user settings, but this workspace overrides ${overridden
+          .map((s) => `askii.${s}`)
+          .join(', ')} — the workspace values still apply here.`,
+        'Open Workspace Settings',
+      )
+      .then((choice) => {
+        if (choice) {
+          void vscode.commands.executeCommand('workbench.action.openWorkspaceSettingsFile');
+        }
+      });
+  }
 }
 
 function messageRecord(message: unknown): Record<string, unknown> | undefined {
@@ -538,8 +557,8 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
 
     <section id="wikiScreen" class="screen panel">
       <h2>Wiki &amp; commit rules</h2><p class="lead">Finish applies these globally. Ignore keeps their current values.</p>
-      <div class="option"><input id="wikiEnabled" type="checkbox"><div class="option-body"><label for="wikiEnabled">Enable wiki RAG</label><span class="hint">Use the wiki as retrieval context for Ask, Edit, and Do. Requires a wiki folder and an index built via ASKII: Reload Wiki.</span></div></div>
-      <div class="option"><div class="option-body"><label for="wikiPathInput">Wiki folder</label><span class="hint">Folder of .md documentation files used for wiki RAG context. Run ASKII: Reload Wiki to index it.</span><div class="pick-row"><input id="wikiPathInput" type="text" spellcheck="false" placeholder="Absolute path to your wiki folder"><button id="wikiPathBrowse" class="btn secondary small" type="button">Browse…</button></div></div></div>
+      <div class="option"><input id="wikiEnabled" type="checkbox"><div class="option-body"><label for="wikiEnabled">Enable wiki RAG</label><span class="hint">Use the wiki as retrieval context for Ask, Edit, and Do. Requires a wiki folder and an index built via ASKII: Reload Wikis.</span></div></div>
+      <div class="option"><div class="option-body"><label for="wikiPathInput">Wiki folder</label><span class="hint">Folder of .md documentation files used for wiki RAG context. Run ASKII: Reload Wikis to index it.</span><div class="pick-row"><input id="wikiPathInput" type="text" spellcheck="false" placeholder="Absolute path to your wiki folder"><button id="wikiPathBrowse" class="btn secondary small" type="button">Browse…</button></div></div></div>
       <div class="option"><input id="wikiAutoReload" type="checkbox"><div class="option-body"><label for="wikiAutoReload">Auto-reload wiki on startup</label><span class="hint">Rebuild and reload the wiki index whenever the extension starts. Requires wiki RAG and a wiki folder.</span></div></div>
       <h3>Code wiki</h3>
       <div class="option"><input id="codeWikiEnabled" type="checkbox"><div class="option-body"><label for="codeWikiEnabled">Enable code wiki</label><span class="hint">Vector index over workspace code (code files only) used as retrieval context for Ask, Edit, and Do. Runs the embeddinggemma2 model locally — the first index build downloads it once — then run ASKII: Reload Wikis.</span></div></div>

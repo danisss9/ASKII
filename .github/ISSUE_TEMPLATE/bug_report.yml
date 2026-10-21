@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in the ASKII extension or CLI does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! For security issues please use private vulnerability reporting instead (see SECURITY.md).
+        Please remove API keys, private code and personal data from logs and screenshots.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where
+      options: [VS Code extension, CLI (askii-cli), Both]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ASKII version
+      placeholder: e.g. 1.0.0 (Extensions view, or `askii --version`)
+    validations:
+      required: true
+  - type: dropdown
+    id: feature
+    attributes:
+      label: Feature
+      options: [Ask, Edit, Do, Control (screen), Control (browser), Note, Inline completion / helper, Wiki / code wiki, Commit message, Code review, Setup, Other]
+  - type: input
+    id: platform
+    attributes:
+      label: LLM platform and model
+      placeholder: e.g. Ollama / gemma4:e4b
+  - type: input
+    id: env
+    attributes:
+      label: OS and VS Code version
+      placeholder: e.g. Windows 11, VS Code 1.108
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output panel → "ASKII" (and "ASKII Do" / "ASKII Control" for agent runs)
+      render: text

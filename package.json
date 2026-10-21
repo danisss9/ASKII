@@ -1,19 +1,49 @@
 {
   "name": "askii",
   "displayName": "ASKII",
-  "description": "ASKII is an AI code assistant with style ( •_•)>⌐■-■ (⌐■_■)",
+  "description": "AI code assistant with style ( •_•)>⌐■-■ (⌐■_■) — ask, edit, agentic tasks, screen/browser control, commit messages, code review and AI notes, with your choice of LLM (ASKII Cloud, Ollama, LM Studio, OpenAI, Anthropic, opencode Go).",
   "version": "0.6.2",
   "icon": "icon.png",
   "publisher": "danisss9",
+  "author": "danisss9",
+  "license": "MIT",
+  "homepage": "https://github.com/danisss9/ASKII#readme",
+  "bugs": {
+    "url": "https://github.com/danisss9/ASKII/issues"
+  },
+  "pricing": "Free",
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "assistant",
+    "copilot",
+    "agent",
+    "ollama",
+    "lm studio",
+    "openai",
+    "anthropic",
+    "claude",
+    "code review",
+    "commit message",
+    "rag",
+    "notes"
+  ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/danisss9/ASKII"
+    "url": "https://github.com/danisss9/ASKII.git"
   },
   "engines": {
     "vscode": "^1.108.1"
   },
   "categories": [
-    "Other"
+    "AI",
+    "Chat",
+    "Machine Learning",
+    "SCM Providers"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -92,73 +122,78 @@
     "commands": [
       {
         "command": "askii.openSetup",
-        "title": "ASKII: Open Setup",
+        "title": "Open Setup",
         "category": "ASKII"
       },
       {
         "command": "askii.clearCache",
-        "title": "ASKII: Clear Cache",
+        "title": "Clear Cache",
         "category": "ASKII"
       },
       {
         "command": "askii.clearApiKey",
-        "title": "ASKII: Clear Stored API Key",
+        "title": "Clear Stored API Key",
         "category": "ASKII"
       },
       {
         "command": "askii.askQuestion",
-        "title": "Ask ASKII",
+        "title": "Ask",
         "category": "ASKII"
       },
       {
         "command": "askii.editCode",
-        "title": "ASKII Edit",
+        "title": "Edit Selection or File",
         "category": "ASKII"
       },
       {
         "command": "askii.doTask",
-        "title": "ASKII Do",
+        "title": "Do (Agent Task in Workspace)",
         "category": "ASKII"
       },
       {
         "command": "askii.controlTask",
-        "title": "ASKII Control",
+        "title": "Control Screen or Browser",
         "category": "ASKII"
       },
       {
         "command": "askii.reloadWiki",
-        "title": "ASKII: Reload Wikis",
+        "title": "Reload Wikis",
         "category": "ASKII"
       },
       {
         "command": "askii.generateCommitMessage",
-        "title": "ASKII Git: Generate Commit Message",
+        "title": "Generate Commit Message",
         "category": "ASKII",
         "icon": "$(sparkle)"
       },
       {
         "command": "askii.cancelCommitMessage",
-        "title": "ASKII Git: Stop Generating Commit Message",
+        "title": "Stop Generating Commit Message",
         "category": "ASKII",
         "icon": "$(debug-stop)"
       },
       {
         "command": "askii.codeReviewUncommitted",
-        "title": "ASKII Git: Code Review Uncommitted Changes",
+        "title": "Code Review Uncommitted Changes",
         "category": "ASKII",
         "icon": "$(checklist)"
       },
       {
         "command": "askii.cancelCodeReview",
-        "title": "ASKII Git: Stop Code Review",
+        "title": "Stop Code Review",
         "category": "ASKII",
         "icon": "$(debug-stop)"
       },
       {
         "command": "askii.noteTask",
-        "title": "ASKII Note",
+        "title": "Notes, Tasks & Reminders",
         "category": "ASKII",
         "icon": "$(note)"
+      },
+      {
+        "command": "askii.showCommandMenu",
+        "title": "Show Command Menu",
+        "category": "ASKII"
       }
     ],
     "menus": {
@@ -187,7 +222,7 @@
       "commandPalette": [
         {
           "command": "askii.generateCommitMessage",
-          "when": "false"
+          "when": "gitOpenRepositoryCount != 0 && !askii.commitMessageRunning"
         },
         {
           "command": "askii.cancelCommitMessage",
@@ -196,6 +231,14 @@
         {
           "command": "askii.cancelCodeReview",
           "when": "askii.codeReviewRunning"
+        },
+        {
+          "command": "askii.codeReviewUncommitted",
+          "when": "gitOpenRepositoryCount != 0 && !askii.codeReviewRunning"
+        },
+        {
+          "command": "askii.editCode",
+          "when": "editorIsOpen"
         }
       ]
     },
@@ -249,12 +292,12 @@
             "askiicloud"
           ],
           "default": "askiicloud",
-          "description": "LLM platform to use for ASKII Control (screen and browser) and Note (vision-capable features)."
+          "description": "LLM platform to use for ASKII Control (screen and browser) — needs a vision-capable model."
         },
         "askii.llmVisionModel": {
           "type": "string",
           "default": "askii-smart",
-          "description": "Model id to use for ASKII Control (screen and browser) and Note (vision-capable features)."
+          "description": "Vision-capable model id to use for ASKII Control (screen and browser)."
         },
         "askii.ollamaUrl": {
           "type": "string",
@@ -286,7 +329,7 @@
             "Disable inline decorations",
             "Show concise code explanations",
             "Show humorous comments",
-            "Show relevant wiki documentation snippets (requires askii.wikiPath to be indexed)"
+            "Show explanations enriched with matching context from your enabled wikis (docs and/or code)"
           ],
           "default": "off",
           "description": "Inline helper mode for code decorations"
@@ -328,12 +371,12 @@
         "askii.wikiEnabled": {
           "type": "boolean",
           "default": false,
-          "description": "Enable wiki RAG context for Ask / Edit / Do commands. Requires askii.wikiPath to be set and the wiki to be indexed via ASKII: Reload Wiki."
+          "description": "Enable wiki RAG context for Ask / Edit / Do commands. Requires askii.wikiPath to be set and the wiki to be indexed via ASKII: Reload Wikis."
         },
         "askii.wikiPath": {
           "type": "string",
           "default": "",
-          "description": "Path to folder containing .md documentation files used for wiki RAG context. Run 'ASKII: Reload Wiki' after changing this or updating the docs."
+          "description": "Path to folder containing .md documentation files used for wiki RAG context. Run 'ASKII: Reload Wikis' after changing this or updating the docs."
         },
         "askii.wikiAutoReload": {
           "type": "boolean",
