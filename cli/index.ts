@@ -433,7 +433,21 @@ async function confirm(
     return true;
   }
   return new Promise((resolve) => {
-    rl.question(`${question} (y/N) `, (answer) => resolve(answer.toLowerCase() === 'y'));
+    // Input already ended (piped stdin ran out) or closes while asking: that's a "no"
+    const onClose = () => {
+      console.error(`${question} (no input — answered no)`);
+      resolve(false);
+    };
+    try {
+      rl.once('close', onClose);
+      rl.question(`${question} (y/N) `, (answer) => {
+        rl.off('close', onClose);
+        resolve(answer.trim().toLowerCase() === 'y');
+      });
+    } catch {
+      rl.off('close', onClose);
+      onClose();
+    }
   });
 }
 
