@@ -104,14 +104,14 @@
         "mac": "cmd+alt+k c"
       },
       {
-        "command": "askii.reloadWiki",
-        "key": "ctrl+alt+k w",
-        "mac": "cmd+alt+k w"
-      },
-      {
         "command": "askii.noteTask",
         "key": "ctrl+alt+k n",
         "mac": "cmd+alt+k n"
+      },
+      {
+        "command": "askii.reloadWiki",
+        "key": "ctrl+alt+k w",
+        "mac": "cmd+alt+k w"
       },
       {
         "command": "askii.clearCache",
@@ -128,11 +128,6 @@
       {
         "command": "askii.clearCache",
         "title": "Clear Cache",
-        "category": "ASKII"
-      },
-      {
-        "command": "askii.clearApiKey",
-        "title": "Clear Stored API Key",
         "category": "ASKII"
       },
       {
@@ -355,20 +350,17 @@
         "askii.ollamaUrl": {
           "type": "string",
           "default": "http://localhost:11434",
-          "description": "URL of the Ollama API server (user/machine setting — a workspace cannot override where requests go)",
-          "scope": "machine"
+          "description": "URL of the Ollama API server"
         },
         "askii.lmStudioUrl": {
           "type": "string",
           "default": "ws://localhost:1234",
-          "description": "URL of the LM Studio API server (user/machine setting — a workspace cannot override where requests go)",
-          "scope": "machine"
+          "description": "URL of the LM Studio API server"
         },
         "askii.openaiUrl": {
           "type": "string",
           "default": "",
-          "description": "OpenAI-compatible base URL (leave empty for api.openai.com). Use this for Azure OpenAI or other compatible APIs. User/machine setting only, so a workspace cannot redirect your OpenAI key to another server.",
-          "scope": "machine"
+          "description": "OpenAI-compatible base URL (leave empty for api.openai.com). Use this for Azure OpenAI or other compatible APIs."
         },
         "askii.inlineHelperMode": {
           "type": "string",
@@ -396,14 +388,12 @@
         "askii.doAutoConfirm": {
           "type": "boolean",
           "default": false,
-          "description": "Automatically confirm file create/modify/delete actions in ASKII Do. Shell commands (run) and files that can make VS Code or git run code (.vscode/, .husky/, git hooks) are always confirmed. User/machine setting only.",
-          "scope": "machine"
+          "description": "Automatically confirm file create/modify/delete actions in ASKII Do. Shell commands (run) and files that can make VS Code or git run code (.vscode/, .husky/, git hooks) are always confirmed."
         },
         "askii.controlAutoConfirm": {
           "type": "boolean",
-          "default": false,
-          "scope": "machine",
-          "markdownDescription": "Run ASKII Control screen and browser actions (mouse, keyboard, page navigation) **without asking first**. Separate from `askii.doAutoConfirm`. User/machine setting only."
+          "default": true,
+          "markdownDescription": "Run ASKII Control screen and browser actions (mouse, keyboard, page navigation) **without asking first**. Separate from `askii.doAutoConfirm`."
         },
         "askii.formatAfterEdit": {
           "type": "boolean",
@@ -418,8 +408,7 @@
         "askii.chromePath": {
           "type": "string",
           "default": "",
-          "description": "Path to a Chromium-based browser executable for ASKII Control browser mode (e.g. C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe or C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe). Leave empty to auto-detect Chrome, Edge, Chromium or Brave.",
-          "scope": "machine"
+          "description": "Path to a Chromium-based browser executable for ASKII Control browser mode (e.g. C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe or C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe). Leave empty to auto-detect Chrome, Edge, Chromium or Brave."
         },
         "askii.wikiEnabled": {
           "type": "boolean",
@@ -529,30 +518,6 @@
             "**/*secret*"
           ],
           "markdownDescription": "Glob patterns of files whose content is **never** sent to the LLM by inline completion and inline explanations (secrets, keys, credentials). Matched against the file path."
-        },
-        "askii.askiicloudApiKey": {
-          "type": "string",
-          "default": "",
-          "deprecationMessage": "Deprecated: ASKII stores the ASKII Cloud API key in VS Code secret storage. A value here is moved there on startup and cleared — use ASKII: Open Setup to change it.",
-          "description": "Deprecated — the ASKII Cloud API key is kept in VS Code secret storage (ASKII: Open Setup)."
-        },
-        "askii.openaiApiKey": {
-          "type": "string",
-          "default": "",
-          "deprecationMessage": "Deprecated: ASKII stores the OpenAI API key in VS Code secret storage. A value here is moved there on startup and cleared — use ASKII: Open Setup to change it.",
-          "description": "Deprecated — the OpenAI API key is kept in VS Code secret storage (ASKII: Open Setup)."
-        },
-        "askii.anthropicApiKey": {
-          "type": "string",
-          "default": "",
-          "deprecationMessage": "Deprecated: ASKII stores the Anthropic API key in VS Code secret storage. A value here is moved there on startup and cleared — use ASKII: Open Setup to change it.",
-          "description": "Deprecated — the Anthropic API key is kept in VS Code secret storage (ASKII: Open Setup)."
-        },
-        "askii.opencodegoApiKey": {
-          "type": "string",
-          "default": "",
-          "deprecationMessage": "Deprecated: ASKII stores the opencode Go API key in VS Code secret storage. A value here is moved there on startup and cleared — use ASKII: Open Setup to change it.",
-          "description": "Deprecated — the opencode Go API key is kept in VS Code secret storage (ASKII: Open Setup)."
         }
       }
     }

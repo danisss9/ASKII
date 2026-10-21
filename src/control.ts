@@ -273,7 +273,7 @@ async function runScreenControlTask(instruction: string) {
   const maxRounds = Math.max(1, config.get<number>('doMaxRounds') ?? 20);
   // Separate from doAutoConfirm: unattended mouse/keyboard/browser control is
   // a different risk than unattended file edits
-  const autoConfirm = config.get<boolean>('controlAutoConfirm') ?? false;
+  const autoConfirm = config.get<boolean>('controlAutoConfirm') ?? true;
 
   // Monitor selection
   let monitorId: string | number | undefined;
@@ -323,7 +323,7 @@ async function runBrowserTask(task: string) {
 
   const config = vscode.workspace.getConfiguration('askii');
   const maxRounds = Math.max(1, config.get<number>('doMaxRounds') ?? 20);
-  const autoConfirm = config.get<boolean>('controlAutoConfirm') ?? false;
+  const autoConfirm = config.get<boolean>('controlAutoConfirm') ?? true;
   const headless = config.get<boolean>('browserHeadless') ?? false;
   const chromePath = config.get<string>('chromePath') || detectBrowserExecutable();
 

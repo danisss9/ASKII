@@ -23,11 +23,7 @@ import { cancelCommitMessageCommand, generateCommitMessageCommand } from './comm
 import { cancelCodeReviewCommand, codeReviewCommand } from './codeReview';
 import { askiiNoteCommand } from './notesPanel';
 import { startNoteScheduler, stopNoteScheduler } from './notesScheduler';
-import {
-  clearApiKeyCommand,
-  initializeProviderSecrets,
-  migrateLegacyApiKeys,
-} from './providerSecrets';
+import { initializeProviderSecrets } from './providerSecrets';
 import { initLog } from './log';
 import { openSetupPanel, shouldOpenSetupAutomatically } from './setupPanel';
 
@@ -35,25 +31,10 @@ export async function activate(context: vscode.ExtensionContext) {
   initLog(context);
   initWebviewAssets(context);
   initializeProviderSecrets(context.secrets);
-  const migrationProblems = await migrateLegacyApiKeys(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.openSetup', () => openSetupPanel(context)),
-    vscode.commands.registerCommand('askii.clearApiKey', clearApiKeyCommand),
   );
-
-  if (migrationProblems.length > 0) {
-    vscode.window
-      .showWarningMessage(
-        `ASKII could not securely migrate every legacy API key: ${migrationProblems.join('; ')}`,
-        'Open Setup',
-      )
-      .then((choice) => {
-        if (choice === 'Open Setup') {
-          vscode.commands.executeCommand('askii.openSetup');
-        }
-      });
-  }
 
   // Register the in-memory content provider for diff previews
   context.subscriptions.push(

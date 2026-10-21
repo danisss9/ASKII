@@ -14,7 +14,6 @@ export interface ProviderDefinition {
   label: string;
   description: string;
   connection: 'apiKey' | 'serverUrl';
-  secretSetting?: string;
   urlSetting?: 'ollamaUrl' | 'lmStudioUrl';
   supportsCustomBaseUrl?: boolean;
 }
@@ -25,14 +24,12 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     label: 'ASKII Cloud',
     description: 'ASKII-hosted models with sensible defaults for every ASKII feature.',
     connection: 'apiKey',
-    secretSetting: 'askiicloudApiKey',
   },
   {
     id: 'openai',
     label: 'OpenAI',
     description: 'OpenAI models or another OpenAI-compatible service using an optional base URL.',
     connection: 'apiKey',
-    secretSetting: 'openaiApiKey',
     supportsCustomBaseUrl: true,
   },
   {
@@ -40,14 +37,12 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     label: 'Anthropic',
     description: 'Claude models served by the Anthropic API.',
     connection: 'apiKey',
-    secretSetting: 'anthropicApiKey',
   },
   {
     id: 'opencodego',
     label: 'opencode Go',
     description: 'Hosted coding models from the opencode Go inference service.',
     connection: 'apiKey',
-    secretSetting: 'opencodegoApiKey',
   },
   {
     id: 'ollama',
@@ -106,6 +101,34 @@ export function normalizeModelIds(ids: readonly unknown[]): string[] {
         .filter(Boolean),
     ),
   ).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
+}
+
+export const COMMIT_MESSAGE_STYLES = ['oneliner', 'brief', 'descriptive'] as const;
+
+export type CommitMessageStyle = (typeof COMMIT_MESSAGE_STYLES)[number];
+
+export function isCommitMessageStyle(value: unknown): value is CommitMessageStyle {
+  return typeof value === 'string' && (COMMIT_MESSAGE_STYLES as readonly string[]).includes(value);
+}
+
+export function parseBoundedInt(label: string, raw: string, min: number): number {
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (!trimmed || !Number.isInteger(value) || value < min) {
+    throw new Error(`${label} must be a whole number of at least ${min}.`);
+  }
+  return value;
+}
+
+export function parseGlobList(raw: string): string[] {
+  return Array.from(
+    new Set(
+      raw
+        .split(/[\n,]/)
+        .map((glob) => glob.trim())
+        .filter(Boolean),
+    ),
+  );
 }
 
 export function chooseInitialModels(
@@ -173,38 +196,6 @@ export class ProviderConnectionError extends Error {
     super(message);
     this.name = 'ProviderConnectionError';
   }
-}
-
-export interface InspectedStringSetting {
-  globalValue?: string;
-  workspaceValue?: string;
-  workspaceFolderValue?: string;
-}
-
-export interface SecretStore {
-  get(key: string): PromiseLike<string | undefined>;
-  store(key: string, value: string): PromiseLike<void>;
-}
-
-export function getLegacyCredentialValue(inspected: InspectedStringSetting | undefined): string {
-  if (!inspected) {
-    return '';
-  }
-  const values = [inspected.workspaceFolderValue, inspected.workspaceValue, inspected.globalValue];
-  return values.find((value) => typeof value === 'string' && value.trim())?.trim() ?? '';
-}
-
-export async function migrateLegacyCredential(
-  secretKey: string,
-  legacyValue: string,
-  secrets: SecretStore,
-  clearLegacyValue: () => Promise<void>,
-): Promise<void> {
-  const existing = await secrets.get(secretKey);
-  if (!existing?.trim()) {
-    await secrets.store(secretKey, legacyValue);
-  }
-  await clearLegacyValue();
 }
 
 export function withDiscoveryTimeout<T>(

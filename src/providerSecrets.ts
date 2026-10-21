@@ -9,25 +9,17 @@ import { ASKII_CLOUD_URL, OPENCODE_GO_URL, getOpenCodeGoHeaders } from '../commo
 import {
   PROVIDERS,
   ProviderConnectionError,
-  type InspectedStringSetting,
   type ProviderId,
-  getLegacyCredentialValue,
   getProviderDefinition,
   isAuthenticationError,
   isUnsupportedModelListError,
-  migrateLegacyCredential,
   normalizeModelIds,
   withDiscoveryTimeout,
 } from './setupCore';
 
 // Re-exported so existing imports of these helpers keep working; they live in
 // setupCore.ts so plain-Node unit tests can load them without `vscode`.
-export {
-  ProviderConnectionError,
-  getLegacyCredentialValue,
-  migrateLegacyCredential,
-  withDiscoveryTimeout,
-} from './setupCore';
+export { ProviderConnectionError, withDiscoveryTimeout } from './setupCore';
 
 const SECRET_KEYS: Readonly<Partial<Record<ProviderId, string>>> = {
   askiicloud: 'askii.credentials.askiicloud.apiKey',
@@ -72,91 +64,11 @@ export async function storeProviderApiKey(provider: ProviderId, apiKey: string):
   await providerSecrets.store(key, apiKey.trim());
 }
 
-export async function deleteProviderApiKey(provider: ProviderId): Promise<void> {
-  const key = SECRET_KEYS[provider];
-  if (!key || !providerSecrets) {
-    return;
-  }
-  await providerSecrets.delete(key);
-}
-
-/** Lets the user pick a provider with a stored key and removes it from secret storage. */
-export async function clearApiKeyCommand(): Promise<void> {
-  const status = await getSavedCredentialStatus();
-  const items = PROVIDERS.filter((p) => status[p.id]).map((p) => ({
-    label: p.label,
-    description: 'API key stored in VS Code secret storage',
-    id: p.id,
-  }));
-  if (items.length === 0) {
-    vscode.window.showInformationMessage('ASKII: No API keys are stored.');
-    return;
-  }
-  const pick = await vscode.window.showQuickPick(items, {
-    placeHolder: 'Remove which stored API key?',
-  });
-  if (!pick) {
-    return;
-  }
-  await deleteProviderApiKey(pick.id);
-  vscode.window.showInformationMessage(`ASKII: ${pick.label} API key removed.`);
-}
-
 export async function getSavedCredentialStatus(): Promise<Record<ProviderId, boolean>> {
   const entries = await Promise.all(
     PROVIDERS.map(async ({ id }) => [id, Boolean(await getProviderApiKey(id))] as const),
   );
   return Object.fromEntries(entries) as Record<ProviderId, boolean>;
-}
-
-async function clearLegacySetting(
-  config: vscode.WorkspaceConfiguration,
-  setting: string,
-  inspected: InspectedStringSetting | undefined,
-): Promise<void> {
-  if (!inspected) {
-    return;
-  }
-  if (inspected.globalValue !== undefined) {
-    await config.update(setting, undefined, vscode.ConfigurationTarget.Global);
-  }
-  if (inspected.workspaceValue !== undefined) {
-    await config.update(setting, undefined, vscode.ConfigurationTarget.Workspace);
-  }
-  if (inspected.workspaceFolderValue !== undefined) {
-    await config.update(setting, undefined, vscode.ConfigurationTarget.WorkspaceFolder);
-  }
-}
-
-export async function migrateLegacyApiKeys(context: vscode.ExtensionContext): Promise<string[]> {
-  const config = vscode.workspace.getConfiguration('askii');
-  const problems: string[] = [];
-
-  for (const provider of PROVIDERS) {
-    if (!provider.secretSetting) {
-      continue;
-    }
-    const secretKey = SECRET_KEYS[provider.id];
-    if (!secretKey) {
-      continue;
-    }
-    const inspected = config.inspect<string>(provider.secretSetting);
-    const legacyValue = getLegacyCredentialValue(inspected);
-    if (!legacyValue) {
-      continue;
-    }
-
-    try {
-      await migrateLegacyCredential(secretKey, legacyValue, context.secrets, () =>
-        clearLegacySetting(config, provider.secretSetting!, inspected),
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      problems.push(`${provider.label}: ${message}`);
-    }
-  }
-
-  return problems;
 }
 
 export async function isProviderStructurallyConfigured(provider: ProviderId): Promise<boolean> {

@@ -2,9 +2,9 @@
 const ASKII_DATA = JSON.parse(document.getElementById('askii-data').textContent);
 const vscode = acquireVsCodeApi();
 const state = ASKII_DATA.state;
-const screens = { provider: document.getElementById('providerScreen'), models: document.getElementById('modelsScreen'), options: document.getElementById('optionsScreen'), wiki: document.getElementById('wikiScreen') };
+const screens = { provider: document.getElementById('providerScreen'), models: document.getElementById('modelsScreen'), options: document.getElementById('optionsScreen'), wiki: document.getElementById('wikiScreen'), advanced: document.getElementById('advancedScreen') };
 const dots = Array.from(document.querySelectorAll('.dot'));
-const stepIndex = { provider: 0, models: 1, options: 2, wiki: 3 };
+const stepIndex = { provider: 0, models: 1, options: 2, wiki: 3, advanced: 4 };
 let selectedProvider = state.provider;
 let currentStep = state.step;
 
@@ -48,13 +48,22 @@ document.getElementById('inlineCompletionEagerness').value = state.options.inlin
 document.getElementById('inlineHelperMode').value = state.options.inlineHelperMode;
 document.getElementById('formatAfterEdit').checked = state.options.formatAfterEdit;
 document.getElementById('doAutoConfirm').checked = state.options.doAutoConfirm;
+document.getElementById('controlAutoConfirm').checked = state.options.controlAutoConfirm;
+document.getElementById('doMaxRounds').value = state.options.doMaxRounds;
+document.getElementById('browserHeadless').checked = state.options.browserHeadless;
 document.getElementById('wikiEnabled').checked = state.options.wikiEnabled;
 document.getElementById('wikiPathInput').value = state.options.wikiPath;
 document.getElementById('wikiAutoReload').checked = state.options.wikiAutoReload;
 document.getElementById('codeWikiEnabled').checked = state.options.codeWikiEnabled;
 document.getElementById('codeWikiAutoReload').checked = state.options.codeWikiAutoReload;
 document.getElementById('chromePathInput').value = state.options.chromePath;
+document.getElementById('commitMessageStyle').value = state.options.commitMessageStyle;
 document.getElementById('commitRulesInput').value = state.options.commitMessageInstructions;
+document.getElementById('noteReminderSound').checked = state.options.noteReminderSound;
+document.getElementById('noteSnoozeMinutes').value = state.options.noteSnoozeMinutes;
+document.getElementById('requestTimeoutSeconds').value = state.options.requestTimeoutSeconds;
+document.getElementById('maxOutputTokens').value = state.options.maxOutputTokens;
+document.getElementById('inlineExcludeGlobs').value = state.options.inlineExcludeGlobs.join('\n');
 
 document.getElementById('providerNext').addEventListener('click', () => {
   const definition = providerDefinition(); const apiKey = document.getElementById('apiKey').value.trim(); const serverUrl = document.getElementById('serverUrl').value.trim();
@@ -72,15 +81,18 @@ document.getElementById('modelsNext').addEventListener('click', () => {
 document.getElementById('optionsBack').addEventListener('click', () => showStep('models'));
 document.getElementById('optionsNext').addEventListener('click', () => showStep('wiki'));
 document.getElementById('wikiBack').addEventListener('click', () => showStep('options'));
-function setFinalActions(disabled) { document.getElementById('optionsIgnore').disabled = disabled; document.getElementById('ignore').disabled = disabled; document.getElementById('finish').disabled = disabled; }
+document.getElementById('wikiNext').addEventListener('click', () => showStep('advanced'));
+document.getElementById('advancedBack').addEventListener('click', () => showStep('wiki'));
+function setFinalActions(disabled) { document.getElementById('optionsIgnore').disabled = disabled; document.getElementById('ignore').disabled = disabled; document.getElementById('advancedIgnore').disabled = disabled; document.getElementById('finish').disabled = disabled; }
 function requestIgnore() { setFinalActions(true); vscode.postMessage({ type: 'ignore' }); }
 document.getElementById('optionsIgnore').addEventListener('click', requestIgnore);
 document.getElementById('ignore').addEventListener('click', requestIgnore);
+document.getElementById('advancedIgnore').addEventListener('click', requestIgnore);
 function wirePathPicker(inputId, buttonId, target) { document.getElementById(buttonId).addEventListener('click', () => vscode.postMessage({ type: 'pickPath', target, current: document.getElementById(inputId).value.trim() })); }
 wirePathPicker('wikiPathInput', 'wikiPathBrowse', 'wikiPath');
 wirePathPicker('chromePathInput', 'chromePathBrowse', 'chromePath');
 wirePathPicker('commitRulesInput', 'commitRulesBrowse', 'commitMessageInstructions');
-function finishPayload() { return { inlineCompletionEnabled: document.getElementById('inlineCompletionEnabled').checked, inlineCompletionEagerness: document.getElementById('inlineCompletionEagerness').value, inlineHelperMode: document.getElementById('inlineHelperMode').value, formatAfterEdit: document.getElementById('formatAfterEdit').checked, doAutoConfirm: document.getElementById('doAutoConfirm').checked, wikiEnabled: document.getElementById('wikiEnabled').checked, wikiPath: document.getElementById('wikiPathInput').value.trim(), wikiAutoReload: document.getElementById('wikiAutoReload').checked, codeWikiEnabled: document.getElementById('codeWikiEnabled').checked, codeWikiAutoReload: document.getElementById('codeWikiAutoReload').checked, chromePath: document.getElementById('chromePathInput').value.trim(), commitMessageInstructions: document.getElementById('commitRulesInput').value.trim() }; }
+function finishPayload() { return { inlineCompletionEnabled: document.getElementById('inlineCompletionEnabled').checked, inlineCompletionEagerness: document.getElementById('inlineCompletionEagerness').value, inlineHelperMode: document.getElementById('inlineHelperMode').value, formatAfterEdit: document.getElementById('formatAfterEdit').checked, doAutoConfirm: document.getElementById('doAutoConfirm').checked, controlAutoConfirm: document.getElementById('controlAutoConfirm').checked, doMaxRounds: document.getElementById('doMaxRounds').value, browserHeadless: document.getElementById('browserHeadless').checked, wikiEnabled: document.getElementById('wikiEnabled').checked, wikiPath: document.getElementById('wikiPathInput').value.trim(), wikiAutoReload: document.getElementById('wikiAutoReload').checked, codeWikiEnabled: document.getElementById('codeWikiEnabled').checked, codeWikiAutoReload: document.getElementById('codeWikiAutoReload').checked, chromePath: document.getElementById('chromePathInput').value.trim(), commitMessageStyle: document.getElementById('commitMessageStyle').value, commitMessageInstructions: document.getElementById('commitRulesInput').value.trim(), noteReminderSound: document.getElementById('noteReminderSound').checked, noteSnoozeMinutes: document.getElementById('noteSnoozeMinutes').value, requestTimeoutSeconds: document.getElementById('requestTimeoutSeconds').value, maxOutputTokens: document.getElementById('maxOutputTokens').value, inlineExcludeGlobs: document.getElementById('inlineExcludeGlobs').value }; }
 document.getElementById('finish').addEventListener('click', () => { setFinalActions(true); vscode.postMessage({ type: 'finish', ...finishPayload() }); });
 
 window.addEventListener('message', (event) => {
@@ -93,7 +105,7 @@ window.addEventListener('message', (event) => {
   else if (message.type === 'setupError') {
     if (message.operation === 'validateProvider') { document.getElementById('providerLoader').classList.remove('show'); document.getElementById('providerNext').disabled = false; showError('providerError', message.message); }
     else if (message.operation === 'saveModels') { document.getElementById('modelsNext').disabled = false; showError('modelsError', message.message); }
-    else { setFinalActions(false); showError(currentStep === 'options' ? 'optionsError' : 'wikiError', message.message); }
+    else { setFinalActions(false); showError(currentStep === 'options' ? 'optionsError' : currentStep === 'advanced' ? 'advancedError' : 'wikiError', message.message); }
   }
 });
 selectProvider(selectedProvider); renderModels(); showStep(currentStep);

@@ -16,13 +16,16 @@ import {
   buildModelSettingUpdates,
   chooseInitialModels,
   getProviderDefinition,
+  isCommitMessageStyle,
   isProviderId,
+  parseBoundedInt,
+  parseGlobList,
 } from './setupCore';
 
 export const SETUP_COMPLETE_KEY = 'askii.setup.completed';
 const SETUP_PROGRESS_KEY = 'askii.setup.progress';
 
-type SetupStep = 'provider' | 'models' | 'options' | 'wiki';
+type SetupStep = 'provider' | 'models' | 'options' | 'wiki' | 'advanced';
 
 interface SetupProgress {
   step: Exclude<SetupStep, 'provider'>;
@@ -39,6 +42,9 @@ interface OptionalSettings {
   inlineHelperMode: 'off' | 'helpful' | 'funny' | 'wiki';
   formatAfterEdit: boolean;
   doAutoConfirm: boolean;
+  controlAutoConfirm: boolean;
+  doMaxRounds: number;
+  browserHeadless: boolean;
   wikiEnabled: boolean;
   wikiPath: string;
   wikiAutoReload: boolean;
@@ -46,6 +52,12 @@ interface OptionalSettings {
   codeWikiAutoReload: boolean;
   chromePath: string;
   commitMessageInstructions: string;
+  commitMessageStyle: 'oneliner' | 'brief' | 'descriptive';
+  noteReminderSound: boolean;
+  noteSnoozeMinutes: number;
+  requestTimeoutSeconds: number;
+  maxOutputTokens: number;
+  inlineExcludeGlobs: string[];
 }
 
 interface SetupState {
@@ -66,6 +78,7 @@ let currentPanel: vscode.WebviewPanel | undefined;
 function getOptionalSettings(config: vscode.WorkspaceConfiguration): OptionalSettings {
   const eagerness = config.get<string>('inlineCompletionEagerness') ?? 'medium';
   const helperMode = config.get<string>('inlineHelperMode') ?? 'off';
+  const commitStyle = config.get<string>('commitMessageStyle');
   return {
     inlineCompletionEnabled: config.get<boolean>('inlineCompletionEnabled') ?? false,
     inlineCompletionEagerness: eagerness === 'low' || eagerness === 'high' ? eagerness : 'medium',
@@ -75,6 +88,9 @@ function getOptionalSettings(config: vscode.WorkspaceConfiguration): OptionalSet
         : 'off',
     formatAfterEdit: config.get<boolean>('formatAfterEdit') ?? false,
     doAutoConfirm: config.get<boolean>('doAutoConfirm') ?? false,
+    controlAutoConfirm: config.get<boolean>('controlAutoConfirm') ?? false,
+    doMaxRounds: config.get<number>('doMaxRounds') ?? 20,
+    browserHeadless: config.get<boolean>('browserHeadless') ?? false,
     wikiEnabled: config.get<boolean>('wikiEnabled') ?? false,
     wikiPath: config.get<string>('wikiPath') ?? '',
     wikiAutoReload: config.get<boolean>('wikiAutoReload') ?? false,
@@ -82,6 +98,12 @@ function getOptionalSettings(config: vscode.WorkspaceConfiguration): OptionalSet
     codeWikiAutoReload: config.get<boolean>('codeWikiAutoReload') ?? false,
     chromePath: config.get<string>('chromePath') ?? '',
     commitMessageInstructions: config.get<string>('commitMessageInstructions') ?? '',
+    commitMessageStyle: isCommitMessageStyle(commitStyle) ? commitStyle : 'oneliner',
+    noteReminderSound: config.get<boolean>('noteReminderSound') ?? true,
+    noteSnoozeMinutes: config.get<number>('noteSnoozeMinutes') ?? 10,
+    requestTimeoutSeconds: config.get<number>('requestTimeoutSeconds') ?? 600,
+    maxOutputTokens: config.get<number>('maxOutputTokens') ?? 0,
+    inlineExcludeGlobs: config.get<string[]>('inlineExcludeGlobs') ?? [],
   };
 }
 
@@ -320,6 +342,7 @@ async function handleModelSave(
 function parseOptionalSettings(message: Record<string, unknown>): OptionalSettings {
   const eagerness = messageString(message, 'inlineCompletionEagerness');
   const helperMode = messageString(message, 'inlineHelperMode');
+  const commitStyle = messageString(message, 'commitMessageStyle');
   if (eagerness !== 'low' && eagerness !== 'medium' && eagerness !== 'high') {
     throw new Error('Choose a valid inline completion eagerness.');
   }
@@ -331,12 +354,18 @@ function parseOptionalSettings(message: Record<string, unknown>): OptionalSettin
   ) {
     throw new Error('Choose a valid inline helper mode.');
   }
+  if (!isCommitMessageStyle(commitStyle)) {
+    throw new Error('Choose a valid commit message style.');
+  }
   return {
     inlineCompletionEnabled: message.inlineCompletionEnabled === true,
     inlineCompletionEagerness: eagerness,
     inlineHelperMode: helperMode,
     formatAfterEdit: message.formatAfterEdit === true,
     doAutoConfirm: message.doAutoConfirm === true,
+    controlAutoConfirm: message.controlAutoConfirm === true,
+    doMaxRounds: parseBoundedInt('Max agent rounds', messageString(message, 'doMaxRounds'), 1),
+    browserHeadless: message.browserHeadless === true,
     wikiEnabled: message.wikiEnabled === true,
     wikiPath: messageString(message, 'wikiPath'),
     wikiAutoReload: message.wikiAutoReload === true,
@@ -344,6 +373,24 @@ function parseOptionalSettings(message: Record<string, unknown>): OptionalSettin
     codeWikiAutoReload: message.codeWikiAutoReload === true,
     chromePath: messageString(message, 'chromePath'),
     commitMessageInstructions: messageString(message, 'commitMessageInstructions'),
+    commitMessageStyle: commitStyle,
+    noteReminderSound: message.noteReminderSound === true,
+    noteSnoozeMinutes: parseBoundedInt(
+      'Snooze duration',
+      messageString(message, 'noteSnoozeMinutes'),
+      1,
+    ),
+    requestTimeoutSeconds: parseBoundedInt(
+      'Request timeout',
+      messageString(message, 'requestTimeoutSeconds'),
+      0,
+    ),
+    maxOutputTokens: parseBoundedInt(
+      'Max output tokens',
+      messageString(message, 'maxOutputTokens'),
+      0,
+    ),
+    inlineExcludeGlobs: parseGlobList(messageString(message, 'inlineExcludeGlobs')),
   };
 }
 
@@ -450,7 +497,7 @@ export function getSetupHtml(webview: vscode.Webview, nonce: string, state: Setu
       <h1>Welcome to ASKII</h1>
       <p class="subtitle">Connect a provider, choose your models, and tune the experience.</p>
     </header>
-    <div class="steps" aria-label="Setup progress"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+    <div class="steps" aria-label="Setup progress"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
 
     <section id="providerScreen" class="screen panel">
       <h2>Choose a provider</h2><p class="lead">Your API key is encrypted by VS Code and never stored in settings.</p>
@@ -476,12 +523,17 @@ export function getSetupHtml(webview: vscode.Webview, nonce: string, state: Setu
     </section>
 
     <section id="optionsScreen" class="screen panel">
-      <h2>Optional settings</h2><p class="lead">Applied globally when you finish setup. Ignore keeps their current values.</p>
+      <h2>Features &amp; agents</h2><p class="lead">Applied globally when you finish setup. Ignore keeps their current values.</p>
       <div class="option"><input id="inlineCompletionEnabled" type="checkbox"><div class="option-body"><label for="inlineCompletionEnabled">Inline code completion</label><span class="hint">Show Copilot-style ghost-text suggestions.</span><select id="inlineCompletionEagerness"><option value="low">Low — 1200 ms</option><option value="medium">Medium — 500 ms</option><option value="high">High — 200 ms</option></select></div></div>
       <div class="option"><div class="option-body"><label for="inlineHelperMode">Inline helper mode</label><span class="hint">Add concise explanations, jokes, or wiki context beside code.</span><select id="inlineHelperMode"><option value="off">Off</option><option value="helpful">Helpful</option><option value="funny">Funny</option><option value="wiki">Wiki</option></select></div></div>
       <div class="option"><input id="formatAfterEdit" type="checkbox"><div class="option-body"><label for="formatAfterEdit">Format after edits</label><span class="hint">Run the configured formatter after ASKII changes a file.</span></div></div>
-      <div class="option"><input id="doAutoConfirm" type="checkbox"><div class="option-body"><label for="doAutoConfirm">Automatically confirm actions</label><span class="hint danger">ASKII may create, modify, or delete files without asking first.</span></div></div>
+      <h3>Agents</h3>
+      <div class="option"><input id="doAutoConfirm" type="checkbox"><div class="option-body"><label for="doAutoConfirm">Automatically confirm Do actions</label><span class="hint danger">ASKII may create, modify, or delete files without asking first.</span></div></div>
+      <div class="option"><input id="controlAutoConfirm" type="checkbox"><div class="option-body"><label for="controlAutoConfirm">Automatically confirm Control actions</label><span class="hint danger">ASKII may move the mouse, type, and navigate without asking first.</span></div></div>
+      <div class="option"><div class="option-body"><label for="doMaxRounds">Max agent rounds</label><span class="hint">Maximum interaction rounds per Do or Control task before ASKII stops.</span><input id="doMaxRounds" type="number" min="1" step="1"></div></div>
+      <h3>Browser</h3>
       <div class="option"><div class="option-body"><label for="chromePathInput">Browser executable</label><span class="hint">Optional — Chromium-based browser used by ASKII Control browser mode (Chrome, Edge, Chromium, Brave). Leave empty to auto-detect.</span><div class="pick-row"><input id="chromePathInput" type="text" spellcheck="false" placeholder="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"><button id="chromePathBrowse" class="btn secondary small" type="button">Browse…</button></div></div></div>
+      <div class="option"><input id="browserHeadless" type="checkbox"><div class="option-body"><label for="browserHeadless">Run the browser headless</label><span class="hint">Run the ASKII Control browser without a visible window.</span></div></div>
       <div id="optionsError" class="error" role="alert"></div>
       <div class="actions"><button id="optionsBack" class="btn secondary">Back</button><span class="spacer"></span><button id="optionsIgnore" class="btn secondary">Ignore</button><button id="optionsNext" class="btn">Next</button></div>
     </section>
@@ -494,9 +546,24 @@ export function getSetupHtml(webview: vscode.Webview, nonce: string, state: Setu
       <h3>Code wiki</h3>
       <div class="option"><input id="codeWikiEnabled" type="checkbox"><div class="option-body"><label for="codeWikiEnabled">Enable code wiki</label><span class="hint">Vector index over workspace code (code files only) used as retrieval context for Ask, Edit, and Do. Runs the embeddinggemma2 model locally — the first index build downloads it once — then run ASKII: Reload Wikis.</span></div></div>
       <div class="option"><input id="codeWikiAutoReload" type="checkbox"><div class="option-body"><label for="codeWikiAutoReload">Auto-reload code wiki on startup</label><span class="hint">Rebuild the code wiki index whenever the extension starts. Unchanged files are reused, so only edits are re-embedded. Requires code wiki.</span></div></div>
+      <div class="option"><div class="option-body"><label for="commitMessageStyle">Commit message style</label><span class="hint">Shape of the Git commit messages ASKII generates.</span><select id="commitMessageStyle"><option value="oneliner">One-liner — subject only</option><option value="brief">Brief — subject and short body</option><option value="descriptive">Descriptive — detailed body</option></select></div></div>
       <div class="option"><div class="option-body"><label for="commitRulesInput">Commit rules file</label><span class="hint">.md file with custom instructions appended to the commit message prompt. Absolute or workspace-relative. Leave empty for the built-in rules.</span><div class="pick-row"><input id="commitRulesInput" type="text" spellcheck="false" placeholder="Absolute or workspace-relative .md path"><button id="commitRulesBrowse" class="btn secondary small" type="button">Browse…</button></div></div></div>
       <div id="wikiError" class="error" role="alert"></div>
-      <div class="actions"><button id="wikiBack" class="btn secondary">Back</button><span class="spacer"></span><button id="ignore" class="btn secondary">Ignore</button><button id="finish" class="btn">Finish</button></div>
+      <div class="actions"><button id="wikiBack" class="btn secondary">Back</button><span class="spacer"></span><button id="ignore" class="btn secondary">Ignore</button><button id="wikiNext" class="btn">Next</button></div>
+    </section>
+
+    <section id="advancedScreen" class="screen panel">
+      <h2>Advanced settings</h2><p class="lead">Finish applies these globally. Ignore keeps their current values.</p>
+      <h3>Notes &amp; reminders</h3>
+      <div class="option"><input id="noteReminderSound" type="checkbox"><div class="option-body"><label for="noteReminderSound">Play a sound when a reminder fires</label><span class="hint">Chime when a note reminder notification is shown.</span></div></div>
+      <div class="option"><div class="option-body"><label for="noteSnoozeMinutes">Snooze duration</label><span class="hint">Minutes a note reminder waits before firing again when you snooze it.</span><input id="noteSnoozeMinutes" type="number" min="1" step="1"></div></div>
+      <h3>Reliability</h3>
+      <div class="option"><div class="option-body"><label for="requestTimeoutSeconds">Request timeout (seconds)</label><span class="hint">Seconds before an LLM request is cancelled. 0 waits forever — useful for slow local models.</span><input id="requestTimeoutSeconds" type="number" min="0" step="1"></div></div>
+      <div class="option"><div class="option-body"><label for="maxOutputTokens">Max output tokens</label><span class="hint">Cap on the tokens generated per request. 0 uses the provider default.</span><input id="maxOutputTokens" type="number" min="0" step="1"></div></div>
+      <h3>Privacy</h3>
+      <div class="option"><div class="option-body"><label for="inlineExcludeGlobs">Never send these files (inline features)</label><span class="hint">Files matching these globs are never sent by inline suggestions or completion. One glob per line.</span><textarea id="inlineExcludeGlobs" rows="5" spellcheck="false" placeholder="**/.env&#10;**/*.pem&#10;**/secrets/**"></textarea></div></div>
+      <div id="advancedError" class="error" role="alert"></div>
+      <div class="actions"><button id="advancedBack" class="btn secondary">Back</button><span class="spacer"></span><button id="advancedIgnore" class="btn secondary">Ignore</button><button id="finish" class="btn">Finish</button></div>
     </section>
   </main>
   <script id="askii-data" type="application/json">${assets.data}</script>

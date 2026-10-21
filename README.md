@@ -7,7 +7,7 @@ An AI code assistant for VS Code with style — ask about your code, have it edi
 ## Quick start
 
 1. Install ASKII from the VS Code Marketplace — or build it from source (see [Development](#development))
-2. Run **ASKII: Open Setup** (`Ctrl+Alt+K S` / `Cmd+Alt+K S`) — a short wizard that walks you through provider, API key, models, options and wiki setup
+2. Run **ASKII: Open Setup** (`Ctrl+Alt+K S` / `Cmd+Alt+K S`) — a short wizard that walks you through provider, API key, models, options, wiki and advanced settings (notes, reliability, privacy)
 3. Select some code and run **ASKII: Ask** (`Ctrl+Alt+K A`)
 
 ASKII uses **ASKII Cloud** unless you pick another provider — see [Privacy & data](#privacy--data) for what is sent where.
@@ -23,8 +23,7 @@ ASKII uses **ASKII Cloud** unless you pick another provider — see [Privacy & d
 | Notes, Tasks & Reminders        | `Ctrl+Alt+K N` | Notes / tasks / reminders panel with search and screenshots                                                         |
 | Reload Wikis                    | `Ctrl+Alt+K W` | Rebuild the enabled wiki indexes (docs and/or code)                                                                 |
 | Clear Cache                     | `Ctrl+Alt+K X` | Clear cached inline explanations and completions                                                                    |
-| Open Setup                      | `Ctrl+Alt+K S` | Re-run the setup wizard (providers, API keys, models, options)                                                      |
-| Clear Stored API Key            | —              | Remove a provider's API key from VS Code secret storage                                                             |
+| Open Setup                      | `Ctrl+Alt+K S` | Re-run the setup wizard (providers, API keys, models, options, wiki, advanced settings)                             |
 | Generate Commit Message         | SCM toolbar ✦  | Write a commit message for the staged (or working-tree) diff                                                        |
 | Code Review Uncommitted Changes | SCM toolbar    | Review staged, unstaged and untracked changes                                                                       |
 
@@ -55,7 +54,7 @@ Safety rails that auto-confirm never turns off:
 
 ### ASKII Control
 
-Pick **Screen** or **Browser**, then describe the task. ASKII screenshots the current state each round and proposes the next action with its reasoning, and runs it after you confirm (`askii.controlAutoConfirm` skips that — it is separate from `askii.doAutoConfirm`):
+Pick **Screen** or **Browser**, then describe the task. ASKII screenshots the current state each round, proposes the next action with its reasoning, and runs it without asking by default (set `askii.controlAutoConfirm` to `false` to confirm each action — it is separate from `askii.doAutoConfirm`):
 
 - **Screen** — `mouse_move`, `mouse_left_click`, `mouse_right_click`, `mouse_double_click`, `mouse_drag`, `mouse_scroll`, `keyboard_input`, `key_press`, `click_text`, `DONE`. A `click_text` target is located before you are asked, so you confirm the actual click position
 - **Browser** — `goto`, `click`, `type`, `wait_for`, `back`, `forward`, `scroll`, `click_text`, `DONE` (Puppeteer). Only `http(s)` pages can be opened (no `file:`, `javascript:` or `chrome:` URLs), Chromium's sandbox stays on, and text typed into password-like fields is masked in the log
@@ -123,7 +122,7 @@ The **Code Review Uncommitted Changes** button (checklist icon) in the Source Co
 | Anthropic                             | Cloud | API key                                                                                |
 | [opencode Go](https://opencode.ai/go) | Cloud | API key                                                                                |
 
-**API keys** are entered in **ASKII: Open Setup** and stored in VS Code's **secret storage** (the OS keychain) — never in `settings.json`. Keys left over in the old `askii.*ApiKey` settings are moved there on startup and the settings are cleared. **ASKII: Clear Stored API Key** removes a key.
+**API keys** are entered in **ASKII: Open Setup** and stored in VS Code's **secret storage** (the OS keychain) — never in `settings.json`.
 
 Each feature group picks its own platform and model, so you can mix providers:
 
@@ -153,7 +152,6 @@ Wiki embeddings run **locally** (embeddinggemma2) — documents and code are nev
 ## Security
 
 - **Restricted Mode:** in an untrusted workspace ASKII Do is disabled, wikis are not rebuilt automatically, and the workspace's `.vscode/settings.json` cannot change which platform, files or features ASKII uses
-- **Machine-scoped settings:** server URLs (`askii.ollamaUrl`, `askii.lmStudioUrl`, `askii.openaiUrl`), `askii.chromePath`, `askii.doAutoConfirm` and `askii.controlAutoConfirm` can only be set in your user settings, so a cloned repo cannot redirect your API key or turn off confirmations
 - See [ASKII Do](#askii-do) and [ASKII Control](#askii-control) for the agents' safety rails, and [SECURITY.md](SECURITY.md) to report a vulnerability
 
 ## Configuration
@@ -170,9 +168,9 @@ All settings live in VS Code Settings under the `askii.*` namespace.
 | `askii.llmInlineModel`        | `askii-fast`             | Model for that group                                               |
 | `askii.llmVisionPlatform`     | `askiicloud`             | Platform for Control                                               |
 | `askii.llmVisionModel`        | `askii-smart`            | Vision-capable model for Control                                   |
-| `askii.ollamaUrl`             | `http://localhost:11434` | Ollama server (user setting only)                                  |
-| `askii.lmStudioUrl`           | `ws://localhost:1234`    | LM Studio server (user setting only)                               |
-| `askii.openaiUrl`             | _(empty)_                | OpenAI-compatible base URL (user setting only)                     |
+| `askii.ollamaUrl`             | `http://localhost:11434` | Ollama server                                                      |
+| `askii.lmStudioUrl`           | `ws://localhost:1234`    | LM Studio server                                                   |
+| `askii.openaiUrl`             | _(empty)_                | OpenAI-compatible base URL                                         |
 | `askii.requestTimeoutSeconds` | `600`                    | Cancel a request after this long (`0` = never)                     |
 | `askii.maxOutputTokens`       | `0`                      | Output-token cap per reply (`0` = provider default; Anthropic 8192) |
 
@@ -198,7 +196,7 @@ All settings live in VS Code Settings under the `askii.*` namespace.
 | ---------------------------- | --------- | ----------------------------------------------------------------------- |
 | `askii.doMaxRounds`          | `20`      | Max rounds for Do / Control                                             |
 | `askii.doAutoConfirm`        | `false`   | Skip Do's file-edit confirmations (never `run` or sensitive files)       |
-| `askii.controlAutoConfirm`   | `false`   | Run Control actions without asking                                      |
+| `askii.controlAutoConfirm`   | `true`    | Run Control actions without asking                                      |
 | `askii.formatAfterEdit`      | `false`   | Format files after Edit / Do                                            |
 | `askii.browserHeadless`      | `false`   | Hide the Puppeteer browser window                                       |
 | `askii.chromePath`           | _(empty)_ | Browser executable (empty = auto-detect)                                |

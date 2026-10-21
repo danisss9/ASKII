@@ -12,12 +12,10 @@ First stable release: safe by default, cancellable everywhere, no silent data lo
 
 - **ASKII Do sandbox follows symlinks**: a symlink (or dangling link) inside the workspace that leads outside it is now blocked for every read and write, search no longer follows symlinks, and Undo only restores files inside the workspace
 - **Protected paths**: Do never writes inside `.git/` (hooks would run on the next commit) or `.askii/` (its own backups); files that can make VS Code or git run code — `.vscode/`, `.husky/`, `.githooks/`, `.devcontainer/` — are always confirmed, even with `askii.doAutoConfirm` / `--yes`
-- **Machine-scoped settings**: `askii.ollamaUrl`, `askii.lmStudioUrl`, `askii.openaiUrl`, `askii.chromePath` and `askii.doAutoConfirm` can only be set in user settings, so a repository's `.vscode/settings.json` can no longer redirect your API key to another server or turn off confirmations
 - **Restricted Mode support**: in untrusted workspaces ASKII Do is disabled, wikis are not auto-rebuilt, and workspace values of sensitive settings are ignored
 - **Control**: new `askii.controlAutoConfirm` — Control no longer inherits `askii.doAutoConfirm`; `click_text` targets are located before you confirm; the browser only opens `http(s)` pages, keeps Chromium's sandbox (except as root on Linux) and masks text typed into password fields in logs
 - **Inline privacy**: new `askii.inlineExcludeGlobs` keeps `.env` files, keys and credentials out of inline completion and explanations
 - `askii.commitMessageInstructions` only reads `.md` / `.txt` files; the notes panel can only open ASKII's own screenshots; all webviews use nonce-only style policies
-- Legacy `askii.*ApiKey` settings are declared (deprecated) so the move to secret storage can actually clear them; new **ASKII: Clear Stored API Key** command
 - New `SECURITY.md` with a threat model and private reporting instructions
 
 ### Added

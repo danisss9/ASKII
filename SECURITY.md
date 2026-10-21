@@ -31,7 +31,7 @@ model's output is untrusted.
 
 **ASKII Control (screen / browser agent)**
 
-- Each action is shown and confirmed before it runs unless you set `askii.controlAutoConfirm`
+- Screen and browser actions run without asking by default; set `askii.controlAutoConfirm` to `false` to require a confirmation for each action
 - Actions are validated before execution; malformed sequences are rejected
 - The browser only opens `http(s)` pages (no `file:`, `javascript:` or browser-internal URLs) and
   keeps Chromium's sandbox enabled (except as root on Linux, where Chromium requires disabling it)
@@ -41,9 +41,7 @@ model's output is untrusted.
 **Credentials and settings**
 
 - API keys are stored in VS Code secret storage (the OS keychain), never in `settings.json`
-- Settings that decide where requests go or whether actions need confirmation are machine-scoped,
-  so a repository's `.vscode/settings.json` cannot change them; in Restricted Mode workspace values
-  of other sensitive settings are ignored too
+- In Restricted Mode (untrusted workspaces) workspace values of sensitive settings are ignored
 - Inline features never send files matching `askii.inlineExcludeGlobs` (secrets, keys, credentials)
 - CLI: prefer `ASKII_*_KEY` environment variables over `--*-key` flags, which are visible in the
   process list and your shell history

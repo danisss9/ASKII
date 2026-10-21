@@ -1,7 +1,7 @@
 :root { color-scheme: light dark; }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; color: var(--vscode-foreground); background: radial-gradient(circle at 50% -20%, var(--vscode-editor-inactiveSelectionBackground), transparent 50%), var(--vscode-editor-background); font-family: var(--vscode-font-family, sans-serif); }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 .shell { width: min(840px, calc(100% - 32px)); margin: 0 auto; padding: 30px 0 48px; }
 .hero { text-align: center; margin-bottom: 24px; animation: welcome .65s ease both; }
 .mascot { font: 700 28px/1.2 var(--vscode-editor-font-family, monospace); letter-spacing: 2px; display: inline-block; animation: float 2.6s ease-in-out infinite; }
@@ -26,8 +26,9 @@ h1 { font-size: 26px; margin: 10px 0 6px; }
 .field { margin-bottom: 14px; }
 .field label, .field-title { display: block; font-weight: 600; margin-bottom: 6px; }
 .hint { display: block; color: var(--vscode-descriptionForeground); font-size: 12px; margin-top: 5px; line-height: 1.4; }
-input, select { width: 100%; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border)); border-radius: 5px; padding: 9px 10px; outline: none; }
-input:focus, select:focus { border-color: var(--vscode-focusBorder); outline: 1px solid var(--vscode-focusBorder); }
+input, select, textarea { width: 100%; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border)); border-radius: 5px; padding: 9px 10px; outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--vscode-focusBorder); outline: 1px solid var(--vscode-focusBorder); }
+textarea { resize: vertical; min-height: 84px; font-family: var(--vscode-editor-font-family, monospace); font-size: 13px; }
 .saved { color: var(--vscode-testing-iconPassed, #73c991); font-size: 12px; margin-left: 6px; }
 .models { display: grid; gap: 14px; }
 .model-card { background: var(--vscode-editor-background); border: 1px solid var(--vscode-editorWidget-border); border-radius: 9px; padding: 15px; }
@@ -41,7 +42,8 @@ input:focus, select:focus { border-color: var(--vscode-focusBorder); outline: 1p
 .option input[type=checkbox] { width: auto; margin-top: 3px; }
 .option-body { flex: 1; }
 .option-body label { font-weight: 600; display: block; }
-.option select { margin-top: 8px; max-width: 280px; }
+.option select, .option input[type=number] { margin-top: 8px; max-width: 280px; }
+.option textarea { margin-top: 8px; }
 .danger { color: var(--vscode-errorForeground); }
 .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; }
 .actions .spacer { flex: 1; }

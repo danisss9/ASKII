@@ -5,13 +5,14 @@ import {
   buildModelSettingUpdates,
   chooseInitialModels,
   isAuthenticationError,
+  isCommitMessageStyle,
   isUnsupportedModelListError,
   normalizeModelIds,
+  parseBoundedInt,
+  parseGlobList,
 } from '../src/setupCore';
 import {
   ProviderConnectionError,
-  getLegacyCredentialValue,
-  migrateLegacyCredential,
   withDiscoveryTimeout,
 } from '../src/setupCore';
 suite('src/setupCore', () => {
@@ -62,82 +63,35 @@ suite('src/setupCore', () => {
     );
   });
 
+  test('bounded integer parsing accepts whole values and rejects blank, fractional, and small ones', () => {
+    assert.strictEqual(parseBoundedInt('Max rounds', ' 25 ', 1), 25);
+    assert.strictEqual(parseBoundedInt('Timeout', '0', 0), 0);
+    assert.throws(() => parseBoundedInt('Max rounds', '', 1), /Max rounds/);
+    assert.throws(() => parseBoundedInt('Max rounds', '12.5', 1), /Max rounds/);
+    assert.throws(() => parseBoundedInt('Max rounds', 'abc', 1), /Max rounds/);
+    assert.throws(() => parseBoundedInt('Snooze', '0', 1), /at least 1/);
+  });
+
+  test('glob lists split on lines and commas, then trim and dedupe', () => {
+    assert.deepStrictEqual(parseGlobList('**/.env\n **/*.pem ,\n**/.env\n\n'), [
+      '**/.env',
+      '**/*.pem',
+    ]);
+    assert.deepStrictEqual(parseGlobList(''), []);
+  });
+
+  test('commit message style accepts only the known values', () => {
+    assert.strictEqual(isCommitMessageStyle('brief'), true);
+    assert.strictEqual(isCommitMessageStyle('descriptive'), true);
+    assert.strictEqual(isCommitMessageStyle('concise'), false);
+    assert.strictEqual(isCommitMessageStyle(undefined), false);
+  });
+
   test('discovery error classification distinguishes authentication and unsupported endpoints', () => {
     assert.strictEqual(isAuthenticationError({ status: 401 }), true);
     assert.strictEqual(isAuthenticationError({ response: { status: 403 } }), true);
     assert.strictEqual(isUnsupportedModelListError({ status: 404 }), true);
     assert.strictEqual(isUnsupportedModelListError({ status: 500 }), false);
-  });
-
-  test('legacy credential precedence is folder, workspace, then global', () => {
-    assert.strictEqual(
-      getLegacyCredentialValue({
-        globalValue: 'global',
-        workspaceValue: 'workspace',
-        workspaceFolderValue: 'folder',
-      }),
-      'folder',
-    );
-  });
-
-  test('legacy migration stores before clearing and preserves an existing secret', async () => {
-    const events: string[] = [];
-    const values = new Map<string, string>();
-    await migrateLegacyCredential(
-      'secret',
-      'legacy',
-      {
-        get: async (key) => values.get(key),
-        store: async (key, value) => {
-          events.push('store');
-          values.set(key, value);
-        },
-      },
-      async () => {
-        events.push('clear');
-      },
-    );
-    assert.deepStrictEqual(events, ['store', 'clear']);
-    assert.strictEqual(values.get('secret'), 'legacy');
-
-    events.length = 0;
-    values.set('secret', 'existing');
-    await migrateLegacyCredential(
-      'secret',
-      'legacy',
-      {
-        get: async (key) => values.get(key),
-        store: async () => {
-          events.push('store');
-        },
-      },
-      async () => {
-        events.push('clear');
-      },
-    );
-    assert.deepStrictEqual(events, ['clear']);
-    assert.strictEqual(values.get('secret'), 'existing');
-  });
-
-  test('failed secret storage does not clear the legacy setting', async () => {
-    let cleared = false;
-    await assert.rejects(
-      migrateLegacyCredential(
-        'secret',
-        'legacy',
-        {
-          get: async () => undefined,
-          store: async () => {
-            throw new Error('credential store unavailable');
-          },
-        },
-        async () => {
-          cleared = true;
-        },
-      ),
-      /credential store unavailable/,
-    );
-    assert.strictEqual(cleared, false);
   });
 
   test('model discovery timeout returns an actionable timeout error', async () => {
