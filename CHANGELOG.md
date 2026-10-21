@@ -4,6 +4,10 @@ All notable changes to ASKII — the VS Code extension and the `askii-cli` npm p
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-21
+
+First stable release: safe by default, cancellable everywhere, no silent data loss, documented, and gated by CI.
+
 ### Security
 
 - **ASKII Do sandbox follows symlinks**: a symlink (or dangling link) inside the workspace that leads outside it is now blocked for every read and write, search no longer follows symlinks, and Undo only restores files inside the workspace

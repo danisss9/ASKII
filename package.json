@@ -2,7 +2,7 @@
   "name": "askii",
   "displayName": "ASKII",
   "description": "AI code assistant with style ( •_•)>⌐■-■ (⌐■_■) — ask, edit, agentic tasks, screen/browser control, commit messages, code review and AI notes, with your choice of LLM (ASKII Cloud, Ollama, LM Studio, OpenAI, Anthropic, opencode Go).",
-  "version": "0.6.2",
+  "version": "1.0.0",
   "icon": "icon.png",
   "publisher": "danisss9",
   "author": "danisss9",
