@@ -1,29 +1,16 @@
 import * as vscode from 'vscode';
 import { getExtensionResponseWithImage } from './providers';
-import { parseJsonFromModel } from '@common/utils';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
+import { checkControlDependencies, getMonitors } from '@common/control';
+import { browserLaunchArgs, detectBrowserExecutable } from '@common/browser';
 import {
-  buildControlSystemPrompt,
-  takeScreenshot,
-  describeAction,
-  executeControlAction,
-  getMonitors,
-  getSystemInfo,
-  parseControlResponse,
-  checkControlDependencies,
-  type ControlAction,
-  type ControlHistoryEntry,
-  type SystemInfo,
-} from '@common/control';
-import {
-  buildBrowserSystemPrompt,
-  parseBrowserResponse,
-  describeBrowserAction,
-  executeBrowserAction,
-  takePageScreenshot,
-  detectBrowserExecutable,
-  browserLaunchArgs,
-} from '@common/browser';
+  runBrowserAgent,
+  runScreenAgent,
+  type ControlAgentResult,
+  type ControlEvent,
+  type ScreenSession,
+  type VisionAsk,
+} from '@common/controlAgent';
 import {
   acquireTaskPanel,
   addTimelineEntry,
@@ -37,7 +24,6 @@ import {
   waitForFollowUp,
 } from './taskPanel';
 import { getAgentChannel, timelineSnippet } from './commandUtils';
-
 // ASKII Control — screen and browser agents. Loaded on first use (see
 // extension.ts) so jimp, screenshot-desktop and Puppeteer stay out of activation.
 
@@ -85,6 +71,195 @@ export async function askiiControlCommand() {
   await runScreenControlTask(instruction);
 }
 
+// The extension's vision call takes one prompt — the system prompt goes first
+const askVision: VisionAsk = (system, prompt, image, signal) =>
+  getExtensionResponseWithImage(system ? `${system}\n\n${prompt}` : prompt, image, signal);
+
+/**
+ * Maps Control agent events onto the task panel timeline and the output
+ * channel. Returns the event handler and the timeline-entry lookup the
+ * confirm callback needs.
+ */
+function controlTimeline(channel: vscode.OutputChannel, label: string) {
+  const entries = new Map<number, number>();
+  const emit = (event: ControlEvent): void => {
+    switch (event.type) {
+      case 'round-start':
+        channel.appendLine(`Round ${event.round}/${event.maxRounds} — taking screenshot...`);
+        entries.set(
+          event.id,
+          addTimelineEntry({
+            kind: 'round',
+            title: `Round ${event.round} of ${event.maxRounds}`,
+            status: 'pending',
+          }),
+        );
+        break;
+      case 'screenshot': {
+        if (event.note) {
+          channel.appendLine(event.note);
+        }
+        channel.appendLine('Asking AI...');
+        const entry = entries.get(event.id);
+        if (entry !== undefined) {
+          updateTimelineEntry(entry, {
+            screenshot: `data:image/png;base64,${event.image}`,
+            detail: event.note,
+          });
+        }
+        break;
+      }
+      case 'round-end': {
+        const entry = entries.get(event.id);
+        if (entry !== undefined) {
+          updateTimelineEntry(entry, { status: 'ok' });
+        }
+        break;
+      }
+      case 'parse-error':
+        channel.appendLine('Error: could not parse AI response.');
+        channel.appendLine(`Raw: ${event.raw}`);
+        addTimelineEntry({
+          kind: 'error',
+          title: 'Could not parse AI response',
+          detail: timelineSnippet(event.raw, 1000),
+        });
+        break;
+      case 'done':
+        channel.appendLine(`\nDone! ${getRandomKaomoji()}`);
+        channel.appendLine(`Reasoning: ${event.reasoning}`);
+        addTimelineEntry({ kind: 'done', title: 'Task complete', detail: event.reasoning || undefined });
+        break;
+      case 'action-planned':
+        channel.appendLine(`Action: ${event.label}`);
+        channel.appendLine(`Reasoning: ${event.reasoning}`);
+        entries.set(
+          event.id,
+          addTimelineEntry({
+            kind: 'action',
+            title: event.label,
+            detail: event.reasoning,
+            status: 'pending',
+          }),
+        );
+        break;
+      case 'action-update': {
+        if (event.detail) {
+          channel.appendLine(event.detail);
+        }
+        if (event.status === 'error') {
+          vscode.window.showWarningMessage(`${label}: action failed — ${event.detail ?? ''}`);
+        }
+        const entry = entries.get(event.id);
+        if (entry !== undefined) {
+          updateTimelineEntry(entry, {
+            ...(event.status ? { status: event.status } : {}),
+            ...(event.label ? { title: event.label } : {}),
+            ...(event.detail ? { detail: event.detail } : {}),
+          });
+        }
+        break;
+      }
+      case 'notice':
+        channel.appendLine(`${event.level === 'warning' ? 'Warning: ' : ''}${event.message}`);
+        addTimelineEntry({
+          kind: 'info',
+          title: event.message,
+          status: event.level === 'warning' ? 'error' : undefined,
+        });
+        break;
+      case 'max-rounds':
+        channel.appendLine(`Max rounds (${event.maxRounds}) reached.`);
+        addTimelineEntry({
+          kind: 'info',
+          title: `Max rounds (${event.maxRounds}) reached`,
+          status: 'error',
+        });
+        break;
+    }
+  };
+  const confirm = async ({ id, message }: { id: number; message: string }): Promise<boolean> => {
+    const entry = entries.get(id);
+    if (entry === undefined) {
+      return false;
+    }
+    return (await requestChoice(entry, message, ['Execute', 'Stop'])) === 'Execute';
+  };
+  return { emit, confirm };
+}
+
+/**
+ * Runs Control tasks (the first, then any follow-ups typed in the panel) in
+ * one task-panel session. `runTask` runs one task; `prepare` runs before each
+ * one (e.g. relaunching a closed browser).
+ */
+async function runControlSession(
+  label: string,
+  channelName: string,
+  firstTask: string,
+  runTask: (
+    task: string,
+    signal: AbortSignal,
+    ui: ReturnType<typeof controlTimeline>,
+  ) => Promise<ControlAgentResult>,
+): Promise<void> {
+  const channel = getAgentChannel(channelName);
+  channel.appendLine(`${label} started ${getRandomThinkingKaomoji()}`);
+  acquireTaskPanel(label);
+
+  let currentTask: string | null = firstTask;
+  while (currentTask) {
+    channel.appendLine(`\nTask: ${currentTask}\n`);
+    setTaskStatus('running', currentTask);
+    const abortController = new AbortController();
+    setTaskCanceller(() => {
+      abortController.abort();
+      channel.appendLine('Stopped by user.');
+    });
+
+    let result: ControlAgentResult | undefined;
+    let errorMsg: string | null = null;
+    try {
+      result = await runTask(currentTask, abortController.signal, controlTimeline(channel, label));
+    } catch (error) {
+      if (!abortController.signal.aborted) {
+        errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      }
+    } finally {
+      endTaskSession();
+    }
+
+    if (errorMsg || result?.outcome === 'parse-error') {
+      const message = errorMsg ?? 'Could not parse AI response.';
+      channel.appendLine(`Error: ${message}`);
+      if (errorMsg) {
+        addTimelineEntry({ kind: 'error', title: `${label} failed`, detail: message });
+      }
+      setTaskStatus('error', message);
+      vscode.window.showErrorMessage(`${label} failed: ${message}`);
+      sweepPendingEntries();
+      return;
+    }
+    if (abortController.signal.aborted || result?.outcome === 'stopped' || result?.outcome === 'aborted') {
+      channel.appendLine('Stopped by user.');
+      addTimelineEntry({ kind: 'info', title: 'Stopped by user' });
+      setTaskStatus('cancelled', 'Stopped by user');
+      sweepPendingEntries();
+      return;
+    }
+
+    setTaskStatus(
+      'done',
+      result?.outcome === 'complete' ? 'Task complete' : `Finished after ${result?.rounds ?? 0} round(s)`,
+    );
+    currentTask = await waitForFollowUp();
+    if (currentTask && !beginTaskSession()) {
+      // Another command took the panel over while we were idle
+      return;
+    }
+  }
+}
+
 async function runScreenControlTask(instruction: string) {
   const missingDeps = checkControlDependencies();
   if (missingDeps.length > 0) {
@@ -121,259 +296,23 @@ async function runScreenControlTask(instruction: string) {
     return;
   }
 
-  const outputChannel = getAgentChannel('ASKII Control');
-  outputChannel.appendLine(`ASKII Control started ${getRandomThinkingKaomoji()}`);
-  outputChannel.appendLine(`Instruction: ${instruction}`);
-  outputChannel.appendLine('');
-
-  const abortController = new AbortController();
-  const history: ControlHistoryEntry[] = [];
-  let round = 0;
-  let prevScreenshot: string | undefined;
-  let systemInfo: SystemInfo | undefined;
-
-  setTaskCanceller(() => {
-    abortController.abort();
-    outputChannel.appendLine('Stopped by user.');
-  });
-
-  acquireTaskPanel('ASKII Control');
-
-  let currentTask: string | null = instruction;
-
-  while (currentTask) {
-    if (currentTask !== instruction) {
-      outputChannel.appendLine(`\nInstruction: ${currentTask}`);
-    }
-    setTaskStatus('running', currentTask);
-
-    round = 0;
-    let taskComplete = false;
-    let stoppedByChoice = false;
-    let errorMsg: string | null = null;
-    let errorLogged = false;
-
-    try {
-      while (round < maxRounds && !abortController.signal.aborted) {
-        outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — taking screenshot...`);
-        const roundEntry = addTimelineEntry({
-          kind: 'round',
-          title: `Round ${round + 1} of ${maxRounds}`,
-          status: 'pending',
-        });
-
-        const {
-          base64: imageBase64,
-          width: screenW,
-          height: screenH,
-          physWidth,
-          physHeight,
-        } = await takeScreenshot(monitorId);
-
-        if (!systemInfo) {
-          systemInfo = await getSystemInfo(physWidth, physHeight);
-        }
-
-        const screenChanged = prevScreenshot === undefined || prevScreenshot !== imageBase64;
-        if (prevScreenshot !== undefined && !screenChanged) {
-          outputChannel.appendLine('Warning: screen unchanged since last action.');
-        }
-        prevScreenshot = imageBase64;
-
-        updateTimelineEntry(roundEntry, {
-          screenshot: `data:image/png;base64,${imageBase64}`,
-          detail: screenChanged ? undefined : 'Screen unchanged since last action.',
-        });
-
-        const prompt =
-          round === 0
-            ? `Instruction to complete: ${currentTask}\n\nAnalyze the screenshot and determine the next action(s).`
-            : `Continuing instruction: ${currentTask}\n\nAnalyze the updated screenshot and return the next action(s) or DONE.`;
-
-        outputChannel.appendLine('Asking AI...');
-        const rawResponse = await getExtensionResponseWithImage(
-          `${buildControlSystemPrompt(screenW, screenH, systemInfo, history)}\n\n${prompt}`,
-          imageBase64,
-          abortController.signal,
-        );
-
-        if (abortController.signal.aborted) {
-          break;
-        }
-
-        const parsed = parseControlResponse(rawResponse);
-
-        if (!parsed) {
-          outputChannel.appendLine('Error: could not parse AI response.');
-          outputChannel.appendLine(`Raw: ${rawResponse}`);
-          addTimelineEntry({
-            kind: 'error',
-            title: 'Could not parse AI response',
-            detail: timelineSnippet(rawResponse, 1000),
-          });
-          errorMsg = 'Could not parse AI response.';
-          errorLogged = true;
-          break;
-        }
-
-        if (parsed.type === 'done') {
-          outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
-          outputChannel.appendLine(`Reasoning: ${parsed.reasoning}`);
-          updateTimelineEntry(roundEntry, { status: 'ok' });
-          addTimelineEntry({
-            kind: 'done',
-            title: 'Task complete',
-            detail: parsed.reasoning || undefined,
-          });
-          taskComplete = true;
-          break;
-        }
-
-        updateTimelineEntry(roundEntry, { status: 'ok' });
-
-        const { actions } = parsed;
-
-        // Planned actions show in the timeline before the batch confirmation
-        const plannedEntries = actions.map((a) =>
-          addTimelineEntry({
-            kind: 'action',
-            title: describeAction(a as ControlAction),
-            detail: a.reasoning,
-            status: 'pending',
-          }),
-        );
-        actions.forEach((a, i) => {
-          const label = actions.length > 1 ? `Action ${i + 1}/${actions.length}` : 'Action';
-          outputChannel.appendLine(`${label}: ${describeAction(a as ControlAction)}`);
-          outputChannel.appendLine(`Reasoning: ${a.reasoning}`);
-        });
-
-        // Resolve click_text actions to coordinates via a second LLM call —
-        // before the confirmation, so the user approves the actual click target
-        for (let i = 0; i < actions.length; i++) {
-          const a = actions[i] as ControlAction;
-          if (a.action !== 'click_text') {continue;}
-          const ct = a as { action: 'click_text'; text: string; reasoning: string };
-          let resolved = false;
-          try {
-            const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
-            const raw = await getExtensionResponseWithImage(
-              resolvePrompt,
-              imageBase64,
-              abortController.signal,
-            );
-            const coords = parseJsonFromModel(
-              raw,
-              (v) =>
-                !!v &&
-                typeof (v as { x?: unknown }).x === 'number' &&
-                typeof (v as { y?: unknown }).y === 'number',
-              '{',
-            ) as { x: number; y: number } | undefined;
-            if (coords) {
-              Object.assign(a, { action: 'mouse_left_click', x: coords.x, y: coords.y });
-              resolved = true;
-              outputChannel.appendLine(`Resolved "${ct.text}" → (${coords.x}, ${coords.y})`);
-              updateTimelineEntry(plannedEntries[i], {
-                title: describeAction(a),
-                detail: `Resolved "${ct.text}" → (${coords.x}, ${coords.y})`,
-              });
-            }
-          } catch (error) {
-            if (abortController.signal.aborted) {throw error;}
-          }
-          if (!resolved) {
-            outputChannel.appendLine(`Warning: could not resolve text "${ct.text}" to coordinates`);
-            addTimelineEntry({
-              kind: 'info',
-              title: `Could not resolve "${ct.text}" to coordinates`,
-              status: 'error',
-            });
-          }
-        }
-
-        // Confirm
-        if (!autoConfirm) {
-          const batchLabel =
-            actions.length === 1
-              ? describeAction(actions[0] as ControlAction)
-              : `${actions.length} actions`;
-          const confirmTarget =
-            plannedEntries.length > 0 ? plannedEntries[plannedEntries.length - 1] : roundEntry;
-          const choice = await requestChoice(confirmTarget, `Execute ${batchLabel}?`, [
-            'Execute',
-            'Stop',
-          ]);
-          if (choice !== 'Execute' || abortController.signal.aborted) {
-            outputChannel.appendLine('Stopped by user.');
-            stoppedByChoice = true;
-            for (const id of plannedEntries) {
-              updateTimelineEntry(id, { status: 'skipped' });
-            }
-            break;
-          }
-          // Small delay between confirmation and execution
-          await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-        }
-
-        // Execute sequence
-        for (let i = 0; i < actions.length; i++) {
-          const a = actions[i] as ControlAction;
-          if (abortController.signal.aborted) {break;}
-          await executeControlAction(a, screenW, screenH, abortController.signal);
-          history.push({
-            round: round + 1,
-            description: describeAction(a),
-            reasoning: a.reasoning,
-            screenChanged: true,
-          });
-          updateTimelineEntry(plannedEntries[i], { status: 'ok' });
-        }
-        outputChannel.appendLine('Done.\n');
-
-        round++;
-      }
-
-      if (round >= maxRounds && !taskComplete && !abortController.signal.aborted) {
-        outputChannel.appendLine(`Max rounds (${maxRounds}) reached.`);
-        addTimelineEntry({
-          kind: 'info',
-          title: `Max rounds (${maxRounds}) reached`,
-          status: 'error',
-        });
-      }
-    } catch (error) {
-      if (!abortController.signal.aborted) {
-        errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      }
-    } finally {
-      endTaskSession();
-    }
-
-    if (errorMsg) {
-      outputChannel.appendLine(`Error: ${errorMsg}`);
-      if (!errorLogged) {
-        addTimelineEntry({ kind: 'error', title: 'ASKII Control failed', detail: errorMsg });
-      }
-      setTaskStatus('error', errorMsg);
-      vscode.window.showErrorMessage(`ASKII Control failed: ${errorMsg}`);
-      sweepPendingEntries();
-      break;
-    }
-    if (abortController.signal.aborted || stoppedByChoice) {
-      addTimelineEntry({ kind: 'info', title: 'Stopped by user' });
-      setTaskStatus('cancelled', 'Stopped by user');
-      sweepPendingEntries();
-      break;
-    }
-
-    setTaskStatus('done', taskComplete ? 'Task complete' : `Finished after ${round} round(s)`);
-    currentTask = await waitForFollowUp();
-    if (currentTask && !beginTaskSession()) {
-      // Another command took the panel over while we were idle
-      break;
-    }
-  }
+  // History and system info carry over to follow-up instructions
+  const session: ScreenSession = { history: [] };
+  await runControlSession('ASKII Control', 'ASKII Control', instruction, (task, signal, ui) =>
+    runScreenAgent({
+      task,
+      maxRounds,
+      signal,
+      autoConfirm,
+      monitorId,
+      session,
+      ask: askVision,
+      confirm: ui.confirm,
+      emit: ui.emit,
+      // Focus moves back from the task panel to the target window
+      afterConfirmDelayMs: 1500,
+    }),
+  );
 }
 
 async function runBrowserTask(task: string) {
@@ -384,225 +323,55 @@ async function runBrowserTask(task: string) {
 
   const config = vscode.workspace.getConfiguration('askii');
   const maxRounds = Math.max(1, config.get<number>('doMaxRounds') ?? 20);
-  // Separate from doAutoConfirm: unattended mouse/keyboard/browser control is
-  // a different risk than unattended file edits
   const autoConfirm = config.get<boolean>('controlAutoConfirm') ?? false;
   const headless = config.get<boolean>('browserHeadless') ?? false;
   const chromePath = config.get<string>('chromePath') || detectBrowserExecutable();
 
-  const outputChannel = getAgentChannel('ASKII Control (Browser)');
-  outputChannel.appendLine(`ASKII Control (Browser) started ${getRandomThinkingKaomoji()}`);
-  outputChannel.appendLine(`Task: ${task}`);
-  outputChannel.appendLine('');
-
-  const abortController = new AbortController();
-  setTaskCanceller(() => {
-    abortController.abort();
-    outputChannel.appendLine('Stopped by user.');
-  });
-
-  acquireTaskPanel('ASKII Control (Browser)');
-
   const puppeteer = await import('puppeteer-core');
   let browser: import('puppeteer-core').Browser | undefined;
   let page: import('puppeteer-core').Page | undefined;
+  const channel = getAgentChannel('ASKII Control (Browser)');
 
-  let currentTask: string | null = task;
-
-  while (currentTask) {
-    if (currentTask !== task) {
-      outputChannel.appendLine(`\nTask: ${currentTask}`);
-    }
-    setTaskStatus('running', currentTask);
-
-    let round = 0;
-    let taskComplete = false;
-    let stoppedByChoice = false;
-    let errorMsg: string | null = null;
-    let errorLogged = false;
-
-    try {
+  try {
+    await runControlSession('ASKII Control (Browser)', 'ASKII Control (Browser)', task, async (t, signal, ui) => {
       // Relaunch if the user closed the window (or its tab) since the last task
       if (browser && (!browser.connected || !page || page.isClosed())) {
         await browser.close().catch(() => undefined);
         browser = undefined;
         page = undefined;
       }
-      if (!browser) {
+      if (!browser || !page) {
         if (!chromePath) {
           throw new Error(
             'No Chromium-based browser found. Install Chrome or Edge, or set askii.chromePath to your browser executable (e.g. C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe).',
           );
         }
-        outputChannel.appendLine('Launching browser...');
-        outputChannel.appendLine(`Browser executable: ${chromePath}`);
+        channel.appendLine(`Launching browser: ${chromePath}`);
         browser = await puppeteer.launch({
           headless: headless ? true : false,
           executablePath: chromePath,
           args: browserLaunchArgs(),
         });
-
         const [firstPage] = await browser.pages();
         await firstPage.setViewport(null);
         page = firstPage;
       }
-
-      while (round < maxRounds && !abortController.signal.aborted) {
-        outputChannel.appendLine(`Round ${round + 1}/${maxRounds} — capturing screenshot...`);
-        const roundEntry = addTimelineEntry({
-          kind: 'round',
-          title: `Round ${round + 1} of ${maxRounds}`,
-          status: 'pending',
-        });
-
-        const imageBase64 = await takePageScreenshot(page!);
-        const currentUrl = page!.url();
-
-        outputChannel.appendLine(`Current URL: ${currentUrl}`);
-        updateTimelineEntry(roundEntry, {
-          screenshot: `data:image/png;base64,${imageBase64}`,
-          detail: currentUrl,
-        });
-
-        const systemPrompt = buildBrowserSystemPrompt();
-        const userPrompt =
-          round === 0
-            ? `Task: ${currentTask}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and determine the next action.`
-            : `Continuing task: ${currentTask}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and return the next action or DONE.`;
-
-        outputChannel.appendLine('Asking AI...');
-        const rawResponse = await getExtensionResponseWithImage(
-          `${systemPrompt}\n\n${userPrompt}`,
-          imageBase64,
-          abortController.signal,
-        );
-
-        if (abortController.signal.aborted) {break;}
-
-        const parsed = parseBrowserResponse(rawResponse);
-
-        if (!parsed) {
-          outputChannel.appendLine('Error: could not parse AI response.');
-          outputChannel.appendLine(`Raw: ${rawResponse}`);
-          addTimelineEntry({
-            kind: 'error',
-            title: 'Could not parse AI response',
-            detail: timelineSnippet(rawResponse, 1000),
-          });
-          errorMsg = 'Could not parse AI response.';
-          errorLogged = true;
-          break;
-        }
-
-        if (parsed.type === 'done') {
-          outputChannel.appendLine(`\nDone! ${getRandomKaomoji()}`);
-          outputChannel.appendLine(`Reasoning: ${parsed.reasoning}`);
-          updateTimelineEntry(roundEntry, { status: 'ok' });
-          addTimelineEntry({
-            kind: 'done',
-            title: 'Task complete',
-            detail: parsed.reasoning || undefined,
-          });
-          taskComplete = true;
-          break;
-        }
-
-        updateTimelineEntry(roundEntry, { status: 'ok' });
-
-        let stopped = false;
-        for (const action of parsed.actions) {
-          if (abortController.signal.aborted) {
-            stopped = true;
-            break;
-          }
-
-          const description = describeBrowserAction(action);
-          outputChannel.appendLine(`Action: ${description}`);
-          outputChannel.appendLine(`Reasoning: ${action.reasoning}`);
-
-          const actionEntry = addTimelineEntry({
-            kind: 'action',
-            title: description,
-            detail: action.reasoning,
-            status: 'pending',
-          });
-
-          if (!autoConfirm) {
-            const choice = await requestChoice(actionEntry, undefined, ['Execute', 'Stop']);
-            if (choice !== 'Execute' || abortController.signal.aborted) {
-              outputChannel.appendLine('Stopped by user.');
-              stopped = true;
-              stoppedByChoice = true;
-              updateTimelineEntry(actionEntry, { status: 'skipped' });
-              break;
-            }
-          }
-
-          try {
-            await executeBrowserAction(action, page!);
-            outputChannel.appendLine('Done.\n');
-            updateTimelineEntry(actionEntry, { status: 'ok' });
-          } catch (execErr) {
-            const msg = execErr instanceof Error ? execErr.message : 'Unknown error';
-            outputChannel.appendLine(`Action failed: ${msg}`);
-            updateTimelineEntry(actionEntry, {
-              status: 'error',
-              detail: `${action.reasoning}\nFailed: ${msg}`.trim(),
-            });
-            vscode.window.showWarningMessage(
-              `ASKII Control (Browser): ${description} failed — ${msg}`,
-            );
-          }
-        }
-        if (stopped) {break;}
-
-        round++;
-      }
-
-      if (round >= maxRounds && !taskComplete && !abortController.signal.aborted) {
-        outputChannel.appendLine(`Max rounds (${maxRounds}) reached.`);
-        addTimelineEntry({
-          kind: 'info',
-          title: `Max rounds (${maxRounds}) reached`,
-          status: 'error',
-        });
-      }
-    } catch (error) {
-      if (!abortController.signal.aborted) {
-        errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      }
-    } finally {
-      endTaskSession();
+      return runBrowserAgent({
+        task: t,
+        maxRounds,
+        signal,
+        autoConfirm,
+        page,
+        ask: askVision,
+        confirm: ui.confirm,
+        emit: ui.emit,
+      });
+    });
+  } finally {
+    // A headless browser is invisible and would otherwise linger until VS
+    // Code exits; a visible one is left open for the user.
+    if (browser && headless) {
+      await browser.close().catch(() => undefined);
     }
-
-    if (errorMsg) {
-      outputChannel.appendLine(`Error: ${errorMsg}`);
-      if (!errorLogged) {
-        addTimelineEntry({ kind: 'error', title: 'ASKII Control (Browser) failed', detail: errorMsg });
-      }
-      setTaskStatus('error', errorMsg);
-      vscode.window.showErrorMessage(`ASKII Control (Browser) failed: ${errorMsg}`);
-      sweepPendingEntries();
-      break;
-    }
-    if (abortController.signal.aborted || stoppedByChoice) {
-      addTimelineEntry({ kind: 'info', title: 'Stopped by user' });
-      setTaskStatus('cancelled', 'Stopped by user');
-      sweepPendingEntries();
-      break;
-    }
-
-    setTaskStatus('done', taskComplete ? 'Task complete' : `Finished after ${round} round(s)`);
-    currentTask = await waitForFollowUp();
-    if (currentTask && !beginTaskSession()) {
-      // Another command took the panel over while we were idle
-      break;
-    }
-  }
-
-  // The session is over. A headless browser is invisible and would otherwise
-  // linger until VS Code exits; a visible one is left open for the user.
-  if (browser && headless) {
-    await browser.close().catch(() => undefined);
   }
 }

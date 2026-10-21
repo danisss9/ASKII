@@ -6,6 +6,12 @@ import {
   hasBackups,
 } from '@common/workspace';
 import { runDoAgent } from '@common/doAgent';
+import {
+  runBrowserAgent,
+  runScreenAgent,
+  type ControlEvent,
+  type VisionAsk,
+} from '@common/controlAgent';
 import { buildNoteEntry, classifyNote, genNoteId } from '@common/noteClassify';
 import {
   MAX_RECENT_COMMITS,
@@ -39,29 +45,8 @@ import {
   type PlatformId,
   type ProviderConnection,
 } from '@common/providers';
-import {
-  buildControlSystemPrompt,
-  takeScreenshot,
-  describeAction,
-  executeControlAction,
-  getMonitors,
-  getSystemInfo,
-  parseControlResponse,
-  refineCoordinates,
-  checkControlDependencies,
-  type ControlAction,
-  type ControlHistoryEntry,
-  type SystemInfo,
-} from '@common/control';
-import {
-  buildBrowserSystemPrompt,
-  parseBrowserResponse,
-  describeBrowserAction,
-  executeBrowserAction,
-  takePageScreenshot,
-  detectBrowserExecutable,
-  browserLaunchArgs,
-} from '@common/browser';
+import { checkControlDependencies, getMonitors, takeScreenshot } from '@common/control';
+import { browserLaunchArgs, detectBrowserExecutable } from '@common/browser';
 import {
   type NoteEntry,
   type NoteKind,
@@ -1574,6 +1559,49 @@ Examples:
 // `askii browse` is an alias for browser mode. Mirrors askiiControlCommand /
 // runScreenControlTask / runBrowserTask in src/commands.ts.
 
+/** Terminal rendering of Control agent events (shared by screen and browser). */
+function printControlEvent(event: ControlEvent): void {
+  switch (event.type) {
+    case 'round-start':
+      console.error(`Round ${event.round}/${event.maxRounds} — taking screenshot...`);
+      break;
+    case 'screenshot':
+      if (event.note) console.error(event.note);
+      console.error('Asking AI...');
+      break;
+    case 'parse-error':
+      console.error('Error: could not parse AI response.');
+      console.error(`Raw response: ${event.raw}`);
+      break;
+    case 'done':
+      console.error(`\nDone! ${getRandomKaomoji()}`);
+      console.error(`Reasoning: ${event.reasoning}`);
+      break;
+    case 'action-planned':
+      console.error(`\nAction:    ${event.label}`);
+      console.error(`Reasoning: ${event.reasoning}`);
+      break;
+    case 'action-update':
+      if (event.detail) console.error(event.detail);
+      if (event.status === 'ok') console.error('Executed.');
+      if (event.status === 'error') console.error('Action failed.');
+      break;
+    case 'notice':
+      console.error(`${event.level === 'warning' ? 'Warning: ' : ''}${event.message}`);
+      break;
+    case 'max-rounds':
+      console.error(`Max rounds (${event.maxRounds}) reached.`);
+      break;
+    case 'round-end':
+      break;
+  }
+}
+
+function cliVisionAsk(config: Config): VisionAsk {
+  return (system, prompt, image, signal) =>
+    getResponse(config, prompt, system || undefined, image, signal);
+}
+
 async function runScreenControl(instruction: string, config: Config): Promise<void> {
   const missingDeps = checkControlDependencies();
   if (missingDeps.length > 0) {
@@ -1621,154 +1649,21 @@ async function runScreenControl(instruction: string, config: Config): Promise<vo
       // proceed with default monitor
     }
 
-    const history: ControlHistoryEntry[] = [];
-    const ZOOM_ACTIONS = new Set(['mouse_left_click', 'mouse_right_click', 'mouse_double_click']);
-    let round = 0;
-    let prevScreenshot: string | undefined;
-    let systemInfo: SystemInfo | undefined;
-
-    while (round < config.maxRounds && !abortController.signal.aborted) {
-      console.error(`Round ${round + 1}/${config.maxRounds} — taking screenshot...`);
-
-      const {
-        base64: imageBase64,
-        width: screenW,
-        height: screenH,
-        physWidth,
-        physHeight,
-      } = await takeScreenshot(monitorId);
-
-      if (!systemInfo) {
-        systemInfo = await getSystemInfo(physWidth, physHeight);
-      }
-
-      if (prevScreenshot !== undefined && prevScreenshot === imageBase64) {
-        console.error('Warning: screen unchanged since last action.');
-      }
-      const screenChanged = prevScreenshot === undefined || prevScreenshot !== imageBase64;
-      prevScreenshot = imageBase64;
-
-      const prompt =
-        round === 0
-          ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action(s).`
-          : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and return the next action(s) or DONE.`;
-
-      console.error('Asking AI...');
-      const rawResponse = await getResponse(
-        config,
-        prompt,
-        buildControlSystemPrompt(screenW, screenH, systemInfo, history),
-        imageBase64,
-        abortController.signal,
-      );
-
-      if (abortController.signal.aborted) break;
-
-      const parsed = parseControlResponse(rawResponse);
-
-      if (!parsed) {
-        console.error('Error: could not parse AI response.');
-        console.error(`Raw response: ${rawResponse}`);
-        break;
-      }
-
-      if (parsed.type === 'done') {
-        console.error(`\nDone! ${getRandomKaomoji()}`);
-        console.error(`Reasoning: ${parsed.reasoning}`);
-        break;
-      }
-
-      const { actions } = parsed;
-
-      // Two-phase zoom: refine coordinates for a single position-based click
-      if (actions.length === 1 && ZOOM_ACTIONS.has(actions[0].action)) {
-        const a = actions[0] as ControlAction & { x: number; y: number };
-        try {
-          console.error('Refining coordinates (zoom)...');
-          const imgBuf = Buffer.from(imageBase64, 'base64');
-          const refined = await refineCoordinates(
-            imgBuf,
-            a.x,
-            a.y,
-            screenW,
-            screenH,
-            a,
-            (sys, img) => getResponse(config, sys, undefined, img, abortController.signal),
-          );
-          if (refined) {
-            console.error(`Zoom: (${a.x}, ${a.y}) → (${refined.x}, ${refined.y})`);
-            a.x = refined.x;
-            a.y = refined.y;
-          }
-        } catch {
-          // zoom failed — use original coordinates
-        }
-      }
-
-      // Log planned actions
-      actions.forEach((a, i) => {
-        const label = actions.length > 1 ? `Action ${i + 1}/${actions.length}` : 'Action';
-        console.error(`\n${label}:    ${describeAction(a as ControlAction)}`);
-        console.error(`Reasoning: ${a.reasoning}`);
-      });
-
-      // Confirm
-      const confirmMsg =
-        actions.length === 1 ? 'Execute this action?' : `Execute these ${actions.length} actions?`;
-      const ok = await confirm(rl, confirmMsg, config.yes);
-      if (!ok || abortController.signal.aborted) {
-        console.error('Stopped.');
-        break;
-      }
-
-      // Resolve click_text actions to coordinates via a second LLM call
-      for (const a of actions) {
-        if ((a as ControlAction).action === 'click_text') {
-          const ct = a as { action: 'click_text'; text: string; reasoning: string };
-          try {
-            const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
-            const raw = await getResponse(
-              config,
-              resolvePrompt,
-              undefined,
-              imageBase64,
-              abortController.signal,
-            );
-            const m = raw.match(/\{[\s\S]*?\}/);
-            if (m) {
-              const coords = JSON.parse(m[0]);
-              if (typeof coords.x === 'number' && typeof coords.y === 'number') {
-                Object.assign(a, { action: 'mouse_left_click', x: coords.x, y: coords.y });
-                console.error(`Resolved "${ct.text}" → (${coords.x}, ${coords.y})`);
-              }
-            }
-          } catch {
-            console.error(`Warning: could not resolve text "${ct.text}" to coordinates`);
-          }
-        }
-      }
-
-      // Execute sequence
-      for (const a of actions) {
-        if (abortController.signal.aborted) break;
-        await executeControlAction(a as ControlAction, screenW, screenH, abortController.signal);
-        history.push({
-          round: round + 1,
-          description: describeAction(a as ControlAction),
-          reasoning: a.reasoning,
-          screenChanged,
-        });
-      }
-      console.error('Executed.\n');
-
-      round++;
-    }
-
-    if (round >= config.maxRounds && !abortController.signal.aborted) {
-      console.error(`Max rounds (${config.maxRounds}) reached.`);
-    }
-
+    const result = await runScreenAgent({
+      task: instruction,
+      maxRounds: config.maxRounds,
+      signal: abortController.signal,
+      autoConfirm: config.yes,
+      monitorId,
+      session: { history: [] },
+      refineClicks: true,
+      ask: cliVisionAsk(config),
+      confirm: ({ message }) => confirm(rl, message, false),
+      emit: printControlEvent,
+    });
     rl.close();
+    if (result.outcome === 'stopped') console.error('Stopped.');
+    if (result.outcome === 'parse-error') process.exit(1);
   } catch (error) {
     rl.close();
     console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -1780,8 +1675,7 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const abortController = new AbortController();
 
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const puppeteer = require('puppeteer-core') as typeof import('puppeteer-core');
+  const puppeteer = await import('puppeteer-core');
   let browser: import('puppeteer-core').Browser | undefined;
 
   // On a TTY readline holds stdin in raw mode, so Ctrl+C arrives as rl's
@@ -1797,6 +1691,7 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
   process.once('SIGINT', stop);
   rl.on('SIGINT', stop);
 
+  let failed = false;
   try {
     console.error(`ASKII Control (Browser) starting... ${getRandomThinkingKaomoji()}`);
     console.error(`Task: ${task}`);
@@ -1821,93 +1716,31 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
     const [page] = await browser.pages();
     await page.setViewport(null);
 
-    let round = 0;
-
-    while (round < config.maxRounds && !abortController.signal.aborted) {
-      console.error(`Round ${round + 1}/${config.maxRounds} — capturing screenshot...`);
-
-      const imageBase64 = await takePageScreenshot(page);
-      const currentUrl = page.url();
-
-      console.error(`Current URL: ${currentUrl}`);
-
-      const userPrompt =
-        round === 0
-          ? `Task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and determine the next action.`
-          : `Continuing task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and return the next action or DONE.`;
-
-      console.error('Asking AI...');
-      const rawResponse = await getResponse(
-        config,
-        userPrompt,
-        buildBrowserSystemPrompt(),
-        imageBase64,
-        abortController.signal,
-      );
-
-      if (abortController.signal.aborted) break;
-
-      const parsed = parseBrowserResponse(rawResponse);
-
-      if (!parsed) {
-        console.error('Error: could not parse AI response.');
-        console.error(`Raw response: ${rawResponse}`);
-        break;
-      }
-
-      if (parsed.type === 'done') {
-        console.error(`\nDone! ${getRandomKaomoji()}`);
-        console.error(`Reasoning: ${parsed.reasoning}`);
-        break;
-      }
-
-      let stopped = false;
-      for (const action of parsed.actions) {
-        if (abortController.signal.aborted) {
-          stopped = true;
-          break;
-        }
-
-        console.error(`\nAction:    ${describeBrowserAction(action)}`);
-        console.error(`Reasoning: ${action.reasoning}`);
-
-        const ok = await confirm(rl, 'Execute this action?', config.yes);
-        if (!ok || abortController.signal.aborted) {
-          console.error('Stopped.');
-          stopped = true;
-          break;
-        }
-
-        try {
-          await executeBrowserAction(action, page);
-          console.error('Executed.\n');
-        } catch (execErr) {
-          console.error(
-            `Action failed: ${execErr instanceof Error ? execErr.message : 'Unknown error'}`,
-          );
-        }
-      }
-      if (stopped) break;
-
-      round++;
-    }
-
-    if (round >= config.maxRounds && !abortController.signal.aborted) {
-      console.error(`Max rounds (${config.maxRounds}) reached.`);
-    }
-
+    const result = await runBrowserAgent({
+      task,
+      maxRounds: config.maxRounds,
+      signal: abortController.signal,
+      autoConfirm: config.yes,
+      page,
+      ask: cliVisionAsk(config),
+      confirm: ({ message }) => confirm(rl, message, false),
+      emit: printControlEvent,
+    });
+    if (result.outcome === 'stopped') console.error('Stopped.');
+    failed = result.outcome === 'parse-error';
     rl.close();
   } catch (error) {
     rl.close();
     console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    process.exit(1);
+    failed = true;
   }
 
-  // The launched browser keeps the event loop alive. Headless: close it so the
-  // CLI exits. Headed: leave it for inspection — Puppeteer kills it when Node
-  // exits, so wait until the user closes the window (or presses Ctrl+C).
+  // The launched browser keeps the event loop alive. Headless (or failed):
+  // close it so the CLI exits. Headed: leave it for inspection — Puppeteer
+  // kills it when Node exits, so wait until the user closes the window (or
+  // presses Ctrl+C).
   if (browser?.connected) {
-    if (config.headless) {
+    if (config.headless || failed) {
       await browser.close();
     } else {
       console.error('Browser left open — close it (or press Ctrl+C) to exit.');
@@ -1915,6 +1748,7 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
       await new Promise<void>((resolve) => openBrowser.once('disconnected', () => resolve()));
     }
   }
+  if (failed) process.exit(1);
 }
 
 /**
