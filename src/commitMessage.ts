@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getExtensionResponse } from './providers';
+import { log } from './log';
 import { buildCommitMessageSystemPrompt, getCommitMessageStyle } from './commitMessageStyle';
 import { getGitRepository, rootUriFromArg, type GitRepositoryLike } from './git';
 
@@ -133,12 +134,26 @@ function loadCommitInstructions(): string {
     filePath = path.join(root, filePath);
   }
 
+  // Only plain instruction files are read into the prompt — the setting can
+  // come from a repo's .vscode/settings.json, and must not be able to pull an
+  // arbitrary file (an SSH key, a .env) into a request.
+  if (!INSTRUCTION_FILE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+    log.warn(`askii.commitMessageInstructions ignored: ${filePath} is not a .md or .txt file`);
+    return '';
+  }
   try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size > MAX_INSTRUCTIONS_BYTES) {
+      return '';
+    }
     return fs.readFileSync(filePath, 'utf8');
   } catch {
     return '';
   }
 }
+
+const INSTRUCTION_FILE_EXTENSIONS = new Set(['.md', '.markdown', '.txt']);
+const MAX_INSTRUCTIONS_BYTES = 64 * 1024;
 
 /**
  * Cleans the model output into a bare commit message: strips markdown fences,
@@ -226,8 +241,7 @@ async function generateCommitMessage(sourceControl: unknown, signal: AbortSignal
         const raw = await getExtensionResponse(
           userPrompt,
           system,
-          config.get<string>('llmInlinePlatform'),
-          config.get<string>('llmInlineModel'),
+          'inline',
           signal,
         );
 
@@ -252,6 +266,18 @@ async function generateCommitMessage(sourceControl: unknown, signal: AbortSignal
           return;
         }
 
+        // Don't silently throw away a message the user already typed
+        const existing = repo.inputBox.value.trim();
+        if (existing && existing !== cleaned) {
+          const choice = await vscode.window.showWarningMessage(
+            'ASKII: The commit message box already has text. Replace it with the generated message?',
+            'Replace',
+            'Keep mine',
+          );
+          if (choice !== 'Replace') {
+            return;
+          }
+        }
         repo.inputBox.value = cleaned;
         vscode.window.showInformationMessage('ASKII: Commit message generated! (⌐■_■)');
       } catch (e) {

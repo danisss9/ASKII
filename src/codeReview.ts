@@ -107,8 +107,7 @@ async function autoFixProblem(
   const raw = await getExtensionResponse(
     buildFixUserPrompt(problem, promptFile.text, promptFile.startLine),
     buildFixSystemPrompt(),
-    undefined,
-    undefined,
+    'general',
     signal,
   );
   if (signal.aborted) {
@@ -204,8 +203,7 @@ export async function codeReviewCommand(sourceControl?: unknown): Promise<void> 
           const raw = await getExtensionResponse(
             buildReviewUserPrompt(files, diff),
             buildReviewSystemPrompt(),
-            undefined,
-            undefined,
+            'general',
             signal,
           );
           // Some providers ignore the signal — drop a result that arrives late.

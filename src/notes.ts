@@ -16,6 +16,7 @@ import {
   computeNextOccurrence,
 } from '@common/notes';
 import { getExtensionResponse } from './providers';
+import { log } from './log';
 import { takeScreenshot } from '@common/control';
 
 // ── Storage (global, tagged by workspace) ─────────────────────────────────────
@@ -27,8 +28,15 @@ export function loadNotes(context: vscode.ExtensionContext): NoteEntry[] {
   return Array.isArray(raw) ? raw : [];
 }
 
-export function saveNotes(context: vscode.ExtensionContext, notes: NoteEntry[]): void {
-  context.globalState.update(STATE_KEY, notes);
+/**
+ * Persists the notes. globalState updates its in-memory value immediately,
+ * so later loadNotes() calls see the change; the returned promise settles
+ * when it is written to disk, and a failed write is logged, not dropped.
+ */
+export function saveNotes(context: vscode.ExtensionContext, notes: NoteEntry[]): Promise<void> {
+  return Promise.resolve(context.globalState.update(STATE_KEY, notes)).catch((error: unknown) =>
+    log.error('Could not save ASKII notes', error),
+  );
 }
 
 export function genId(): string {
@@ -99,11 +107,31 @@ export function captureContext(): NoteContext {
 
 // ── Screenshot capture & storage ──────────────────────────────────────────────
 
+export function getScreenshotDir(context: vscode.ExtensionContext): string {
+  return path.join(context.globalStorageUri.fsPath, 'notes-screenshots');
+}
+
+/** True when filePath is a screenshot ASKII Note stored itself. */
+export function isNoteScreenshot(context: vscode.ExtensionContext, filePath: string): boolean {
+  const rel = path.relative(getScreenshotDir(context), path.resolve(filePath));
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel) && rel.toLowerCase().endsWith('.png');
+}
+
+/** Deletes a note's screenshot file (best-effort). */
+export function deleteNoteScreenshot(context: vscode.ExtensionContext, filePath?: string): void {
+  if (!filePath || !isNoteScreenshot(context, filePath)) {return;}
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // already gone
+  }
+}
+
 export async function captureScreenshot(
   context: vscode.ExtensionContext,
 ): Promise<string | undefined> {
   try {
-    const dir = path.join(context.globalStorageUri.fsPath, 'notes-screenshots');
+    const dir = getScreenshotDir(context);
     if (!fs.existsSync(dir)) {fs.mkdirSync(dir, { recursive: true });}
     const { base64 } = await takeScreenshot();
     const id = genId();

@@ -72,6 +72,36 @@ export async function storeProviderApiKey(provider: ProviderId, apiKey: string):
   await providerSecrets.store(key, apiKey.trim());
 }
 
+export async function deleteProviderApiKey(provider: ProviderId): Promise<void> {
+  const key = SECRET_KEYS[provider];
+  if (!key || !providerSecrets) {
+    return;
+  }
+  await providerSecrets.delete(key);
+}
+
+/** Lets the user pick a provider with a stored key and removes it from secret storage. */
+export async function clearApiKeyCommand(): Promise<void> {
+  const status = await getSavedCredentialStatus();
+  const items = PROVIDERS.filter((p) => status[p.id]).map((p) => ({
+    label: p.label,
+    description: 'API key stored in VS Code secret storage',
+    id: p.id,
+  }));
+  if (items.length === 0) {
+    vscode.window.showInformationMessage('ASKII: No API keys are stored.');
+    return;
+  }
+  const pick = await vscode.window.showQuickPick(items, {
+    placeHolder: 'Remove which stored API key?',
+  });
+  if (!pick) {
+    return;
+  }
+  await deleteProviderApiKey(pick.id);
+  vscode.window.showInformationMessage(`ASKII: ${pick.label} API key removed.`);
+}
+
 export async function getSavedCredentialStatus(): Promise<Record<ProviderId, boolean>> {
   const entries = await Promise.all(
     PROVIDERS.map(async ({ id }) => [id, Boolean(await getProviderApiKey(id))] as const),

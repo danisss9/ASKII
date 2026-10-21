@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { balancedJsonAt, decodeIfDoubleEscaped } from './utils';
+import { execFile, spawn } from 'child_process';
+import { balancedJsonAt, decodeIfDoubleEscaped, parseJsonFromModel } from './utils';
 
 export interface WorkspaceAction {
   type:
@@ -121,11 +122,19 @@ export function restoreAllBackups(workspaceRoot: string): {
     if (!fs.existsSync(dir)) {return;}
     for (const name of fs.readdirSync(dir)) {
       const fullPath = path.join(dir, name);
-      if (fs.statSync(fullPath).isDirectory()) {
+      // lstat: a symlink planted in the backup folder must not be followed
+      const stat = fs.lstatSync(fullPath);
+      if (stat.isSymbolicLink()) {continue;}
+      if (stat.isDirectory()) {
         walk(fullPath);
       } else {
         const rel = path.relative(backupDir, fullPath);
-        const dest = path.join(workspaceRoot, rel);
+        let dest: string;
+        try {
+          dest = sandboxPath(workspaceRoot, rel);
+        } catch {
+          continue;
+        }
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.copyFileSync(fullPath, dest);
         restored.push(rel);
@@ -138,16 +147,17 @@ export function restoreAllBackups(workspaceRoot: string): {
   const logPath = path.join(workspaceRoot, CREATED_LOG);
   if (fs.existsSync(logPath)) {
     try {
-      const list: string[] = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-      for (const rel of list) {
+      const list: unknown = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
+      for (const rel of Array.isArray(list) ? list : []) {
+        if (typeof rel !== 'string') {continue;}
         try {
-          const fullPath = path.join(workspaceRoot, rel);
+          const fullPath = sandboxPath(workspaceRoot, rel);
           if (fs.existsSync(fullPath)) {
             fs.unlinkSync(fullPath);
             deleted.push(rel);
           }
         } catch {
-          /* best-effort */
+          /* best-effort — outside the workspace or already gone */
         }
       }
     } catch {
@@ -202,54 +212,57 @@ export const INVALID_ACTIONS_FEEDBACK =
   'Your last response was not a valid JSON array of actions (it may have been cut off). ' +
   'Respond with ONLY a JSON array. For large files prefer several smaller modify actions over one huge write.';
 
+const ACTION_TYPES: readonly string[] = [
+  'view',
+  'create',
+  'modify',
+  'write',
+  'delete',
+  'rename',
+  'list',
+  'search',
+  'wiki_search',
+  'code_search',
+  'run',
+  'copy',
+  'mkdir',
+];
+
+export interface ParsedWorkspaceResponse {
+  actions: WorkspaceAction[];
+  /** Action types the model sent that ASKII does not know — reported back so it can correct itself. */
+  ignoredTypes: string[];
+}
+
 /**
  * Parses the model's action array. Returns null when no valid JSON array could
- * be found — distinct from [] ("task complete") so callers can ask again.
+ * be found — distinct from an empty list ("task complete") so callers can ask again.
+ */
+export function parseWorkspaceResponse(responseText: string): ParsedWorkspaceResponse | null {
+  const parsed = parseJsonFromModel(responseText, Array.isArray, '[');
+  if (!Array.isArray(parsed)) {
+    return null;
+  }
+  const actions: WorkspaceAction[] = [];
+  const ignoredTypes: string[] = [];
+  for (const raw of parsed) {
+    const type = (raw as { type?: unknown } | null)?.type;
+    if (typeof type === 'string' && ACTION_TYPES.includes(type)) {
+      actions.push(raw as WorkspaceAction);
+    } else {
+      ignoredTypes.push(typeof type === 'string' ? type : '(missing type)');
+    }
+  }
+  return { actions, ignoredTypes };
+}
+
+/**
+ * Parses the model's action array, dropping unknown action types. Returns
+ * null when no valid JSON array could be found — distinct from [] ("task
+ * complete") so callers can ask again.
  */
 export function parseWorkspaceActions(responseText: string): WorkspaceAction[] | null {
-  const ALL_TYPES = [
-    'view',
-    'create',
-    'modify',
-    'write',
-    'delete',
-    'rename',
-    'list',
-    'search',
-    'wiki_search',
-    'code_search',
-    'run',
-    'copy',
-    'mkdir',
-  ];
-  const text = responseText.trim().replace(/^```[^\n]*\n?/, '').replace(/\n?```$/, '');
-
-  // Whole response first, then the balanced [...] starting at each of the
-  // first few '[' — prose around the array may itself contain brackets.
-  const candidates = [text];
-  for (
-    let start = text.indexOf('['), tries = 0;
-    start !== -1 && tries < 20;
-    start = text.indexOf('[', start + 1), tries++
-  ) {
-    const slice = balancedArrayAt(text, start);
-    if (slice) {candidates.push(slice);}
-  }
-
-  for (const candidate of candidates) {
-    let actions: unknown;
-    try {
-      actions = JSON.parse(candidate);
-    } catch {
-      continue;
-    }
-    if (!Array.isArray(actions)) {continue;}
-    return (actions as WorkspaceAction[]).filter(
-      (action) => !!action && typeof action.type === 'string' && ALL_TYPES.includes(action.type),
-    );
-  }
-  console.error('Failed to parse workspace actions: no valid JSON array found in response');
-  return null;
+  return parseWorkspaceResponse(responseText)?.actions ?? null;
 }
 
 /**
@@ -290,14 +303,81 @@ export function applyModifyAction(
   return { text: existing.replace(oldContent, () => newContent) };
 }
 
-/** Resolves relativePath under workspaceRoot and throws if it escapes the root. */
+function isInside(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Real path of p, resolving symlinks in every component that exists — the
+ * missing tail (a file about to be created) is appended as-is. A dangling
+ * symlink is rejected: writing through it would create its target, which may
+ * be anywhere.
+ */
+function realpathOfNearestExisting(p: string): string {
+  const missing: string[] = [];
+  let current = p;
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...missing);
+    } catch {
+      let isLink = false;
+      try {
+        isLink = fs.lstatSync(current).isSymbolicLink();
+      } catch {
+        // does not exist at all — keep walking up
+      }
+      if (isLink) {
+        throw new Error(`Path traversal blocked: ${p} goes through a dangling symlink`);
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {return p;}
+      missing.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Resolves relativePath under workspaceRoot and throws if it escapes the
+ * root — lexically (../, absolute paths) or through a symlink that points
+ * outside the workspace.
+ */
 export function sandboxPath(workspaceRoot: string, relativePath: string): string {
   const normalizedRoot = path.resolve(workspaceRoot);
   const resolved = path.resolve(workspaceRoot, relativePath);
-  if (!resolved.startsWith(normalizedRoot + path.sep) && resolved !== normalizedRoot) {
+  if (!isInside(normalizedRoot, resolved)) {
     throw new Error(`Path traversal blocked: ${relativePath}`);
   }
+  const realRoot = realpathOfNearestExisting(normalizedRoot);
+  if (!isInside(realRoot, realpathOfNearestExisting(resolved))) {
+    throw new Error(`Path traversal blocked: ${relativePath} resolves outside the workspace`);
+  }
   return resolved;
+}
+
+/** Folders ASKII Do never writes into: git internals (hooks run code) and its own backups. */
+const BLOCKED_WRITE_DIRS = new Set(['.git', '.askii']);
+/**
+ * Folders whose files can make the editor or git run code (tasks, launch
+ * configs, settings, hooks) — writes there are always confirmed, even with
+ * auto-confirm on.
+ */
+const SENSITIVE_WRITE_DIRS = new Set(['.vscode', '.husky', '.githooks', '.devcontainer']);
+
+export type WritePathPolicy = 'allowed' | 'sensitive' | 'blocked';
+
+/** Classifies a write target inside the workspace (path from sandboxPath). */
+export function getWritePathPolicy(workspaceRoot: string, filePath: string): WritePathPolicy {
+  const segments = path
+    .relative(path.resolve(workspaceRoot), filePath)
+    .split(/[\\/]+/)
+    .map((segment) => segment.toLowerCase());
+  // .git anywhere (submodules); .askii only at the root, where Do keeps its backups
+  if (segments.includes('.git') || BLOCKED_WRITE_DIRS.has(segments[0])) {
+    return 'blocked';
+  }
+  return segments.some((segment) => SENSITIVE_WRITE_DIRS.has(segment)) ? 'sensitive' : 'allowed';
 }
 
 const LIST_EXCLUDED = new Set(['node_modules', 'dist', '.git', '.askii']);
@@ -320,26 +400,43 @@ export function executeViewAction(action: WorkspaceAction, workspaceRoot: string
   }
 
   // view
-  const filePath = sandboxPath(workspaceRoot, action.path!);
+  if (!action.path) {
+    throw new Error('view requires path');
+  }
+  const filePath = sandboxPath(workspaceRoot, action.path);
   const raw = fs.readFileSync(filePath, 'utf-8');
   if (action.startLine !== undefined || action.endLine !== undefined) {
     const lines = raw.split('\n');
-    const start = (action.startLine ?? 1) - 1; // 1-indexed → 0-indexed
+    const start = Math.max(0, (action.startLine ?? 1) - 1); // 1-indexed → 0-indexed
     const end = action.endLine ?? lines.length;
-    return lines.slice(start, end).join('\n');
+    return capText(lines.slice(start, end).join('\n'), MAX_VIEW_CHARS, 'use startLine/endLine to view the rest');
   }
-  return raw;
+  return capText(raw, MAX_VIEW_CHARS, 'use startLine/endLine to view the rest');
+}
+
+const MAX_VIEW_CHARS = 200_000;
+const MAX_SEARCH_RESULTS = 500;
+const MAX_SEARCH_FILE_BYTES = 1024 * 1024;
+
+function capText(text: string, max: number, hint: string): string {
+  return text.length > max
+    ? `${text.slice(0, max)}\n[...truncated ${text.length - max} more characters — ${hint}]`
+    : text;
 }
 
 /**
- * Recursively greps the workspace for pattern, excluding node_modules/dist/.git.
- * Returns "file:line: match" lines.
+ * Recursively greps the workspace for pattern (case-insensitive literal),
+ * excluding node_modules/dist/.git/.askii. Symlinks are not followed — they
+ * could lead outside the workspace or loop. Returns "file:line: match" lines.
  */
 export function executeSearchAction(action: WorkspaceAction, workspaceRoot: string): string {
   const pattern = action.pattern ?? '';
   if (!pattern) {return 'Error: search requires a pattern';}
 
+  const escapedPattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(escapedPattern, 'i');
   const results: string[] = [];
+  let truncated = false;
 
   function walk(dir: string): void {
     let entries: string[];
@@ -349,28 +446,31 @@ export function executeSearchAction(action: WorkspaceAction, workspaceRoot: stri
       return;
     }
     for (const name of entries) {
+      if (truncated) {return;}
       if (LIST_EXCLUDED.has(name)) {continue;}
       const fullPath = path.join(dir, name);
       let stat: fs.Stats;
       try {
-        stat = fs.statSync(fullPath);
+        stat = fs.lstatSync(fullPath);
       } catch {
         continue;
       }
+      if (stat.isSymbolicLink()) {continue;}
       if (stat.isDirectory()) {
         walk(fullPath);
-      } else {
+      } else if (stat.isFile() && stat.size <= MAX_SEARCH_FILE_BYTES) {
         try {
-          const content = fs.readFileSync(fullPath, 'utf-8');
-          const lines = content.split('\n');
-          const escapedPattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const regex = new RegExp(escapedPattern, 'i');
-          lines.forEach((line, i) => {
-            if (regex.test(line)) {
+          const lines = fs.readFileSync(fullPath, 'utf-8').split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            if (regex.test(lines[i])) {
+              if (results.length >= MAX_SEARCH_RESULTS) {
+                truncated = true;
+                return;
+              }
               const rel = path.relative(workspaceRoot, fullPath);
-              results.push(`${rel}:${i + 1}: ${line.trim()}`);
+              results.push(`${rel}:${i + 1}: ${lines[i].trim().slice(0, 300)}`);
             }
-          });
+          }
         } catch {
           // Skip binary or unreadable files
         }
@@ -379,7 +479,158 @@ export function executeSearchAction(action: WorkspaceAction, workspaceRoot: stri
   }
 
   walk(workspaceRoot);
-  return results.length > 0 ? results.join('\n') : 'No matches found';
+  if (results.length === 0) {return 'No matches found';}
+  return truncated
+    ? `${results.join('\n')}\n[...more than ${MAX_SEARCH_RESULTS} matches — use a more specific pattern]`
+    : results.join('\n');
+}
+
+/**
+ * Executes a write action whose path was already resolved with sandboxPath.
+ * Backs files up first so "Undo all" can restore them; newPath targets are
+ * sandboxed here. `afterWrite` runs on files whose content changed (used by
+ * the extension to format). Returns 'ok' or an error message.
+ */
+export async function executeWriteAction(
+  action: WorkspaceAction,
+  filePath: string,
+  workspaceRoot: string,
+  afterWrite?: (filePath: string) => Promise<void>,
+): Promise<'ok' | string> {
+  switch (action.type) {
+    case 'mkdir': {
+      fs.mkdirSync(filePath, { recursive: true });
+      return 'ok';
+    }
+
+    case 'copy': {
+      if (!action.newPath) {return 'copy requires newPath';}
+      const destPath = sandboxPath(workspaceRoot, action.newPath);
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      backupOrRecordCreated(workspaceRoot, destPath);
+      fs.copyFileSync(filePath, destPath);
+      return 'ok';
+    }
+
+    case 'create':
+    case 'write': {
+      // Either type may target an existing file — back it up rather than
+      // recording it as created (undo would otherwise delete the original).
+      backupOrRecordCreated(workspaceRoot, filePath);
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, decodeIfDoubleEscaped(action.content ?? ''));
+      await afterWrite?.(filePath);
+      return 'ok';
+    }
+
+    case 'modify': {
+      const result = applyModifyAction(fs.readFileSync(filePath, 'utf-8'), action);
+      if ('error' in result) {return result.error;}
+      writeBackup(workspaceRoot, filePath);
+      fs.writeFileSync(filePath, result.text);
+      await afterWrite?.(filePath);
+      return 'ok';
+    }
+
+    case 'delete': {
+      writeBackup(workspaceRoot, filePath);
+      fs.unlinkSync(filePath);
+      return 'ok';
+    }
+
+    case 'rename': {
+      if (!action.newPath) {return 'rename requires newPath';}
+      const newFilePath = sandboxPath(workspaceRoot, action.newPath);
+      writeBackup(workspaceRoot, filePath);
+      fs.mkdirSync(path.dirname(newFilePath), { recursive: true });
+      backupOrRecordCreated(workspaceRoot, newFilePath);
+      fs.renameSync(filePath, newFilePath);
+      return 'ok';
+    }
+
+    default:
+      return `Unknown action type: ${(action as WorkspaceAction).type}`;
+  }
+}
+
+export interface ShellResult {
+  ok: boolean;
+  /** stdout followed by stderr, capped at maxOutputChars. */
+  output: string;
+  timedOut: boolean;
+}
+
+/** Kills a shell and everything it started (the shell alone would leave e.g. a dev server running). */
+function killProcessTree(pid: number | undefined): void {
+  if (pid === undefined) {return;}
+  try {
+    if (process.platform === 'win32') {
+      execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {});
+    } else {
+      process.kill(-pid, 'SIGKILL');
+    }
+  } catch {
+    // already exited
+  }
+}
+
+/**
+ * Runs a shell command for the Do agent's `run` action. On timeout or abort
+ * the whole process tree is killed, not just the shell; stderr is kept even
+ * when the command succeeds.
+ */
+export function runShellCommand(
+  command: string,
+  cwd: string,
+  options: { signal?: AbortSignal; timeoutMs?: number; maxOutputChars?: number } = {},
+): Promise<ShellResult> {
+  const { signal, timeoutMs = 30_000, maxOutputChars = 1024 * 1024 } = options;
+  return new Promise((resolve) => {
+    let timedOut = false;
+    let stdout = '';
+    let stderr = '';
+    const append = (current: string, chunk: Buffer): string =>
+      current.length < maxOutputChars ? current + chunk.toString('utf-8') : current;
+
+    // Own process group on POSIX (detached) so the whole tree can be killed
+    const child = spawn(command, {
+      cwd,
+      shell: true,
+      detached: process.platform !== 'win32',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.stdout?.on('data', (chunk: Buffer) => (stdout = append(stdout, chunk)));
+    child.stderr?.on('data', (chunk: Buffer) => (stderr = append(stderr, chunk)));
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killProcessTree(child.pid);
+    }, timeoutMs);
+    const onAbort = () => killProcessTree(child.pid);
+    if (signal?.aborted) {
+      onAbort();
+    } else {
+      signal?.addEventListener('abort', onAbort, { once: true });
+    }
+
+    let settled = false;
+    const finish = (ok: boolean, fallback: string) => {
+      if (settled) {return;}
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      const output = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n');
+      const text = timedOut
+        ? `${output}\n[timed out after ${timeoutMs / 1000}s — process killed]`.trim()
+        : output || fallback;
+      resolve({ ok: ok && !timedOut, output: capText(text, maxOutputChars, 'output truncated'), timedOut });
+    };
+    child.on('error', (error) => finish(false, error.message));
+    child.on('close', (code, sig) =>
+      finish(code === 0, code === null ? `Killed (${sig ?? 'signal'})` : `Exited with code ${code}`),
+    );
+  });
 }
 
 /** Builds the system prompt for the do command (shared by extension + CLI). */

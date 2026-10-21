@@ -1,21 +1,12 @@
 import {
   getWorkspaceStructure,
-  parseWorkspaceActions,
-  sandboxPath,
-  executeViewAction,
-  executeSearchAction,
   buildDoSystemPrompt,
-  writeBackup,
-  backupOrRecordCreated,
-  applyModifyAction,
-  INVALID_ACTIONS_FEEDBACK,
   deleteAllBackups,
   restoreAllBackups,
   hasBackups,
-  type WorkspaceAction,
-  type ActionResult,
 } from '@common/workspace';
-import { decodeIfDoubleEscaped, extractCode } from '@common/utils';
+import { runDoAgent } from '@common/doAgent';
+import { extractCode } from '@common/utils';
 import { buildWikiIndex, hasWikiIndex, searchWiki } from '@common/wiki';
 import {
   rebuildCodeWikiIndex,
@@ -25,22 +16,19 @@ import {
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import { FILE_CITATION_INSTRUCTIONS } from '@common/links';
 import {
-  getOllamaResponse,
-  getLMStudioResponse,
-  getOllamaChatStreaming,
-  getLMStudioChatStreaming,
-  getOpenAIResponse,
-  getOpenAIChatStreaming,
-  getAnthropicResponse,
-  getAnthropicChatStreaming,
-  getOpenCodeGoResponse,
-  getOpenCodeGoChatStreaming,
   OPENCODE_GO_URL,
-  getAskiiCloudResponse,
-  getAskiiCloudChatStreaming,
   ASKII_CLOUD_URL,
-  retryLLMCall,
+  DEFAULT_LMSTUDIO_URL,
+  DEFAULT_OLLAMA_URL,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  complete,
+  completePrompt,
+  getAskiiVersion,
+  isPlatformId,
   type ChatMessage,
+  type ChatReply,
+  type PlatformId,
+  type ProviderConnection,
 } from '@common/providers';
 import {
   buildControlSystemPrompt,
@@ -63,6 +51,7 @@ import {
   executeBrowserAction,
   takePageScreenshot,
   detectBrowserExecutable,
+  browserLaunchArgs,
 } from '@common/browser';
 import {
   type NoteEntry,
@@ -87,7 +76,7 @@ import * as path from 'path';
 import * as os from 'os';
 
 interface Config {
-  platform: 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego' | 'askiicloud';
+  platform: PlatformId;
   url: string;
   ollamaUrl: string;
   lmStudioUrl: string;
@@ -98,8 +87,10 @@ interface Config {
   opencodegoApiKey: string;
   opencodegoBaseURL: string;
   askiicloudApiKey: string;
+  askiicloudBaseURL: string;
   mode: 'helpful' | 'funny';
   maxRounds: number;
+  timeoutMs: number;
   yes: boolean;
   headless: boolean;
   controlTarget: 'screen' | 'browser';
@@ -109,10 +100,19 @@ interface Config {
   useCodeWiki: boolean;
 }
 
+/** Exit code for a run stopped with Ctrl+C (128 + SIGINT), as shells expect. */
+const EXIT_INTERRUPTED = 130;
+/** Exit code for invalid command-line usage. */
+const EXIT_USAGE = 2;
+
+/** A usage error (bad flag value, unknown platform...) — printed, then exit code 2. */
+class UsageError extends Error {}
+
 function getFlagValue(flags: string[], ...names: string[]): string | undefined {
   for (const name of names) {
     const i = flags.indexOf(name);
-    if (i !== -1 && flags[i + 1] && !flags[i + 1].startsWith('-')) {
+    // A value may start with '-' only if it is a number ("--max-rounds -1" is still rejected later)
+    if (i !== -1 && flags[i + 1] !== undefined && (!flags[i + 1].startsWith('-') || /^-\d/.test(flags[i + 1]))) {
       return flags[i + 1];
     }
   }
@@ -142,9 +142,11 @@ const VALUE_FLAGS = new Set([
   '--opencodego-url',
   '--askiicloud-key',
   '--askiicloud-model',
+  '--askiicloud-url',
   '--model',
   '--mode',
   '--max-rounds',
+  '--timeout',
   '--target',
   '--chrome-path',
   '--dir',
@@ -156,13 +158,27 @@ const VALUE_FLAGS = new Set([
   '-f',
 ]);
 
+const BOOLEAN_FLAGS = new Set([
+  '-h',
+  '--help',
+  '-v',
+  '--version',
+  '-y',
+  '--yes',
+  '--headless',
+  '--use-wiki',
+  '--use-code-wiki',
+  '--shot',
+  '--screenshot',
+]);
+
 /** Non-flag tokens, skipping each value flag's value (same rule as getFlagValue). */
 function getPositionals(tokens: string[]): string[] {
   const positionals: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
-    if (token.startsWith('-')) {
-      if (VALUE_FLAGS.has(token) && tokens[i + 1] && !tokens[i + 1].startsWith('-')) i++;
+    if (token.startsWith('-') && !/^-\d/.test(token)) {
+      if (VALUE_FLAGS.has(token) && tokens[i + 1] !== undefined && (!tokens[i + 1].startsWith('-') || /^-\d/.test(tokens[i + 1]))) i++;
       continue;
     }
     positionals.push(token);
@@ -170,18 +186,35 @@ function getPositionals(tokens: string[]): string[] {
   return positionals;
 }
 
+/** Flags that are neither known value flags nor known switches. */
+function getUnknownFlags(tokens: string[]): string[] {
+  return tokens.filter(
+    (t) => t.startsWith('-') && !/^-\d/.test(t) && !VALUE_FLAGS.has(t) && !BOOLEAN_FLAGS.has(t),
+  );
+}
+
+function parsePositiveInt(value: string | undefined, name: string, fallback: number): number {
+  if (value === undefined || value === '') return fallback;
+  if (!/^\d+$/.test(value.trim()) || parseInt(value, 10) < 1) {
+    throw new UsageError(`${name} must be a positive whole number (got: '${value}')`);
+  }
+  return parseInt(value, 10);
+}
+
 function getConfig(flags: string[]): Config {
-  const platform = (getFlagValue(flags, '-p', '--platform') ||
-    process.env.ASKII_PLATFORM ||
-    'ollama') as 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego' | 'askiicloud';
+  const platformValue = getFlagValue(flags, '-p', '--platform') || process.env.ASKII_PLATFORM || 'ollama';
+  if (!isPlatformId(platformValue)) {
+    throw new UsageError(
+      `Unknown platform '${platformValue}' — use ollama, lmstudio, openai, anthropic, opencodego or askiicloud`,
+    );
+  }
+  const platform = platformValue;
 
   const ollamaUrl =
-    getFlagValue(flags, '--ollama-url') || process.env.ASKII_OLLAMA_URL || 'http://localhost:11434';
+    getFlagValue(flags, '--ollama-url') || process.env.ASKII_OLLAMA_URL || DEFAULT_OLLAMA_URL;
 
   const lmStudioUrl =
-    getFlagValue(flags, '--lmstudio-url') ||
-    process.env.ASKII_LMSTUDIO_URL ||
-    'ws://localhost:1234';
+    getFlagValue(flags, '--lmstudio-url') || process.env.ASKII_LMSTUDIO_URL || DEFAULT_LMSTUDIO_URL;
 
   const ollamaModel =
     getFlagValue(flags, '--ollama-model') || process.env.ASKII_OLLAMA_MODEL || 'gemma4:e4b';
@@ -222,6 +255,9 @@ function getConfig(flags: string[]): Config {
   const askiicloudModel =
     getFlagValue(flags, '--askiicloud-model') || process.env.ASKII_CLOUD_MODEL || 'askii-default';
 
+  const askiicloudBaseURL =
+    getFlagValue(flags, '--askiicloud-url') || process.env.ASKII_CLOUD_URL || ASKII_CLOUD_URL;
+
   const modelMap: Record<string, string> = {
     lmstudio: lmStudioModel,
     openai: openaiModel,
@@ -229,6 +265,17 @@ function getConfig(flags: string[]): Config {
     opencodego: opencodegoModel,
     askiicloud: askiicloudModel,
   };
+
+  const mode = getFlagValue(flags, '--mode') || process.env.ASKII_MODE || 'funny';
+  if (mode !== 'helpful' && mode !== 'funny') {
+    throw new UsageError(`--mode must be 'helpful' or 'funny' (got: '${mode}')`);
+  }
+
+  const timeoutSeconds = parsePositiveInt(
+    getFlagValue(flags, '--timeout') || process.env.ASKII_TIMEOUT,
+    '--timeout',
+    DEFAULT_REQUEST_TIMEOUT_MS / 1000,
+  );
 
   return {
     platform,
@@ -242,10 +289,14 @@ function getConfig(flags: string[]): Config {
     opencodegoApiKey,
     opencodegoBaseURL,
     askiicloudApiKey,
-    mode: (getFlagValue(flags, '--mode') || process.env.ASKII_MODE || 'funny') as
-      | 'helpful'
-      | 'funny',
-    maxRounds: parseInt(getFlagValue(flags, '--max-rounds') || process.env.ASKII_MAX_ROUNDS || '5'),
+    askiicloudBaseURL,
+    mode,
+    maxRounds: parsePositiveInt(
+      getFlagValue(flags, '--max-rounds') || process.env.ASKII_MAX_ROUNDS,
+      '--max-rounds',
+      5,
+    ),
+    timeoutMs: timeoutSeconds * 1000,
     yes: hasFlag(flags, '-y', '--yes'),
     headless: hasFlag(flags, '--headless'),
     controlTarget: (getFlagValue(flags, '--target') ||
@@ -308,176 +359,58 @@ async function reloadCliCodeWiki(dir: string): Promise<void> {
   );
 }
 
+function getConnection(config: Config): ProviderConnection {
+  const { platform, model } = config;
+  switch (platform) {
+    case 'ollama':
+      return { platform, model, baseURL: config.ollamaUrl };
+    case 'lmstudio':
+      return { platform, model, baseURL: config.lmStudioUrl };
+    case 'openai':
+      return { platform, model, apiKey: config.openaiApiKey, baseURL: config.openaiBaseURL };
+    case 'anthropic':
+      return { platform, model, apiKey: config.anthropicApiKey };
+    case 'opencodego':
+      return { platform, model, apiKey: config.opencodegoApiKey, baseURL: config.opencodegoBaseURL };
+    case 'askiicloud':
+      return { platform, model, apiKey: config.askiicloudApiKey, baseURL: config.askiicloudBaseURL };
+  }
+}
+
+function logRetry(attempt: number, error: Error, delayMs: number): void {
+  console.error(`\nLLM call failed (${error.message}) — retry ${attempt} in ${delayMs / 1000}s...`);
+}
+
 async function getResponse(
   config: Config,
   prompt: string,
   system?: string,
   imageBase64?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
-  if (config.platform === 'anthropic') {
-    return getAnthropicResponse(prompt, config.anthropicApiKey, config.model, system, imageBase64);
-  } else if (config.platform === 'opencodego') {
-    return getOpenCodeGoResponse(
-      prompt,
-      config.opencodegoApiKey,
-      config.model,
-      config.opencodegoBaseURL,
-      system,
-      imageBase64,
-    );
-  } else if (config.platform === 'askiicloud') {
-    return getAskiiCloudResponse(
-      prompt,
-      config.askiicloudApiKey,
-      config.model,
-      ASKII_CLOUD_URL,
-      system,
-      imageBase64,
-    );
-  } else if (config.platform === 'lmstudio') {
-    return getLMStudioResponse(prompt, config.url, config.model, system, imageBase64);
-  } else if (config.platform === 'openai') {
-    return getOpenAIResponse(
-      prompt,
-      config.openaiApiKey,
-      config.model,
-      config.openaiBaseURL,
-      system,
-      imageBase64,
-    );
-  } else {
-    return getOllamaResponse(
-      prompt,
-      config.url,
-      config.model,
-      system,
-      imageBase64 ? [imageBase64] : undefined,
-    );
-  }
+  const reply = await completePrompt(getConnection(config), prompt, {
+    system,
+    image: imageBase64,
+    signal,
+    timeoutMs: config.timeoutMs,
+    onRetry: logRetry,
+  });
+  return reply.text;
 }
 
 async function getChatResponseStreaming(
   config: Config,
   messages: ChatMessage[],
   onChunk: (chunk: string) => void,
-): Promise<string> {
-  if (config.platform === 'anthropic') {
-    return getAnthropicChatStreaming(messages, config.anthropicApiKey, config.model, onChunk);
-  } else if (config.platform === 'opencodego') {
-    return getOpenCodeGoChatStreaming(
-      messages,
-      config.opencodegoApiKey,
-      config.model,
-      onChunk,
-      config.opencodegoBaseURL,
-    );
-  } else if (config.platform === 'askiicloud') {
-    return getAskiiCloudChatStreaming(
-      messages,
-      config.askiicloudApiKey,
-      config.model,
-      onChunk,
-      ASKII_CLOUD_URL,
-    );
-  } else if (config.platform === 'lmstudio') {
-    return getLMStudioChatStreaming(messages, config.url, config.model, onChunk);
-  } else if (config.platform === 'openai') {
-    return getOpenAIChatStreaming(
-      messages,
-      config.openaiApiKey,
-      config.model,
-      onChunk,
-      config.openaiBaseURL,
-    );
-  }
-  return getOllamaChatStreaming(messages, config.url, config.model, onChunk);
-}
-
-function executeCliWriteAction(
-  action: WorkspaceAction,
-  filePath: string,
-  workDir: string,
-): 'ok' | string {
-  switch (action.type) {
-    case 'mkdir': {
-      fs.mkdirSync(filePath, { recursive: true });
-      console.error(`  ✓ Created directory: ${action.path}`);
-      return 'ok';
-    }
-
-    case 'copy': {
-      if (!action.newPath) return 'copy requires newPath';
-      const destPath = sandboxPath(workDir, action.newPath);
-      const destDir = path.dirname(destPath);
-      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-      backupOrRecordCreated(workDir, destPath);
-      fs.copyFileSync(filePath, destPath);
-      console.error(`  ✓ Copied: ${action.path} → ${action.newPath}`);
-      return 'ok';
-    }
-
-    case 'create':
-    case 'write': {
-      // Either type may target an existing file — back it up rather than
-      // recording it as created (undo would otherwise delete the original).
-      backupOrRecordCreated(workDir, filePath);
-      const dir = path.dirname(filePath);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(filePath, decodeIfDoubleEscaped(action.content ?? ''));
-      console.error(`  ✓ ${action.type === 'create' ? 'Created' : 'Wrote'}: ${action.path}`);
-      return 'ok';
-    }
-
-    case 'modify': {
-      const result = applyModifyAction(fs.readFileSync(filePath, 'utf-8'), action);
-      if ('error' in result) return result.error;
-      writeBackup(workDir, filePath);
-      fs.writeFileSync(filePath, result.text);
-      console.error(
-        action.startLine !== undefined || action.endLine !== undefined
-          ? `  ✓ Modified (lines ${action.startLine}–${action.endLine}): ${action.path}`
-          : `  ✓ Modified: ${action.path}`,
-      );
-      return 'ok';
-    }
-
-    case 'delete': {
-      writeBackup(workDir, filePath);
-      fs.unlinkSync(filePath);
-      console.error(`  ✓ Deleted: ${action.path}`);
-      return 'ok';
-    }
-
-    case 'rename': {
-      if (!action.newPath) return 'rename requires newPath';
-      writeBackup(workDir, filePath);
-      const newFilePath = sandboxPath(workDir, action.newPath);
-      const newDir = path.dirname(newFilePath);
-      if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
-      backupOrRecordCreated(workDir, newFilePath);
-      fs.renameSync(filePath, newFilePath);
-      console.error(`  ✓ Renamed: ${action.path} → ${action.newPath}`);
-      return 'ok';
-    }
-
-    default:
-      return `Unknown action type: ${(action as WorkspaceAction).type}`;
-  }
-}
-
-function buildCliConfirmMessage(action: WorkspaceAction): string {
-  switch (action.type) {
-    case 'delete':
-      return `Delete file: ${action.path}? (backup will be created)`;
-    case 'rename':
-      return `Rename: ${action.path} → ${action.newPath}?`;
-    case 'copy':
-      return `Copy: ${action.path} → ${action.newPath}?`;
-    case 'mkdir':
-      return `Create directory: ${action.path}?`;
-    default:
-      return `${action.type}: ${action.path}?`;
-  }
+  signal?: AbortSignal,
+): Promise<ChatReply> {
+  return complete(getConnection(config), {
+    messages,
+    onChunk,
+    signal,
+    timeoutMs: config.timeoutMs,
+    onRetry: logRetry,
+  });
 }
 
 async function readStdin(): Promise<string | null> {
@@ -579,7 +512,12 @@ function mergeConfigOverride(base: Config, tokens: string[]): Config {
 
   const platform = getFlagValue(tokens, '-p', '--platform');
   if (platform) {
-    result.platform = platform as Config['platform'];
+    if (!isPlatformId(platform)) {
+      throw new UsageError(
+        `Unknown platform '${platform}' — use ollama, lmstudio, openai, anthropic, opencodego or askiicloud`,
+      );
+    }
+    result.platform = platform;
     // Ollama and LM Studio listen on different servers (http vs ws)
     result.url = platform === 'lmstudio' ? result.lmStudioUrl : result.ollamaUrl;
     // Switch to the platform's default model unless an explicit model flag is also present
@@ -596,8 +534,11 @@ function mergeConfigOverride(base: Config, tokens: string[]): Config {
     getFlagValue(tokens, '--askiicloud-model');
   if (model) result.model = model;
 
-  const maxRoundsStr = getFlagValue(tokens, '--max-rounds');
-  if (maxRoundsStr) result.maxRounds = parseInt(maxRoundsStr, 10) || result.maxRounds;
+  result.maxRounds = parsePositiveInt(
+    getFlagValue(tokens, '--max-rounds'),
+    '--max-rounds',
+    result.maxRounds,
+  );
 
   const mode = getFlagValue(tokens, '--mode');
   if (mode) result.mode = mode as Config['mode'];
@@ -633,9 +574,10 @@ async function runReplAsk(question: string, config: Config, history: ChatMessage
   process.stderr.write(`\nASKII: `);
   let response = '';
   try {
-    response = await getChatResponseStreaming(config, history, (chunk) =>
+    const reply = await getChatResponseStreaming(config, history, (chunk) =>
       process.stdout.write(chunk),
     );
+    response = reply.text;
   } catch (err) {
     console.error(`\nError: ${err instanceof Error ? err.message : 'Unknown error'}`);
     history.pop();
@@ -645,245 +587,145 @@ async function runReplAsk(question: string, config: Config, history: ChatMessage
   history.push({ role: 'assistant', content: response });
 }
 
-async function runReplDo(
+/**
+ * Runs the Do agent in workDir with terminal output and y/N confirmations,
+ * then offers to undo every change. Shared by `askii do` and the REPL /do.
+ * Returns the number of completed write actions.
+ */
+async function runCliDo(
   task: string,
   config: Config,
   rl: readline.Interface,
-  abortController: AbortController,
-): Promise<void> {
-  const workDir = path.resolve(process.cwd());
-
+  workDir: string,
+  signal: AbortSignal,
+): Promise<number> {
   deleteAllBackups(workDir);
   console.error(`ASKII is working... ${getRandomThinkingKaomoji()}`);
-  console.error('Press Ctrl+C to cancel.\n');
+  console.error('Press Ctrl+C to stop at any time.\n');
 
+  const workspaceStructure = getWorkspaceStructure(workDir);
+  console.error(`Workspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
+
+  const wikiPath = config.wikiPath;
+  const wikiAvailable = !!(wikiPath && hasWikiIndex(wikiPath));
+  const codeWikiAvailable = config.useCodeWiki && hasCodeWikiIndex(workDir);
+  const messages: ChatMessage[] = [
+    {
+      role: 'system',
+      content: buildDoSystemPrompt(workspaceStructure, wikiAvailable, codeWikiAvailable),
+    },
+    { role: 'user', content: task },
+  ];
+
+  let completedActions = 0;
   try {
-    const workspaceStructure = getWorkspaceStructure(workDir);
-    console.error(`Workspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
-
-    const wikiAvailable = !!(config.wikiPath && hasWikiIndex(config.wikiPath));
-    const codeWikiAvailable = config.useCodeWiki && hasCodeWikiIndex(workDir);
-    const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable, codeWikiAvailable);
-
-    const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: task },
-    ];
-
-    let completedActions = 0;
-    let roundCount = 0;
-
-    while (roundCount < config.maxRounds && !abortController.signal.aborted) {
-      console.error(`\n[Round ${roundCount + 1}/${config.maxRounds}]`);
-
-      process.stderr.write('AI: ');
-      const responseText = await retryLLMCall(
-        () => getChatResponseStreaming(config, messages, (chunk) => process.stderr.write(chunk)),
-        2,
-        (attempt, err) =>
-          console.error(`\nLLM call failed (attempt ${attempt}): ${err.message}. Retrying...`),
-      );
-      process.stderr.write('\n');
-
-      if (abortController.signal.aborted) break;
-      messages.push({ role: 'assistant', content: responseText });
-
-      const actions = parseWorkspaceActions(responseText);
-      if (actions === null) {
-        console.error('  ✗ Response was not a valid JSON action array — asking again.');
-        messages.push({ role: 'user', content: INVALID_ACTIONS_FEEDBACK });
-        roundCount++;
-        continue;
-      }
-      if (actions.length === 0) {
-        console.error('No actions returned. Done.');
-        break;
-      }
-
-      const readActions = actions.filter(
-        (a) =>
-          a.type === 'view' ||
-          a.type === 'list' ||
-          a.type === 'search' ||
-          a.type === 'wiki_search' ||
-          a.type === 'code_search',
-      );
-      const writeActions = actions.filter(
-        (a) =>
-          a.type !== 'view' &&
-          a.type !== 'list' &&
-          a.type !== 'search' &&
-          a.type !== 'wiki_search' &&
-          a.type !== 'code_search',
-      );
-
-      const feedbackParts: string[] = [];
-
-      const viewResults: Record<string, string> = {};
-      for (const action of readActions) {
-        try {
-          if (action.type === 'wiki_search') {
-            const q = action.query ?? '';
-            console.error(`  → Wiki search: "${q}"`);
-            viewResults[`wiki_search:${q}`] =
-              config.wikiPath && hasWikiIndex(config.wikiPath)
-                ? (await searchWiki(config.wikiPath, q)) || 'No wiki results found'
-                : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
-          } else if (action.type === 'code_search') {
-            const q = action.query ?? '';
-            console.error(`  → Code search: "${q}"`);
-            viewResults[`code_search:${q}`] = codeWikiAvailable
-              ? (await searchCodeWiki(workDir, q)) || 'No code wiki results found'
-              : 'Code wiki not available — run: askii wiki-reload (with --use-code-wiki)';
-          } else if (action.type === 'search') {
-            console.error(`  → Search: "${action.pattern}"`);
-            viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);
-          } else if (action.type === 'view' && action.paths) {
-            for (const p of action.paths) {
-              console.error(`  → Viewing: ${p}`);
-              try {
-                viewResults[p] = executeViewAction(
-                  { ...action, path: p, paths: undefined },
-                  workDir,
-                );
-              } catch (e) {
-                viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
-              }
-            }
-          } else {
-            console.error(`  → ${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`);
-            viewResults[action.path!] = executeViewAction(action, workDir);
-          }
-        } catch (e) {
-          viewResults[action.path ?? 'unknown'] =
-            `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
+    const result = await runDoAgent({
+      workspaceRoot: workDir,
+      messages,
+      maxRounds: config.maxRounds,
+      signal,
+      autoConfirm: config.yes,
+      chat: (msgs, onChunk, chatSignal) =>
+        getChatResponseStreaming(config, msgs, onChunk, chatSignal),
+      confirm: ({ kind, message, action }) => {
+        if (kind === 'run') {
+          // run ALWAYS requires explicit confirmation — ignores -y/--yes
+          return confirm(rl, `Run command: "${action.command}"? (executes shell code)`, false);
         }
-      }
-
-      if (Object.keys(viewResults).length > 0) {
-        feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
-      }
-
-      const actionResults: ActionResult[] = [];
-
-      for (const action of writeActions) {
-        // run has no path — handle it before the sandbox check
-        if (action.type === 'run') {
-          console.error(`  → Run: ${action.command}`);
-          const ok = await confirm(
+        if (kind === 'sensitive') {
+          return confirm(
             rl,
-            `Run command: "${action.command}"? (executes shell code)`,
+            `${message} (this file can make your editor or git run code — confirmation required even with --yes)`,
             false,
           );
-          if (!ok) {
-            actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
-            continue;
-          }
-          try {
-            const { execSync } = await import('child_process');
-            const output = execSync(action.command!, {
-              cwd: workDir,
-              encoding: 'utf-8',
-              timeout: 30000,
-            });
-            console.error(`  ✓ Run output:\n${output}`);
-            actionResults.push({
-              action: `run:${action.command}`,
-              status: 'ok',
-              detail: output.substring(0, 500),
-            });
-          } catch (e: unknown) {
-            const err = e as { stdout?: string; stderr?: string; message?: string };
-            const detail =
-              `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
-            console.error(`  ✗ Run failed:\n${detail}`);
-            actionResults.push({
-              action: `run:${action.command}`,
-              status: 'error',
-              detail: detail.substring(0, 500),
-            });
-          }
-          continue;
         }
-
-        let filePath: string;
-        try {
-          if (!action.path) throw new Error(`${action.type} requires path`);
-          filePath = sandboxPath(workDir, action.path);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : 'Path error';
-          console.error(`  ✗ BLOCKED: ${msg}`);
-          actionResults.push({
-            action: `${action.type}:${action.path}`,
-            status: 'error',
-            detail: msg,
-          });
-          continue;
+        return confirm(rl, message, config.yes);
+      },
+      emit: (event) => {
+        switch (event.type) {
+          case 'round-start':
+            console.error(`\n[Round ${event.round}/${event.maxRounds}]`);
+            process.stderr.write('AI: ');
+            break;
+          case 'chunk':
+            process.stderr.write(event.text);
+            break;
+          case 'round-end':
+            process.stderr.write(event.truncated ? '\n[response cut off at the token limit]\n' : '\n');
+            break;
+          case 'invalid-response':
+            console.error(
+              event.truncated
+                ? '  ✗ Response was cut off at the output token limit — asking for smaller steps.'
+                : '  ✗ Response was not a valid JSON action array — asking again.',
+            );
+            break;
+          case 'complete':
+            console.error('No actions returned. Done.');
+            break;
+          case 'notice':
+            console.error(`  ! ${event.message}`);
+            break;
+          case 'action-start':
+            if (READ_ACTION_TYPES.has(event.action.type) || event.action.type === 'run') {
+              console.error(`  → ${event.label}`);
+            }
+            break;
+          case 'action-end':
+            if (event.status === 'blocked') {
+              console.error(`  ✗ BLOCKED: ${event.detail}`);
+            } else if (event.status === 'error') {
+              console.error(`  ✗ Failed: ${event.detail ?? event.label}`);
+            } else if (event.status === 'ok' && event.action.type === 'run') {
+              console.error(`  ✓ Run output:\n${event.detail ?? ''}`);
+            } else if (event.status === 'ok' && !READ_ACTION_TYPES.has(event.action.type)) {
+              console.error(`  ✓ ${event.label}`);
+            }
+            break;
+          case 'max-rounds':
+            console.error(`\nMax rounds (${event.maxRounds}) reached.`);
+            break;
         }
-
-        const promptMsg = buildCliConfirmMessage(action);
-        const ok = await confirm(rl, promptMsg, config.yes);
-        if (!ok) {
-          actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
-          continue;
-        }
-
-        try {
-          const result = executeCliWriteAction(action, filePath, workDir);
-          if (result === 'ok') completedActions++;
-          actionResults.push({
-            action: `${action.type}:${action.path}`,
-            status: result === 'ok' ? 'ok' : 'error',
-            detail: result === 'ok' ? undefined : result,
-          });
-        } catch (e) {
-          const detail = e instanceof Error ? e.message : 'Unknown error';
-          console.error(`  ✗ Failed: ${detail}`);
-          actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail });
-        }
-      }
-
-      if (actionResults.length > 0) {
-        feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
-      }
-
-      if (feedbackParts.length === 0) break;
-
-      messages.push({
-        role: 'user',
-        content:
-          feedbackParts.join('\n\n') +
-          '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
-      });
-
-      roundCount++;
-    }
-
-    if (roundCount >= config.maxRounds) {
-      console.error(`\nMax rounds (${config.maxRounds}) reached.`);
-    }
-    console.error(`\nCompleted ${completedActions} actions! ${getRandomKaomoji()}`);
-
-    if (hasBackups(workDir)) {
-      const doUndo = await confirm(
-        rl,
-        'Undo all changes? (y = restore backups, n = keep changes and delete backups)',
-        false,
-      );
-      if (doUndo) {
-        const { restored, deleted } = restoreAllBackups(workDir);
-        deleteAllBackups(workDir);
-        console.error(
-          `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
-        );
-      } else {
-        deleteAllBackups(workDir);
-      }
-    }
+      },
+      searchWiki: wikiAvailable && wikiPath ? (q) => searchWiki(wikiPath, q) : undefined,
+      searchCode: codeWikiAvailable ? (q) => searchCodeWiki(workDir, q) : undefined,
+      wikiUnavailableMessage: 'Wiki not available — run: askii wiki-reload --wiki-path <path>',
+      codeWikiUnavailableMessage:
+        'Code wiki not available — run: askii wiki-reload (with --use-code-wiki)',
+    });
+    completedActions = result.completedActions;
   } catch (error) {
-    console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    if (!signal.aborted) {
+      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
+
+  console.error(
+    signal.aborted
+      ? `\nStopped after ${completedActions} action(s).`
+      : `\nCompleted ${completedActions} actions! ${getRandomKaomoji()}`,
+  );
+
+  if (hasBackups(workDir)) {
+    const doUndo = await confirm(
+      rl,
+      'Undo all changes? (y = restore backups, n = keep changes and delete backups)',
+      false,
+    );
+    if (doUndo) {
+      const { restored, deleted } = restoreAllBackups(workDir);
+      deleteAllBackups(workDir);
+      console.error(
+        `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
+      );
+    } else {
+      deleteAllBackups(workDir);
+    }
+  }
+  return completedActions;
 }
+
+const READ_ACTION_TYPES = new Set(['view', 'list', 'search', 'wiki_search', 'code_search']);
 
 async function handleReplInput(
   line: string,
@@ -1084,7 +926,7 @@ async function handleReplInput(
           // readline closed
         }
 
-        await runReplDo(task, doConfig, rl, abortController);
+        await runCliDo(task, doConfig, rl, path.resolve(process.cwd()), abortController.signal);
         return false;
       }
 
@@ -1267,6 +1109,8 @@ Options:
       --opencodego-url <url> opencode Go base URL (env: ASKII_OPENCODEGO_URL)
       --askiicloud-key <key> ASKII Cloud API key (env: ASKII_CLOUD_KEY)
       --askiicloud-model <m> ASKII Cloud model (default: askii-default)
+      --askiicloud-url <url> ASKII Cloud base URL (env: ASKII_CLOUD_URL, default: https://api.askii.dev/v1)
+      --timeout <seconds>    Per-request timeout (env: ASKII_TIMEOUT, default: 600)
       --mode <mode>          Response mode: helpful, funny (default: funny)
       --max-rounds <n>       Max agent rounds for "do" / "control" (default: 5)
       --dir <path>           Working directory for "do" (default: cwd)
@@ -1279,8 +1123,15 @@ Options:
       --wiki-path <path>     Path to folder with .md docs for wiki RAG (env: ASKII_WIKI_PATH)
       --use-wiki             Inject wiki context into ask/edit/do (env: ASKII_USE_WIKI=1)
       --use-code-wiki        Inject code wiki context into ask/edit/do (env: ASKII_USE_CODE_WIKI=1)
-  -y, --yes                  Auto-confirm all actions
+  -y, --yes                  Auto-confirm file edits in "do" (shell commands and files that can run
+                             code — .vscode/, .husky/, git hooks — are always confirmed)
+  -v, --version              Print the version
   -h, --help                 Show help
+
+API keys: prefer the environment variables below over --*-key flags — flag values are
+visible to other users in the process list and stay in your shell history.
+
+Exit codes: 0 success, 1 error, 2 invalid usage, 130 stopped with Ctrl+C
 
 Environment variables:
   ASKII_PLATFORM
@@ -1289,8 +1140,8 @@ Environment variables:
   ASKII_OPENAI_KEY      ASKII_OPENAI_MODEL    ASKII_OPENAI_URL
   ASKII_ANTHROPIC_KEY   ASKII_ANTHROPIC_MODEL
   ASKII_OPENCODEGO_KEY  ASKII_OPENCODEGO_MODEL  ASKII_OPENCODEGO_URL
-  ASKII_CLOUD_KEY       ASKII_CLOUD_MODEL
-  ASKII_MODE            ASKII_MAX_ROUNDS      ASKII_CONTROL_TARGET
+  ASKII_CLOUD_KEY       ASKII_CLOUD_MODEL     ASKII_CLOUD_URL
+  ASKII_MODE            ASKII_MAX_ROUNDS      ASKII_CONTROL_TARGET  ASKII_TIMEOUT
   ASKII_WIKI_PATH       ASKII_USE_WIKI      ASKII_USE_CODE_WIKI
 
 Examples:
@@ -1928,7 +1779,7 @@ async function runScreenControl(instruction: string, config: Config): Promise<vo
     abortController.abort();
     console.error('\n\nStopped by user (Ctrl+C).');
     rl.close();
-    process.exit(0);
+    process.exit(EXIT_INTERRUPTED);
   };
   process.once('SIGINT', stop);
   rl.on('SIGINT', stop);
@@ -1995,6 +1846,7 @@ async function runScreenControl(instruction: string, config: Config): Promise<vo
         prompt,
         buildControlSystemPrompt(screenW, screenH, systemInfo, history),
         imageBase64,
+        abortController.signal,
       );
 
       if (abortController.signal.aborted) break;
@@ -2028,7 +1880,7 @@ async function runScreenControl(instruction: string, config: Config): Promise<vo
             screenW,
             screenH,
             a,
-            (sys, img) => getResponse(config, sys, undefined, img),
+            (sys, img) => getResponse(config, sys, undefined, img, abortController.signal),
           );
           if (refined) {
             console.error(`Zoom: (${a.x}, ${a.y}) → (${refined.x}, ${refined.y})`);
@@ -2062,7 +1914,13 @@ async function runScreenControl(instruction: string, config: Config): Promise<vo
           const ct = a as { action: 'click_text'; text: string; reasoning: string };
           try {
             const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
-            const raw = await getResponse(config, resolvePrompt, undefined, imageBase64);
+            const raw = await getResponse(
+              config,
+              resolvePrompt,
+              undefined,
+              imageBase64,
+              abortController.signal,
+            );
             const m = raw.match(/\{[\s\S]*?\}/);
             if (m) {
               const coords = JSON.parse(m[0]);
@@ -2121,7 +1979,7 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
     rl.close();
     void Promise.resolve(browser?.close())
       .catch(() => undefined)
-      .finally(() => process.exit(0));
+      .finally(() => process.exit(EXIT_INTERRUPTED));
   };
   process.once('SIGINT', stop);
   rl.on('SIGINT', stop);
@@ -2144,7 +2002,7 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
     browser = await puppeteer.launch({
       headless: config.headless ? true : false,
       executablePath,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
+      args: browserLaunchArgs(),
     });
 
     const [page] = await browser.pages();
@@ -2171,6 +2029,7 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
         userPrompt,
         buildBrowserSystemPrompt(),
         imageBase64,
+        abortController.signal,
       );
 
       if (abortController.signal.aborted) break;
@@ -2386,9 +2245,19 @@ async function main() {
   const positional = getPositionals(argv);
   const command = positional[0] ?? '';
 
+  if (hasFlag(flags, '-v', '--version') || command === 'version') {
+    console.log(getAskiiVersion());
+    process.exit(0);
+  }
+
   if (hasFlag(flags, '-h', '--help') || command === 'help') {
     printHelp();
     process.exit(0);
+  }
+
+  const unknownFlags = getUnknownFlags(flags);
+  if (unknownFlags.length > 0) {
+    console.error(`Warning: ignoring unknown option(s): ${unknownFlags.join(', ')} (see askii --help)`);
   }
 
   const config = getConfig(flags);
@@ -2581,267 +2450,28 @@ async function main() {
     }
 
     const workDir = path.resolve(getFlagValue(flags, '--dir') || process.cwd());
-
-    deleteAllBackups(workDir);
-
-    console.error(`ASKII is working... ${getRandomThinkingKaomoji()}`);
-    console.error('Press Ctrl+C to stop at any time.\n');
-
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
     const abortController = new AbortController();
 
     // On a TTY readline holds stdin in raw mode, so Ctrl+C arrives as rl's
-    // 'SIGINT' event rather than a process signal — listen for both.
+    // 'SIGINT' event rather than a process signal — listen for both. The
+    // first Ctrl+C stops the agent (and the in-flight request) and still
+    // offers the undo prompt; a second one exits immediately.
     const stop = () => {
+      if (abortController.signal.aborted) {
+        rl.close();
+        process.exit(EXIT_INTERRUPTED);
+      }
       abortController.abort();
-      console.error('\n\nStopped by user (Ctrl+C).');
-      rl.close();
-      process.exit(0);
+      console.error('\n\nStopping (Ctrl+C) — press Ctrl+C again to exit immediately.');
     };
-    process.once('SIGINT', stop);
+    process.on('SIGINT', stop);
     rl.on('SIGINT', stop);
 
-    try {
-      const workspaceStructure = getWorkspaceStructure(workDir);
-      console.error(`\nWorkspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
-
-      const wikiAvailableDo = !!(config.wikiPath && hasWikiIndex(config.wikiPath));
-      const codeWikiAvailableDo = config.useCodeWiki && hasCodeWikiIndex(workDir);
-      const systemPrompt = buildDoSystemPrompt(
-        workspaceStructure,
-        wikiAvailableDo,
-        codeWikiAvailableDo,
-      );
-      const messages: ChatMessage[] = [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: task },
-      ];
-
-      let completedActions = 0;
-      let roundCount = 0;
-
-      while (roundCount < config.maxRounds && !abortController.signal.aborted) {
-        console.error(`\n[Round ${roundCount + 1}/${config.maxRounds}]`);
-
-        process.stderr.write('AI: ');
-        const responseText = await retryLLMCall(
-          () => getChatResponseStreaming(config, messages, (chunk) => process.stderr.write(chunk)),
-          2,
-          (attempt, err) =>
-            console.error(`\nLLM call failed (attempt ${attempt}): ${err.message}. Retrying...`),
-        );
-        process.stderr.write('\n');
-
-        if (abortController.signal.aborted) break;
-        messages.push({ role: 'assistant', content: responseText });
-
-        const actions = parseWorkspaceActions(responseText);
-        if (actions === null) {
-          console.error('  ✗ Response was not a valid JSON action array — asking again.');
-          messages.push({ role: 'user', content: INVALID_ACTIONS_FEEDBACK });
-          roundCount++;
-          continue;
-        }
-        if (actions.length === 0) {
-          console.error('No actions returned. Done.');
-          break;
-        }
-
-        const readActions = actions.filter(
-          (a) =>
-            a.type === 'view' ||
-            a.type === 'list' ||
-            a.type === 'search' ||
-            a.type === 'wiki_search' ||
-            a.type === 'code_search',
-        );
-        const writeActions = actions.filter(
-          (a) =>
-            a.type !== 'view' &&
-            a.type !== 'list' &&
-            a.type !== 'search' &&
-            a.type !== 'wiki_search' &&
-            a.type !== 'code_search',
-        );
-
-        const feedbackParts: string[] = [];
-
-        // ── Read actions ──────────────────────────────────────────────────────
-        const viewResults: Record<string, string> = {};
-        for (const action of readActions) {
-          try {
-            if (action.type === 'wiki_search') {
-              const q = action.query ?? '';
-              console.error(`  → Wiki search: "${q}"`);
-              viewResults[`wiki_search:${q}`] =
-                config.wikiPath && hasWikiIndex(config.wikiPath)
-                  ? (await searchWiki(config.wikiPath, q)) || 'No wiki results found'
-                  : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
-            } else if (action.type === 'code_search') {
-              const q = action.query ?? '';
-              console.error(`  → Code search: "${q}"`);
-              viewResults[`code_search:${q}`] = codeWikiAvailableDo
-                ? (await searchCodeWiki(workDir, q)) || 'No code wiki results found'
-                : 'Code wiki not available — run: askii wiki-reload (with --use-code-wiki)';
-            } else if (action.type === 'search') {
-              console.error(`  → Search: "${action.pattern}"`);
-              viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);
-            } else if (action.type === 'view' && action.paths) {
-              for (const p of action.paths) {
-                console.error(`  → Viewing: ${p}`);
-                try {
-                  viewResults[p] = executeViewAction(
-                    { ...action, path: p, paths: undefined },
-                    workDir,
-                  );
-                } catch (e) {
-                  viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
-                }
-              }
-            } else {
-              console.error(
-                `  → ${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`,
-              );
-              viewResults[action.path!] = executeViewAction(action, workDir);
-            }
-          } catch (e) {
-            viewResults[action.path ?? 'unknown'] =
-              `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
-          }
-        }
-
-        if (Object.keys(viewResults).length > 0) {
-          feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
-        }
-
-        // ── Write actions ─────────────────────────────────────────────────────
-        const actionResults: ActionResult[] = [];
-
-        for (const action of writeActions) {
-          if (action.type === 'run') {
-            // run has no path, so it skips the sandbox check below.
-            // run ALWAYS requires explicit confirmation — ignores -y/--yes
-            console.error(`  → Run: ${action.command}`);
-            const ok = await confirm(
-              rl,
-              `Run command: "${action.command}"? (executes shell code)`,
-              false,
-            );
-            if (!ok) {
-              actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
-              continue;
-            }
-            try {
-              const { execSync } = await import('child_process');
-              const output = execSync(action.command!, {
-                cwd: workDir,
-                encoding: 'utf-8',
-                timeout: 30000,
-              });
-              console.error(`  ✓ Run output:\n${output}`);
-              actionResults.push({
-                action: `run:${action.command}`,
-                status: 'ok',
-                detail: output.substring(0, 500),
-              });
-            } catch (e: unknown) {
-              const err = e as { stdout?: string; stderr?: string; message?: string };
-              const detail =
-                `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
-              console.error(`  ✗ Run failed:\n${detail}`);
-              actionResults.push({
-                action: `run:${action.command}`,
-                status: 'error',
-                detail: detail.substring(0, 500),
-              });
-            }
-            continue;
-          }
-
-          // Sandbox validation
-          let filePath: string;
-          try {
-            if (!action.path) throw new Error(`${action.type} requires path`);
-            filePath = sandboxPath(workDir, action.path);
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : 'Path error';
-            console.error(`  ✗ BLOCKED: ${msg}`);
-            actionResults.push({
-              action: `${action.type}:${action.path}`,
-              status: 'error',
-              detail: msg,
-            });
-            continue;
-          }
-
-          const promptMsg = buildCliConfirmMessage(action);
-          const ok = await confirm(rl, promptMsg, config.yes);
-          if (!ok) {
-            actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
-            continue;
-          }
-
-          try {
-            const result = executeCliWriteAction(action, filePath, workDir);
-            if (result === 'ok') completedActions++;
-            actionResults.push({
-              action: `${action.type}:${action.path}`,
-              status: result === 'ok' ? 'ok' : 'error',
-              detail: result === 'ok' ? undefined : result,
-            });
-          } catch (e) {
-            const detail = e instanceof Error ? e.message : 'Unknown error';
-            console.error(`  ✗ Failed: ${detail}`);
-            actionResults.push({
-              action: `${action.type}:${action.path}`,
-              status: 'error',
-              detail,
-            });
-          }
-        }
-
-        if (actionResults.length > 0) {
-          feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
-        }
-
-        if (feedbackParts.length === 0) break;
-
-        messages.push({
-          role: 'user',
-          content:
-            feedbackParts.join('\n\n') +
-            '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
-        });
-
-        roundCount++;
-      }
-
-      if (roundCount >= config.maxRounds) {
-        console.error(`\nMax rounds (${config.maxRounds}) reached.`);
-      }
-      console.error(`\nCompleted ${completedActions} actions! ${getRandomKaomoji()}`);
-
-      if (hasBackups(workDir)) {
-        const doUndo = await confirm(
-          rl,
-          'Undo all changes? (y = restore backups, n = keep changes and delete backups)',
-          false,
-        );
-        if (doUndo) {
-          const { restored, deleted } = restoreAllBackups(workDir);
-          deleteAllBackups(workDir);
-          console.error(
-            `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
-          );
-        } else {
-          deleteAllBackups(workDir);
-        }
-      }
-      rl.close();
-    } catch (error) {
-      rl.close();
-      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      process.exit(1);
+    await runCliDo(task, config, rl, workDir, abortController.signal);
+    rl.close();
+    if (abortController.signal.aborted) {
+      process.exit(EXIT_INTERRUPTED);
     }
   } else if (command === 'control' || command === 'browse') {
     // ASKII Control — screen (default) or browser, picked via --target /
@@ -2884,4 +2514,11 @@ async function main() {
   }
 }
 
-main();
+main().catch((error: unknown) => {
+  if (error instanceof UsageError) {
+    console.error(`Error: ${error.message}`);
+    process.exit(EXIT_USAGE);
+  }
+  console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+});

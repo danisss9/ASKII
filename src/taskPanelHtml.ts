@@ -193,8 +193,8 @@ export function getTaskPanelHtml(nonce: string): string {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src data:">
-  <style>${css}</style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src data:">
+  <style nonce="${nonce}">${css}</style>
 </head>
 <body data-status="done">
   <div id="header">

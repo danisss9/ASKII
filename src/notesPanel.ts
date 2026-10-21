@@ -10,7 +10,10 @@ import {
   buildEntry,
   updateNoteText,
   snoozeNote,
+  isNoteScreenshot,
+  deleteNoteScreenshot,
 } from './notes';
+import { log } from './log';
 import { rescheduleAll, onNotesChanged } from './notesScheduler';
 import { getNotePanelHtml } from './notesPanelHtml';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
@@ -69,7 +72,14 @@ export async function askiiNoteCommand(
     getSnoozeMinutes(),
   );
 
-  panel.webview.onDidReceiveMessage((msg) => handleWebviewMessage(panel, context, msg));
+  panel.webview.onDidReceiveMessage((msg) =>
+    handleWebviewMessage(panel, context, msg).catch((error: unknown) => {
+      log.error('ASKII Note panel action failed', error);
+      vscode.window.showErrorMessage(
+        `ASKII Note: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }),
+  );
 
   panel.onDidDispose(() => {
     currentPanel = undefined;
@@ -206,7 +216,9 @@ async function handleWebviewMessage(
     case 'deleteEntry': {
       const id = typeof m.id === 'string' ? m.id : '';
       if (!id) {break;}
-      const notes = loadNotes(context).filter((n) => n.id !== id);
+      const all = loadNotes(context);
+      deleteNoteScreenshot(context, all.find((n) => n.id === id)?.screenshotPath);
+      const notes = all.filter((n) => n.id !== id);
       saveNotes(context, notes);
       rescheduleAll(notes);
       refreshList();
@@ -327,7 +339,8 @@ async function handleWebviewMessage(
 
     case 'openScreenshot': {
       const p = typeof m.path === 'string' ? m.path : '';
-      if (p) {
+      // The webview may only open screenshots ASKII stored, not any path
+      if (p && isNoteScreenshot(context, p)) {
         const uri = vscode.Uri.file(p);
         await vscode.commands.executeCommand('vscode.open', uri);
       }

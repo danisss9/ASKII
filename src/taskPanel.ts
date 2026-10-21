@@ -68,6 +68,11 @@ export function endTaskSession(): void {
 export function acquireTaskPanel(title: string): void {
   entrySeq = 0;
   entryStatuses.clear();
+  // Pending flushes would otherwise post the old run's text into the new
+  // run's entries, which reuse the same ids
+  for (const buf of streamBuffers.values()) {
+    if (buf.timer !== null) { clearTimeout(buf.timer); }
+  }
   streamBuffers.clear();
   // Stale waiters from a previous session resolve as "no answer" so their
   // command loops exit cleanly when a new run takes the panel over.

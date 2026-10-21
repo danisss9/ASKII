@@ -33,23 +33,14 @@ import {
 
 import {
   getWorkspaceStructure,
-  parseWorkspaceActions,
-  sandboxPath,
-  executeViewAction,
-  executeSearchAction,
   buildDoSystemPrompt,
-  writeBackup,
-  backupOrRecordCreated,
-  applyModifyAction,
-  INVALID_ACTIONS_FEEDBACK,
   deleteAllBackups,
   restoreAllBackups,
   hasBackups,
-  type WorkspaceAction,
-  type ActionResult,
 } from '@common/workspace';
+import { runDoAgent } from '@common/doAgent';
 import { type ChatMessage } from '@common/providers';
-import { escapeHtml, decodeIfDoubleEscaped, extractCode } from '@common/utils';
+import { escapeHtml, extractCode, parseJsonFromModel } from '@common/utils';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import {
   buildControlSystemPrompt,
@@ -71,6 +62,7 @@ import {
   executeBrowserAction,
   takePageScreenshot,
   detectBrowserExecutable,
+  browserLaunchArgs,
 } from '@common/browser';
 import { buildWikiIndex, hasWikiIndex, searchWiki } from '@common/wiki';
 import {
@@ -273,13 +265,18 @@ export async function askAskiiCommand() {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'">
-  <style>${css}</style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'">
+  <style nonce="${nonce}">${css}</style>
 </head>
 <body>
   <div class="header-row">
     <h2 id="title">ASKII is thinking... (๑•﹏•)</h2>
     <div class="btn-group">
+      <button id="stopBtn" class="icon-btn" title="Stop generating">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="6" y="6" width="12" height="12" rx="1"></rect>
+        </svg>
+      </button>
       <button id="historyBtn" class="icon-btn" title="View conversation history">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 3v5h5"></path>
@@ -311,6 +308,8 @@ export async function askAskiiCommand() {
     const copyBtn = document.getElementById('copyBtn');
     const followUpBtn = document.getElementById('followUpBtn');
     const historyBtn = document.getElementById('historyBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    stopBtn.style.display = 'inline-flex';
     let rawText = '';
     let showingHistory = false;
     let savedHtml = '';
@@ -325,6 +324,8 @@ export async function askAskiiCommand() {
       copyBtn.style.display = d;
       followUpBtn.style.display = d;
       historyBtn.style.display = d;
+      // Stop is the opposite: only while an answer is being generated
+      stopBtn.style.display = visible ? 'none' : 'inline-flex';
     }
     function flashCopied() {
       copyBtn.classList.add('copied');
@@ -382,6 +383,7 @@ export async function askAskiiCommand() {
         titleEl.textContent = 'Error';
         contentEl.innerHTML = safeHtml;
         showBtns(false);
+        stopBtn.style.display = 'none';
       }
     });
     // Inline onclick attributes are blocked by this page's CSP (script-src 'nonce-...'),
@@ -394,6 +396,10 @@ export async function askAskiiCommand() {
       } else {
         vscode.postMessage({ type: 'requestHistory' });
       }
+    });
+    stopBtn.addEventListener('click', () => {
+      stopBtn.style.display = 'none';
+      vscode.postMessage({ type: 'stop' });
     });
     followUpBtn.addEventListener('click', () => {
       showBtns(false);
@@ -444,12 +450,14 @@ export async function askAskiiCommand() {
     if (msg.type === 'copy' && typeof msg.text === 'string') {
       void vscode.env.clipboard.writeText(msg.text).then(
         () => {
-          if (!panelDisposed) {panel.webview.postMessage({ type: 'copied' });}
+          post({ type: 'copied' });
         },
         () => {
-          if (!panelDisposed) {panel.webview.postMessage({ type: 'copyFailed' });}
+          post({ type: 'copyFailed' });
         },
       );
+    } else if (msg.type === 'stop') {
+      turnController?.abort();
     } else if (msg.type === 'openLocation' && typeof msg.href === 'string') {
       void openAskiiLocation(msg.href);
     } else if (msg.type === 'requestHistory') {
@@ -469,7 +477,7 @@ export async function askAskiiCommand() {
                 return `<div class="history-entry"><div class="history-q">${escapeHtml(entry.question)}</div>${answerHtml}</div>`;
               })
               .join('<hr>');
-      if (!panelDisposed) {panel.webview.postMessage({ type: 'history', html });}
+      post({ type: 'history', html });
     }
   });
 
@@ -479,9 +487,21 @@ export async function askAskiiCommand() {
   let history = '';
   let currentQuestion = question;
   let panelDisposed = false;
+  // The in-flight answer's request — aborted by Stop or by closing the panel
+  let turnController: AbortController | undefined;
   panel.onDidDispose(() => {
     panelDisposed = true;
+    turnController?.abort();
   });
+  // postMessage on a disposed webview throws — every send goes through here
+  const post = (message: unknown): void => {
+    if (panelDisposed) {return;}
+    try {
+      void panel.webview.postMessage(message).then(undefined, () => undefined);
+    } catch {
+      // disposed between the check and the call
+    }
+  };
 
   while (!panelDisposed) {
     const wikiCtx = await getWikiContext(currentQuestion);
@@ -491,6 +511,8 @@ export async function askAskiiCommand() {
     const fullPrompt =
       wikiSection + codeWikiSection + codeContext + history + `Question: ${currentQuestion}`;
     let accumulated = '';
+    const controller = new AbortController();
+    turnController = controller;
 
     const renderAccumulated = (): string => {
       try {
@@ -512,27 +534,43 @@ export async function askAskiiCommand() {
           if (flushTimer === null) {
             flushTimer = setTimeout(() => {
               flushTimer = null;
-              if (!panelDisposed) {
-                panel.webview.postMessage({ type: 'update', html: renderAccumulated() });
-              }
+              post({ type: 'update', html: renderAccumulated() });
             }, 50);
           }
         },
         'You are ASKII, a precise coding assistant. Answer concisely.\n\n' +
         FILE_CITATION_INSTRUCTIONS,
-      );
-      if (flushTimer !== null) {
-        clearTimeout(flushTimer);
-        flushTimer = null;
-      }
+        controller.signal,
+      ).finally(() => {
+        if (flushTimer !== null) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+      });
 
       history += `Question: ${currentQuestion}\n\nAnswer: ${accumulated}\n\n`;
       conversation.push({ question: currentQuestion, answer: accumulated });
-      panel.webview.postMessage({ type: 'done', html: renderAccumulated(), text: accumulated });
+      post({ type: 'done', html: renderAccumulated(), text: accumulated });
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      panel.webview.postMessage({ type: 'error', html: `<p>${escapeHtml(errorMsg)}</p>` });
-      break;
+      if (panelDisposed) {
+        break;
+      }
+      if (controller.signal.aborted) {
+        // Stopped: keep what arrived so far and allow a follow-up
+        const partial = accumulated ? `${accumulated}\n\n*(stopped)*` : '*(stopped)*';
+        if (accumulated) {
+          history += `Question: ${currentQuestion}\n\nAnswer: ${accumulated}\n\n`;
+          conversation.push({ question: currentQuestion, answer: accumulated });
+        }
+        accumulated = partial;
+        post({ type: 'done', html: renderAccumulated(), text: partial });
+      } else {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        post({ type: 'error', html: `<p>${escapeHtml(errorMsg)}</p>` });
+        break;
+      }
+    } finally {
+      turnController = undefined;
     }
 
     // Wait for a follow-up request or panel close. An empty answer means the user
@@ -565,7 +603,7 @@ export async function askAskiiCommand() {
         break; // panel closed while waiting
       }
       if (answer === '') {
-        panel.webview.postMessage({ type: 'cancelled' });
+        post({ type: 'cancelled' });
         continue;
       }
       nextQuestion = answer;
@@ -575,7 +613,7 @@ export async function askAskiiCommand() {
       break;
     }
     currentQuestion = nextQuestion;
-    panel.webview.postMessage({ type: 'thinking' });
+    post({ type: 'thinking' });
   }
 }
 
@@ -604,8 +642,6 @@ export async function askiiEditCommand() {
   if (!question) {
     return;
   }
-
-  vscode.window.showInformationMessage('ASKII is editing... (•_•)>⌐■-■');
 
   const editConfig = vscode.workspace.getConfiguration('askii');
   const formatAfterEdit = editConfig.get<boolean>('formatAfterEdit') ?? false;
@@ -647,11 +683,41 @@ export async function askiiEditCommand() {
         `Return only the updated code without explanation.`;
     }
 
-    const responseText = await getExtensionResponse(
-      prompt,
-      'You are ASKII, a precise coding assistant. Return only the requested code, no explanation.',
+    const responseText = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'ASKII is editing... (•_•)>⌐■-■',
+        cancellable: true,
+      },
+      async (_progress, token) => {
+        const controller = new AbortController();
+        const sub = token.onCancellationRequested(() => controller.abort());
+        try {
+          return await getExtensionResponse(
+            prompt,
+            'You are ASKII, a precise coding assistant. Return only the requested code, no explanation.',
+            'general',
+            controller.signal,
+          );
+        } catch (error) {
+          if (controller.signal.aborted) {
+            return null;
+          }
+          throw error;
+        } finally {
+          sub.dispose();
+        }
+      },
     );
+    if (responseText === null) {
+      vscode.window.setStatusBarMessage('ASKII Edit cancelled.', 3000);
+      return;
+    }
     const code = extractCode(responseText);
+    if (!code.trim()) {
+      vscode.window.showWarningMessage('ASKII Edit: the model returned no code — nothing was changed.');
+      return;
+    }
 
     // The original text being replaced (selection or full file)
     const originalText = selectedText ?? fullFileText;
@@ -689,6 +755,7 @@ export async function askiiEditCommand() {
       await vscode.commands.executeCommand('editor.action.formatDocument');
       formatted = editor.document.version !== versionBeforeFormat;
     }
+    const versionAfterEdit = editor.document.version;
 
     // ── Show diff + undo offer ────────────────────────────────────────────────
     const diffId = `edit-${Date.now()}`;
@@ -715,6 +782,14 @@ export async function askiiEditCommand() {
     askiiDiffProvider.deleteContent(`proposed-${diffId}`);
 
     if (undoChoice === 'Undo') {
+      // The undo stack only holds just ASKII's edit while nothing else
+      // changed the file — otherwise "undo" would revert the user's typing
+      if (editor.document.isClosed || editor.document.version !== versionAfterEdit) {
+        vscode.window.showWarningMessage(
+          'ASKII Edit: the file changed after the edit, so it was not reverted automatically — use Undo (Ctrl+Z) in the editor.',
+        );
+        return;
+      }
       // Re-focus the original editor so undo targets the right document
       await vscode.window.showTextDocument(editor.document, editor.viewColumn);
       if (formatted) {
@@ -729,7 +804,34 @@ export async function askiiEditCommand() {
   }
 }
 
+// One output channel per agent, reused across runs (a new channel per run
+// piled up in the Output panel and was never disposed).
+const agentChannels = new Map<string, vscode.OutputChannel>();
+
+function getAgentChannel(name: string): vscode.OutputChannel {
+  let channel = agentChannels.get(name);
+  if (!channel) {
+    channel = vscode.window.createOutputChannel(name);
+    agentChannels.set(name, channel);
+  }
+  return channel;
+}
+
+export function disposeAgentChannels(): void {
+  for (const channel of agentChannels.values()) {
+    channel.dispose();
+  }
+  agentChannels.clear();
+}
+
 export async function askiiDoCommand() {
+  if (!vscode.workspace.isTrusted) {
+    vscode.window.showWarningMessage(
+      'ASKII Do edits files and runs commands, so it is disabled in Restricted Mode. Trust this workspace to use it.',
+    );
+    return;
+  }
+
   const question = await vscode.window.showInputBox({
     prompt: 'What would you like ASKII to do?',
     placeHolder: 'e.g., Create a test file, refactor common patterns',
@@ -747,12 +849,36 @@ export async function askiiDoCommand() {
     vscode.window.showInformationMessage('ASKII is already running a task — see the ASKII task panel.');
     return;
   }
+  // The session is held until the keep-or-undo choice is answered: a second
+  // Do started before that would delete this run's backups.
+  let ownsSession = true;
+  const releaseSession = () => {
+    if (ownsSession) {
+      ownsSession = false;
+      endTaskSession();
+    }
+  };
 
+  try {
+    await runDoSession(question, workspaceRoot.uri.fsPath, releaseSession, () => {
+      ownsSession = beginTaskSession();
+      return ownsSession;
+    });
+  } finally {
+    releaseSession();
+  }
+}
+
+async function runDoSession(
+  question: string,
+  rootPath: string,
+  releaseSession: () => void,
+  reacquireSession: () => boolean,
+): Promise<void> {
   const config = vscode.workspace.getConfiguration('askii');
-  const maxRounds = config.get<number>('doMaxRounds') || 20;
+  const maxRounds = Math.max(1, config.get<number>('doMaxRounds') ?? 20);
   const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
   const formatAfterEdit = config.get<boolean>('formatAfterEdit') ?? false;
-  const rootPath = workspaceRoot.uri.fsPath;
 
   try {
     deleteAllBackups(rootPath);
@@ -760,14 +886,8 @@ export async function askiiDoCommand() {
     // Backup cleanup is best-effort; don't block the run on it
   }
 
-  const channel = vscode.window.createOutputChannel('ASKII Do');
-  channel.appendLine(`Task: ${question}`);
-
-  const abortController = new AbortController();
-  setTaskCanceller(() => {
-    abortController.abort();
-    channel.appendLine('\nStopped by user.');
-  });
+  const channel = getAgentChannel('ASKII Do');
+  channel.appendLine(`\nTask: ${question}`);
 
   acquireTaskPanel('ASKII Do');
 
@@ -787,314 +907,162 @@ export async function askiiDoCommand() {
     }
     setTaskStatus('running', currentTask);
 
+    const abortController = new AbortController();
+    setTaskCanceller(() => {
+      abortController.abort();
+      channel.appendLine('\nStopped by user.');
+    });
+
+    if (messages.length === 0) {
+      const systemPrompt = buildDoSystemPrompt(
+        getWorkspaceStructure(rootPath),
+        wikiAvailable,
+        codeWikiAvailable,
+      );
+      messages.push({ role: 'system', content: systemPrompt });
+    }
+    messages.push({ role: 'user', content: currentTask });
+
+    // Agent event id → timeline entry id
+    const entries = new Map<number, number>();
     let completedActions = 0;
-    let roundCount = 0;
     let taskComplete = false;
     let errorMsg: string | null = null;
 
     try {
-      if (messages.length === 0) {
-        const workspaceStructure = getWorkspaceStructure(rootPath);
-        const systemPrompt = buildDoSystemPrompt(
-          workspaceStructure,
-          wikiAvailable,
-          codeWikiAvailable,
-        );
-        messages.push(
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: currentTask },
-        );
-      } else {
-        messages.push({ role: 'user', content: currentTask });
-      }
-
-      while (roundCount < maxRounds && !abortController.signal.aborted) {
-        channel.appendLine(`\n[Round ${roundCount + 1}/${maxRounds}]`);
-
-        const roundEntry = addTimelineEntry({
-          kind: 'round',
-          title: `Round ${roundCount + 1} of ${maxRounds}`,
-          status: 'pending',
-        });
-
-        channel.append('AI: ');
-        const responseText = await getExtensionChatStreaming(messages, (chunk) => {
-          channel.append(chunk);
-          streamToEntry(roundEntry, chunk);
-        });
-        flushEntryStream(roundEntry);
-        channel.appendLine('');
-        updateTimelineEntry(roundEntry, { status: 'ok' });
-        messages.push({ role: 'assistant', content: responseText });
-
-        const actions = parseWorkspaceActions(responseText);
-        if (actions === null) {
-          channel.appendLine('Response was not a valid JSON action array — asking again.');
-          addTimelineEntry({
-            kind: 'info',
-            title: 'Unreadable response — asking the model again',
-            status: 'error',
-          });
-          messages.push({ role: 'user', content: INVALID_ACTIONS_FEEDBACK });
-          roundCount++;
-          continue;
-        }
-        if (actions.length === 0) {
-          channel.appendLine('No actions returned. Done.');
-          addTimelineEntry({
-            kind: 'done',
-            title: 'Task complete',
-            detail: responseText.trim() ? _timelineSnippet(responseText) : undefined,
-          });
-          taskComplete = true;
-          break;
-        }
-
-        const readActions = actions.filter(
-          (a) =>
-            a.type === 'view' ||
-            a.type === 'list' ||
-            a.type === 'search' ||
-            a.type === 'wiki_search' ||
-            a.type === 'code_search',
-        );
-        const writeActions = actions.filter(
-          (a) =>
-            a.type !== 'view' &&
-            a.type !== 'list' &&
-            a.type !== 'search' &&
-            a.type !== 'wiki_search' &&
-            a.type !== 'code_search',
-        );
-
-        const feedbackParts: string[] = [];
-
-        // ── Read actions (no confirmation) ──────────────────────────────────────
-        const viewResults: Record<string, string> = {};
-        for (const action of readActions) {
-          if (action.type === 'view' && action.paths) {
-            for (const p of action.paths) {
-              channel.appendLine(`Viewing: ${p}`);
-              const entry = addTimelineEntry({
-                kind: 'action',
-                title: `View: ${p}`,
-                status: 'pending',
-              });
-              try {
-                const result = executeViewAction(
-                  { ...action, path: p, paths: undefined },
-                  rootPath,
-                );
-                viewResults[p] = result;
-                updateTimelineEntry(entry, { status: 'ok', detail: _timelineSnippet(result) });
-              } catch (e) {
-                const msg = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
-                viewResults[p] = msg;
-                updateTimelineEntry(entry, { status: 'error', detail: msg });
-              }
-            }
-            continue;
+      const result = await runDoAgent({
+        workspaceRoot: rootPath,
+        messages,
+        maxRounds,
+        signal: abortController.signal,
+        autoConfirm,
+        chat: (msgs, onChunk, signal) => getExtensionChatStreaming(msgs, onChunk, signal),
+        confirm: async ({ id, kind, message }) => {
+          const entry = entries.get(id);
+          if (entry === undefined) {
+            return false;
           }
-
-          const entry = addTimelineEntry({
-            kind: 'action',
-            title: _doReadLabel(action),
-            status: 'pending',
-          });
-          try {
-            if (action.type === 'wiki_search') {
-              const q = action.query ?? '';
-              channel.appendLine(`Wiki search: "${q}"`);
-              const result =
-                wikiPath && hasWikiIndex(wikiPath)
-                  ? (await searchWiki(wikiPath, q)) || 'No wiki results found'
-                  : 'Wiki not available — set askii.wikiPath and run Reload Wikis';
-              viewResults[`wiki_search:${q}`] = result;
-              updateTimelineEntry(entry, { status: 'ok', detail: _timelineSnippet(result) });
-            } else if (action.type === 'code_search') {
-              const q = action.query ?? '';
-              channel.appendLine(`Code search: "${q}"`);
-              const result = codeWikiAvailable
-                ? (await searchCodeWiki(rootPath, q)) || 'No code wiki results found'
-                : 'Code wiki not available — enable askii.codeWikiEnabled and run Reload Wikis';
-              viewResults[`code_search:${q}`] = result;
-              updateTimelineEntry(entry, { status: 'ok', detail: _timelineSnippet(result) });
-            } else if (action.type === 'search') {
-              channel.appendLine(`Search: "${action.pattern}"`);
-              const result = executeSearchAction(action, rootPath);
-              viewResults[`search:${action.pattern}`] = result;
-              updateTimelineEntry(entry, { status: 'ok', detail: _timelineSnippet(result) });
-            } else {
-              channel.appendLine(
-                `${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`,
-              );
-              const result = executeViewAction(action, rootPath);
-              viewResults[action.path!] = result;
-              updateTimelineEntry(entry, { status: 'ok', detail: _timelineSnippet(result) });
-            }
-          } catch (e) {
-            const msg = `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
-            viewResults[action.path ?? 'unknown'] = msg;
-            updateTimelineEntry(entry, { status: 'error', detail: msg });
-          }
-        }
-
-        if (Object.keys(viewResults).length > 0) {
-          feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
-        }
-
-        // ── Write actions (with confirmation) ───────────────────────────────────
-        const actionResults: ActionResult[] = [];
-
-        for (const action of writeActions) {
-          if (abortController.signal.aborted) {break;}
-
-          // run has no path — handle it before the sandbox check
-          if (action.type === 'run') {
-            channel.appendLine(`Run: ${action.command}`);
-            const runEntry = addTimelineEntry({
-              kind: 'action',
-              title: `Run: ${action.command}`,
-              status: 'pending',
-            });
-            const choice = await requestChoice(
-              runEntry,
-              'Run this command in the workspace?',
-              ['Run', 'Skip'],
+          if (kind === 'run') {
+            return (
+              (await requestChoice(entry, 'Run this command in the workspace?', ['Run', 'Skip'])) ===
+              'Run'
             );
-            if (choice !== 'Run') {
-              updateTimelineEntry(runEntry, { status: 'skipped' });
-              actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
-              continue;
+          }
+          const prompt =
+            kind === 'sensitive'
+              ? `${message} This file can make VS Code or git run code — review it carefully.`
+              : undefined;
+          return (await requestChoice(entry, prompt, ['Confirm', 'Skip'])) === 'Confirm';
+        },
+        emit: (event) => {
+          switch (event.type) {
+            case 'round-start':
+              channel.appendLine(`\n[Round ${event.round}/${event.maxRounds}]`);
+              channel.append('AI: ');
+              entries.set(
+                event.id,
+                addTimelineEntry({
+                  kind: 'round',
+                  title: `Round ${event.round} of ${event.maxRounds}`,
+                  status: 'pending',
+                }),
+              );
+              break;
+            case 'chunk': {
+              channel.append(event.text);
+              const entry = entries.get(event.id);
+              if (entry !== undefined) {
+                streamToEntry(entry, event.text);
+              }
+              break;
             }
-            try {
-              // Async exec: execSync would freeze the whole extension host
-              // (including the Cancel button) for up to the 30 s timeout.
-              const { exec } = await import('child_process');
-              const { promisify } = await import('util');
-              const { stdout: output } = await promisify(exec)(action.command!, {
-                cwd: rootPath,
-                encoding: 'utf-8',
-                timeout: 30000,
-              });
-              channel.appendLine(`Run output: ${output.substring(0, 200)}`);
-              updateTimelineEntry(runEntry, { status: 'ok', detail: _timelineSnippet(output, 500) });
-              actionResults.push({
-                action: `run:${action.command}`,
-                status: 'ok',
-                detail: output.substring(0, 500),
-              });
-            } catch (e: unknown) {
-              const err = e as { stdout?: string; stderr?: string; message?: string };
-              const detail =
-                `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
-              channel.appendLine(`Run failed: ${detail.substring(0, 200)}`);
-              updateTimelineEntry(runEntry, { status: 'error', detail: _timelineSnippet(detail, 500) });
-              actionResults.push({
-                action: `run:${action.command}`,
+            case 'round-end': {
+              channel.appendLine(event.truncated ? '\n[response cut off at the token limit]' : '');
+              const entry = entries.get(event.id);
+              if (entry !== undefined) {
+                flushEntryStream(entry);
+                updateTimelineEntry(entry, { status: 'ok' });
+              }
+              break;
+            }
+            case 'invalid-response':
+              channel.appendLine(
+                event.truncated
+                  ? 'Response was cut off at the output token limit — asking for smaller steps.'
+                  : 'Response was not a valid JSON action array — asking again.',
+              );
+              addTimelineEntry({
+                kind: 'info',
+                title: event.truncated
+                  ? 'Response cut off — asking the model for smaller steps'
+                  : 'Unreadable response — asking the model again',
                 status: 'error',
-                detail: detail.substring(0, 500),
               });
+              break;
+            case 'complete':
+              taskComplete = true;
+              channel.appendLine('No actions returned. Done.');
+              addTimelineEntry({
+                kind: 'done',
+                title: 'Task complete',
+                detail: event.responseText.trim() ? _timelineSnippet(event.responseText) : undefined,
+              });
+              break;
+            case 'notice':
+              channel.appendLine(event.message);
+              addTimelineEntry({ kind: 'info', title: event.message, status: 'error' });
+              break;
+            case 'action-start':
+              channel.appendLine(event.label);
+              entries.set(
+                event.id,
+                addTimelineEntry({ kind: 'action', title: event.label, status: 'pending' }),
+              );
+              break;
+            case 'action-end': {
+              const entry = entries.get(event.id);
+              const detail =
+                event.detail === undefined
+                  ? undefined
+                  : _timelineSnippet(event.detail, event.action.type === 'run' ? 500 : 400);
+              if (event.status === 'blocked') {
+                channel.appendLine(`BLOCKED: ${event.detail}`);
+              } else if (event.status === 'error') {
+                channel.appendLine(`✗ Failed: ${event.detail ?? ''}`);
+              } else if (event.status === 'ok' && !READ_ACTION_TYPES.has(event.action.type)) {
+                channel.appendLine(`✓ ${event.label}`);
+              }
+              if (entry !== undefined) {
+                updateTimelineEntry(entry, {
+                  title: event.label,
+                  status: event.status === 'blocked' ? 'error' : event.status,
+                  detail,
+                });
+              }
+              break;
             }
-            continue;
+            case 'max-rounds':
+              channel.appendLine(`Max rounds (${event.maxRounds}) reached.`);
+              addTimelineEntry({
+                kind: 'info',
+                title: `Max rounds (${event.maxRounds}) reached`,
+                status: 'error',
+              });
+              break;
           }
-
-          // Sandbox check
-          let filePath: string;
-          try {
-            if (!action.path) {throw new Error(`${action.type} requires path`);}
-            filePath = sandboxPath(rootPath, action.path);
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : 'Path error';
-            channel.appendLine(`BLOCKED: ${msg}`);
-            addTimelineEntry({
-              kind: 'error',
-              title: `Blocked: ${_doConfirmMessage(action)}`,
-              detail: msg,
-            });
-            actionResults.push({
-              action: `${action.type}:${action.path}`,
-              status: 'error',
-              detail: msg,
-            });
-            continue;
-          }
-
-          // Confirmation for all other write actions — asked in the panel
-          const confirmMsg = _doConfirmMessage(action);
-          const writeEntry = addTimelineEntry({
-            kind: 'action',
-            title: confirmMsg,
-            status: 'pending',
-          });
-          let confirmed = autoConfirm;
-          if (!confirmed) {
-            confirmed =
-              (await requestChoice(writeEntry, undefined, ['Confirm', 'Skip'])) === 'Confirm';
-          }
-
-          if (!confirmed) {
-            updateTimelineEntry(writeEntry, { status: 'skipped' });
-            actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
-            continue;
-          }
-
-          try {
-            const result = await _executeWriteAction(action, filePath, rootPath, formatAfterEdit);
-            if (result === 'ok') {completedActions++;}
-            actionResults.push({
-              action: `${action.type}:${action.path}`,
-              status: result === 'ok' ? 'ok' : 'error',
-              detail: result === 'ok' ? undefined : result,
-            });
-            updateTimelineEntry(writeEntry, {
-              title: _doActionLabel(action),
-              status: result === 'ok' ? 'ok' : 'error',
-              detail: result === 'ok' ? undefined : result,
-            });
-            if (result === 'ok') {
-              channel.appendLine(`✓ ${_doActionLabel(action)}`);
-            } else {
-              channel.appendLine(`✗ Failed: ${result}`);
-            }
-          } catch (e) {
-            const detail = e instanceof Error ? e.message : 'Unknown error';
-            channel.appendLine(`✗ Failed: ${detail}`);
-            updateTimelineEntry(writeEntry, { status: 'error', detail });
-            actionResults.push({
-              action: `${action.type}:${action.path}`,
-              status: 'error',
-              detail,
-            });
-          }
-        }
-
-        if (actionResults.length > 0) {
-          feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
-        }
-
-        if (feedbackParts.length === 0) {break;}
-
-        messages.push({
-          role: 'user',
-          content:
-            feedbackParts.join('\n\n') +
-            '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
-        });
-
-        roundCount++;
-      }
-
-      if (roundCount >= maxRounds && !taskComplete && !abortController.signal.aborted) {
-        channel.appendLine(`Max rounds (${maxRounds}) reached.`);
-        addTimelineEntry({ kind: 'info', title: `Max rounds (${maxRounds}) reached`, status: 'error' });
-      }
+        },
+        searchWiki: wikiAvailable ? (q) => searchWiki(wikiPath, q) : undefined,
+        searchCode: codeWikiAvailable ? (q) => searchCodeWiki(rootPath, q) : undefined,
+        wikiUnavailableMessage: 'Wiki not available — set askii.wikiPath and run Reload Wikis',
+        codeWikiUnavailableMessage:
+          'Code wiki not available — enable askii.codeWikiEnabled and run Reload Wikis',
+        afterWrite: formatAfterEdit ? _applyFormat : undefined,
+      });
+      completedActions = result.completedActions;
     } catch (error) {
       if (!abortController.signal.aborted) {
         errorMsg = error instanceof Error ? error.message : 'Unknown error';
       }
-    } finally {
-      endTaskSession();
     }
 
     if (errorMsg) {
@@ -1103,23 +1071,20 @@ export async function askiiDoCommand() {
       setTaskStatus('error', errorMsg);
       vscode.window.showErrorMessage(`ASKII Do failed: ${errorMsg}`);
       sweepPendingEntries();
-      break;
-    }
-    if (abortController.signal.aborted) {
+    } else if (abortController.signal.aborted) {
       channel.appendLine(`\nCompleted ${completedActions} actions before stopping. (⌐■_■)`);
       addTimelineEntry({ kind: 'info', title: 'Stopped by user' });
       setTaskStatus('cancelled', `Completed ${completedActions} action(s) before stopping`);
       sweepPendingEntries();
-      break;
+    } else {
+      setTaskStatus('done', `Completed ${completedActions} action(s)`);
+      if (!taskComplete) {
+        vscode.window.showInformationMessage(`ASKII Do: ${completedActions} actions completed.`);
+      }
     }
 
-    setTaskStatus('done', `Completed ${completedActions} action(s)`);
-    if (!taskComplete) {
-      vscode.window.showInformationMessage(`ASKII Do: ${completedActions} actions completed.`);
-    }
-
-    // Keep-or-undo is answered in the panel; dismissing the panel keeps the
-    // changes (matching the old dialog's Esc behavior).
+    // Keep-or-undo is answered in the panel — also after an error or a stop,
+    // so partial changes can be rolled back. Dismissing the panel keeps them.
     if (hasBackups(rootPath)) {
       const choiceEntry = addTimelineEntry({
         kind: 'confirm',
@@ -1152,21 +1117,20 @@ export async function askiiDoCommand() {
       }
     }
 
-    // Cancel pressed while the keep/undo choice was up ends the session.
-    if (abortController.signal.aborted) {
-      addTimelineEntry({ kind: 'info', title: 'Stopped by user' });
-      setTaskStatus('cancelled', 'Stopped by user');
-      sweepPendingEntries();
+    if (errorMsg || abortController.signal.aborted) {
       break;
     }
 
+    // Idle while waiting for a follow-up: another command may take the panel
+    releaseSession();
     currentTask = await waitForFollowUp();
-    if (currentTask && !beginTaskSession()) {
-      // Another command took the panel over while we were idle
+    if (currentTask && !reacquireSession()) {
       break;
     }
   }
 }
+
+const READ_ACTION_TYPES = new Set(['view', 'list', 'search', 'wiki_search', 'code_search']);
 
 async function runBrowserTask(task: string) {
   if (!beginTaskSession()) {
@@ -1175,12 +1139,14 @@ async function runBrowserTask(task: string) {
   }
 
   const config = vscode.workspace.getConfiguration('askii');
-  const maxRounds = config.get<number>('doMaxRounds') ?? 20;
-  const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
+  const maxRounds = Math.max(1, config.get<number>('doMaxRounds') ?? 20);
+  // Separate from doAutoConfirm: unattended mouse/keyboard/browser control is
+  // a different risk than unattended file edits
+  const autoConfirm = config.get<boolean>('controlAutoConfirm') ?? false;
   const headless = config.get<boolean>('browserHeadless') ?? false;
   const chromePath = config.get<string>('chromePath') || detectBrowserExecutable();
 
-  const outputChannel = vscode.window.createOutputChannel('ASKII Control (Browser)');
+  const outputChannel = getAgentChannel('ASKII Control (Browser)');
   outputChannel.appendLine(`ASKII Control (Browser) started ${getRandomThinkingKaomoji()}`);
   outputChannel.appendLine(`Task: ${task}`);
   outputChannel.appendLine('');
@@ -1229,7 +1195,7 @@ async function runBrowserTask(task: string) {
         browser = await puppeteer.launch({
           headless: headless ? true : false,
           executablePath: chromePath,
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
+          args: browserLaunchArgs(),
         });
 
         const [firstPage] = await browser.pages();
@@ -1264,6 +1230,7 @@ async function runBrowserTask(task: string) {
         const rawResponse = await getExtensionResponseWithImage(
           `${systemPrompt}\n\n${userPrompt}`,
           imageBase64,
+          abortController.signal,
         );
 
         if (abortController.signal.aborted) {break;}
@@ -1412,135 +1379,29 @@ async function _applyFormat(filePath: string): Promise<void> {
   }
 }
 
-async function _executeWriteAction(
-  action: WorkspaceAction,
-  filePath: string,
-  rootPath: string,
-  formatAfterEdit: boolean,
-): Promise<'ok' | string> {
-  switch (action.type) {
-    case 'mkdir': {
-      fs.mkdirSync(filePath, { recursive: true });
-      return 'ok';
-    }
-
-    case 'copy': {
-      if (!action.newPath) {return 'copy requires newPath';}
-      const destPath = sandboxPath(rootPath, action.newPath);
-      const destDir = path.dirname(destPath);
-      if (!fs.existsSync(destDir)) {fs.mkdirSync(destDir, { recursive: true });}
-      backupOrRecordCreated(rootPath, destPath);
-      fs.copyFileSync(filePath, destPath);
-      return 'ok';
-    }
-
-    case 'create':
-    case 'write': {
-      // Either type may target an existing file — back it up rather than
-      // recording it as created (undo would otherwise delete the original).
-      backupOrRecordCreated(rootPath, filePath);
-      const dir = path.dirname(filePath);
-      if (!fs.existsSync(dir)) {fs.mkdirSync(dir, { recursive: true });}
-      fs.writeFileSync(filePath, decodeIfDoubleEscaped(action.content ?? ''));
-      if (formatAfterEdit) {await _applyFormat(filePath);}
-      return 'ok';
-    }
-
-    case 'modify': {
-      const result = applyModifyAction(fs.readFileSync(filePath, 'utf-8'), action);
-      if ('error' in result) {return result.error;}
-      writeBackup(rootPath, filePath);
-      fs.writeFileSync(filePath, result.text);
-      if (formatAfterEdit) {await _applyFormat(filePath);}
-      return 'ok';
-    }
-
-    case 'delete': {
-      writeBackup(rootPath, filePath);
-      fs.unlinkSync(filePath);
-      return 'ok';
-    }
-
-    case 'rename': {
-      if (!action.newPath) {return 'rename requires newPath';}
-      writeBackup(rootPath, filePath);
-      const newFilePath = sandboxPath(rootPath, action.newPath);
-      const newDir = path.dirname(newFilePath);
-      if (!fs.existsSync(newDir)) {fs.mkdirSync(newDir, { recursive: true });}
-      backupOrRecordCreated(rootPath, newFilePath);
-      fs.renameSync(filePath, newFilePath);
-      return 'ok';
-    }
-
-    default:
-      return `Unknown action type: ${(action as WorkspaceAction).type}`;
-  }
-}
-
-function _doConfirmMessage(action: WorkspaceAction): string {
-  switch (action.type) {
-    case 'delete':
-      return `Delete: ${action.path}?`;
-    case 'rename':
-      return `Rename: ${action.path} → ${action.newPath}?`;
-    case 'copy':
-      return `Copy: ${action.path} → ${action.newPath}?`;
-    case 'mkdir':
-      return `Create directory: ${action.path}?`;
-    default: {
-      const t = action.type.charAt(0).toUpperCase() + action.type.slice(1);
-      return `${t}: ${action.path}?`;
-    }
-  }
-}
-
-function _doReadLabel(action: WorkspaceAction): string {
-  switch (action.type) {
-    case 'view':
-      return `View: ${action.path}`;
-    case 'list':
-      return `List: ${action.path}`;
-    case 'search':
-      return `Search: ${action.pattern}`;
-    case 'wiki_search':
-      return `Wiki search: ${action.query}`;
-    case 'code_search':
-      return `Code search: ${action.query}`;
-    default:
-      return action.type;
-  }
-}
-
 // Timeline details are rendered as text — keep them readable, not exhaustive
 function _timelineSnippet(text: string, max = 400): string {
   const trimmed = text.trim();
   return trimmed.length > max ? `${trimmed.substring(0, max)}…` : trimmed;
 }
 
-function _doActionLabel(action: WorkspaceAction): string {
-  switch (action.type) {
-    case 'mkdir':
-      return `Created directory: ${action.path}`;
-    case 'copy':
-      return `Copied: ${action.path} → ${action.newPath}`;
-    case 'create':
-      return `Created: ${action.path}`;
-    case 'write':
-      return `Wrote: ${action.path}`;
-    case 'modify':
-      return action.startLine !== undefined
-        ? `Modified (lines ${action.startLine}–${action.endLine}): ${action.path}`
-        : `Modified: ${action.path}`;
-    case 'delete':
-      return `Deleted: ${action.path}`;
-    case 'rename':
-      return `Renamed: ${action.path} → ${action.newPath}`;
-    default:
-      return `${action.type}: ${action.path}`;
+// The startup auto-reload and a manual reload must not rebuild the same index at once
+let wikiReloadRunning = false;
+
+export async function askiiReloadWikiCommand() {
+  if (wikiReloadRunning) {
+    vscode.window.showInformationMessage('ASKII: Wikis are already being reloaded.');
+    return;
+  }
+  wikiReloadRunning = true;
+  try {
+    await reloadWikis();
+  } finally {
+    wikiReloadRunning = false;
   }
 }
 
-export async function askiiReloadWikiCommand() {
+async function reloadWikis() {
   const config = vscode.workspace.getConfiguration('askii');
   const wikiEnabled = config.get<boolean>('wikiEnabled') ?? false;
   const wikiPath = config.get<string>('wikiPath') ?? '';
@@ -1592,7 +1453,7 @@ export async function askiiReloadWikiCommand() {
             });
             summaries.push(`wiki: ${stats.chunkCount} chunks from ${stats.fileCount} file(s)`);
           } catch (error) {
-            if (signal.aborted) return;
+            if (signal.aborted) {return;}
             warnings.push(
               `docs wiki failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
             );
@@ -1622,7 +1483,7 @@ export async function askiiReloadWikiCommand() {
                 `(${stats.embeddedFiles} embedded, ${stats.cachedFiles} reused)`,
             );
           } catch (error) {
-            if (signal.aborted) return;
+            if (signal.aborted) {return;}
             warnings.push(
               `code wiki failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
             );
@@ -1702,8 +1563,10 @@ async function runScreenControlTask(instruction: string) {
   }
 
   const config = vscode.workspace.getConfiguration('askii');
-  const maxRounds = config.get<number>('doMaxRounds') ?? 20;
-  const autoConfirm = config.get<boolean>('doAutoConfirm') ?? false;
+  const maxRounds = Math.max(1, config.get<number>('doMaxRounds') ?? 20);
+  // Separate from doAutoConfirm: unattended mouse/keyboard/browser control is
+  // a different risk than unattended file edits
+  const autoConfirm = config.get<boolean>('controlAutoConfirm') ?? false;
 
   // Monitor selection
   let monitorId: string | number | undefined;
@@ -1726,7 +1589,7 @@ async function runScreenControlTask(instruction: string) {
     return;
   }
 
-  const outputChannel = vscode.window.createOutputChannel('ASKII Control');
+  const outputChannel = getAgentChannel('ASKII Control');
   outputChannel.appendLine(`ASKII Control started ${getRandomThinkingKaomoji()}`);
   outputChannel.appendLine(`Instruction: ${instruction}`);
   outputChannel.appendLine('');
@@ -1799,6 +1662,7 @@ async function runScreenControlTask(instruction: string) {
         const rawResponse = await getExtensionResponseWithImage(
           `${buildControlSystemPrompt(screenW, screenH, systemInfo, history)}\n\n${prompt}`,
           imageBase64,
+          abortController.signal,
         );
 
         if (abortController.signal.aborted) {
@@ -1852,6 +1716,50 @@ async function runScreenControlTask(instruction: string) {
           outputChannel.appendLine(`Reasoning: ${a.reasoning}`);
         });
 
+        // Resolve click_text actions to coordinates via a second LLM call —
+        // before the confirmation, so the user approves the actual click target
+        for (let i = 0; i < actions.length; i++) {
+          const a = actions[i] as ControlAction;
+          if (a.action !== 'click_text') {continue;}
+          const ct = a as { action: 'click_text'; text: string; reasoning: string };
+          let resolved = false;
+          try {
+            const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
+            const raw = await getExtensionResponseWithImage(
+              resolvePrompt,
+              imageBase64,
+              abortController.signal,
+            );
+            const coords = parseJsonFromModel(
+              raw,
+              (v) =>
+                !!v &&
+                typeof (v as { x?: unknown }).x === 'number' &&
+                typeof (v as { y?: unknown }).y === 'number',
+              '{',
+            ) as { x: number; y: number } | undefined;
+            if (coords) {
+              Object.assign(a, { action: 'mouse_left_click', x: coords.x, y: coords.y });
+              resolved = true;
+              outputChannel.appendLine(`Resolved "${ct.text}" → (${coords.x}, ${coords.y})`);
+              updateTimelineEntry(plannedEntries[i], {
+                title: describeAction(a),
+                detail: `Resolved "${ct.text}" → (${coords.x}, ${coords.y})`,
+              });
+            }
+          } catch (error) {
+            if (abortController.signal.aborted) {throw error;}
+          }
+          if (!resolved) {
+            outputChannel.appendLine(`Warning: could not resolve text "${ct.text}" to coordinates`);
+            addTimelineEntry({
+              kind: 'info',
+              title: `Could not resolve "${ct.text}" to coordinates`,
+              status: 'error',
+            });
+          }
+        }
+
         // Confirm
         if (!autoConfirm) {
           const batchLabel =
@@ -1874,38 +1782,6 @@ async function runScreenControlTask(instruction: string) {
           }
           // Small delay between confirmation and execution
           await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-        }
-
-        // Resolve click_text actions to coordinates via a second LLM call
-        for (let i = 0; i < actions.length; i++) {
-          const a = actions[i] as ControlAction;
-          if (a.action === 'click_text') {
-            const ct = a as { action: 'click_text'; text: string; reasoning: string };
-            try {
-              const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
-              const raw = await getExtensionResponseWithImage(resolvePrompt, imageBase64);
-              const m = raw.match(/\{[\s\S]*?\}/);
-              if (m) {
-                const coords = JSON.parse(m[0]);
-                if (typeof coords.x === 'number' && typeof coords.y === 'number') {
-                  Object.assign(a, { action: 'mouse_left_click', x: coords.x, y: coords.y });
-                  outputChannel.appendLine(`Resolved "${ct.text}" → (${coords.x}, ${coords.y})`);
-                  updateTimelineEntry(plannedEntries[i], {
-                    detail: `Resolved "${ct.text}" → (${coords.x}, ${coords.y})`,
-                  });
-                }
-              }
-            } catch {
-              outputChannel.appendLine(
-                `Warning: could not resolve text "${ct.text}" to coordinates`,
-              );
-              addTimelineEntry({
-                kind: 'info',
-                title: `Could not resolve "${ct.text}" to coordinates`,
-                status: 'error',
-              });
-            }
-          }
         }
 
         // Execute sequence

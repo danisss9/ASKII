@@ -13,6 +13,7 @@ import {
   askiiControlCommand,
   askiiReloadWikiCommand,
   askiiDiffProvider,
+  disposeAgentChannels,
 } from './commands';
 import { validateProviderConfig } from './providers';
 import {
@@ -24,15 +25,22 @@ import { cancelCommitMessageCommand, generateCommitMessageCommand } from './comm
 import { cancelCodeReviewCommand, codeReviewCommand } from './codeReview';
 import { askiiNoteCommand } from './notesPanel';
 import { startNoteScheduler, stopNoteScheduler } from './notesScheduler';
-import { initializeProviderSecrets, migrateLegacyApiKeys } from './providerSecrets';
+import {
+  clearApiKeyCommand,
+  initializeProviderSecrets,
+  migrateLegacyApiKeys,
+} from './providerSecrets';
+import { initLog } from './log';
 import { openSetupPanel, shouldOpenSetupAutomatically } from './setupPanel';
 
 export async function activate(context: vscode.ExtensionContext) {
+  initLog(context);
   initializeProviderSecrets(context.secrets);
   const migrationProblems = await migrateLegacyApiKeys(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.openSetup', () => openSetupPanel(context)),
+    vscode.commands.registerCommand('askii.clearApiKey', clearApiKeyCommand),
   );
 
   if (migrationProblems.length > 0) {
@@ -61,8 +69,9 @@ export async function activate(context: vscode.ExtensionContext) {
   const codeWikiReload =
     (wikiConfig.get<boolean>('codeWikiEnabled') ?? false) &&
     (wikiConfig.get<boolean>('codeWikiAutoReload') ?? false);
-  if (docsWikiReload || codeWikiReload) {
-    askiiReloadWikiCommand();
+  // Restricted Mode: indexing writes into the workspace and downloads a model
+  if ((docsWikiReload || codeWikiReload) && vscode.workspace.isTrusted) {
+    void askiiReloadWikiCommand();
   }
   const decorationType = vscode.window.createTextEditorDecorationType({
     rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
@@ -190,16 +199,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event: vscode.TextDocumentChangeEvent) => {
+      // Explanations are keyed by line number, which edits shift. Completions
+      // are keyed by a hash of the surrounding text, so they invalidate
+      // themselves and stay reusable (e.g. after an undo).
       if (event.document === vscode.window.activeTextEditor?.document) {
-        const uri = event.document.uri.toString();
-        for (const key of explanationCache.keys()) {
-          if (key.startsWith(uri)) {
+        const prefix = `${event.document.uri.toString()}:`;
+        for (const key of [...explanationCache.keys()]) {
+          if (key.startsWith(prefix)) {
             explanationCache.delete(key);
-          }
-        }
-        for (const key of completionCache.keys()) {
-          if (key.startsWith(uri)) {
-            completionCache.delete(key);
           }
         }
       }
@@ -262,6 +269,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
   cleanupDecorations();
+  disposeAgentChannels();
   completionCache.clear();
   stopNoteScheduler();
 }

@@ -153,7 +153,10 @@ export function describeBrowserAction(action: BrowserAction): string {
     case 'click':
       return `Click "${action.selector}"`;
     case 'type':
-      return `Type "${action.text}" into "${action.selector}"`;
+      // Don't echo what looks like a password into the log / timeline
+      return SECRET_FIELD.test(action.selector)
+        ? `Type ${'•'.repeat(Math.min(8, Math.max(4, action.text.length)))} into "${action.selector}"`
+        : `Type "${action.text}" into "${action.selector}"`;
     case 'wait_for':
       return `Wait for "${action.selector}"`;
     case 'back':
@@ -211,14 +214,50 @@ export function normalizeNavigateUrl(input: string, baseUrl: string): string {
   }
 }
 
+/**
+ * Only web pages may be opened by the model: file: would let it screenshot
+ * (and later exfiltrate) local files, javascript: runs script in the current
+ * page, and chrome:/edge: pages expose browser settings.
+ */
+export function isAllowedNavigateUrl(url: string): boolean {
+  if (url === 'about:blank') {
+    return true;
+  }
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Chromium launch flags. The sandbox stays on; it is only disabled where
+ * Chromium refuses to start with it — as root on Linux (e.g. in containers).
+ */
+export function browserLaunchArgs(): string[] {
+  const args = ['--start-maximized'];
+  const isRootOnLinux = platform() === 'linux' && process.getuid?.() === 0;
+  if (isRootOnLinux) {
+    args.push('--no-sandbox', '--disable-setuid-sandbox');
+  }
+  return args;
+}
+
+const SECRET_FIELD = /pass(word|wd)?|pwd|secret|token|otp|pin\b|cvv|card/i;
+
 export async function executeBrowserAction(action: BrowserAction, page: Page): Promise<void> {
   switch (action.action) {
-    case 'goto':
-      await page.goto(normalizeNavigateUrl(action.url, page.url()), {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
-      });
+    case 'goto': {
+      const url = normalizeNavigateUrl(action.url, page.url());
+      if (!isAllowedNavigateUrl(url)) {
+        throw new Error(
+          `Blocked navigation to ${url} — ASKII Control only opens http(s) pages (no file:, javascript:, chrome: …)`,
+        );
+      }
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
       break;
+    }
     case 'click':
       await page.click(action.selector);
       break;
