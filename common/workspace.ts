@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { decodeIfDoubleEscaped } from './utils';
+import { balancedJsonAt, decodeIfDoubleEscaped } from './utils';
 
 export interface WorkspaceAction {
   type:
@@ -194,23 +194,7 @@ export function getWorkspaceStructure(dirPath: string): string {
  * strings, or null if it never closes (e.g. output cut off mid-array).
  */
 export function balancedArrayAt(text: string, start: number): string | null {
-  let depth = 0;
-  let inString = false;
-  for (let i = start; i < text.length; i++) {
-    const c = text[i];
-    if (inString) {
-      if (c === '\\') {i++;}
-      else if (c === '"') {inString = false;}
-    } else if (c === '"') {
-      inString = true;
-    } else if (c === '[') {
-      depth++;
-    } else if (c === ']') {
-      depth--;
-      if (depth === 0) {return text.slice(start, i + 1);}
-    }
-  }
-  return null;
+  return text[start] === '[' ? balancedJsonAt(text, start) : null;
 }
 
 /** Feedback sent back to the model when its response could not be parsed. */

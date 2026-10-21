@@ -2,6 +2,7 @@ import { existsSync } from 'fs';
 import { platform } from 'os';
 import * as path from 'path';
 import type { Page } from 'puppeteer-core';
+import { parseJsonFromModel } from './utils';
 
 // === TYPES ===
 
@@ -56,76 +57,91 @@ Do NOT include DONE in an array. Return {"action": "DONE", "reasoning": "..."} (
 
 // === PARSE ===
 
-export function parseBrowserAction(response: string): BrowserAction | null {
-  try {
-    const clean = response
-      .trim()
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/i, '');
-    const parsed = JSON.parse(clean);
-    if (parsed && typeof parsed.action === 'string') return parsed as BrowserAction;
-  } catch {
-    const match = response.match(/\{[\s\S]*?\}/);
-    if (match) {
-      try {
-        const parsed = JSON.parse(match[0]);
-        if (parsed && typeof parsed.action === 'string') return parsed as BrowserAction;
-      } catch {
-        // ignore
-      }
-    }
-  }
-  return null;
+type BrowserStep = Exclude<BrowserAction, { action: 'DONE' }>;
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
-export function parseBrowserResponse(response: string): BrowserResponse | null {
-  const clean = response
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '');
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(clean);
-  } catch {
-    // Try array first, then object
-    const arrMatch = clean.match(/\[[\s\S]*\]/);
-    if (arrMatch) {
-      try {
-        parsed = JSON.parse(arrMatch[0]);
-      } catch {
-        /* ignore */
-      }
-    }
-    if (!parsed) {
-      const objMatch = clean.match(/\{[\s\S]*?\}/);
-      if (objMatch) {
-        try {
-          parsed = JSON.parse(objMatch[0]);
-        } catch {
-          /* ignore */
-        }
-      }
-    }
+/**
+ * Validates one model-proposed browser action. Returns null when a required
+ * field is missing or malformed so it is never executed.
+ */
+export function normalizeBrowserAction(raw: unknown): BrowserStep | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
   }
+  const a = raw as Record<string, unknown>;
+  const reasoning = typeof a.reasoning === 'string' ? a.reasoning : '';
+  switch (a.action) {
+    case 'goto': {
+      const url = asNonEmptyString(a.url);
+      return url ? { action: 'goto', url, reasoning } : null;
+    }
+    case 'click':
+    case 'wait_for': {
+      const selector = asNonEmptyString(a.selector);
+      return selector ? { action: a.action, selector, reasoning } : null;
+    }
+    case 'type': {
+      const selector = asNonEmptyString(a.selector);
+      return selector && typeof a.text === 'string'
+        ? { action: 'type', selector, text: a.text, reasoning }
+        : null;
+    }
+    case 'back':
+    case 'forward':
+      return { action: a.action, reasoning };
+    case 'scroll': {
+      const direction = typeof a.direction === 'string' ? a.direction.toLowerCase() : '';
+      if (direction !== 'up' && direction !== 'down') {
+        return null;
+      }
+      const n = typeof a.amount === 'number' ? a.amount : Number(a.amount);
+      const amount = Number.isFinite(n) ? Math.min(10, Math.max(1, Math.round(n))) : 3;
+      return { action: 'scroll', direction, amount, reasoning };
+    }
+    case 'click_text': {
+      const text = asNonEmptyString(a.text);
+      return text ? { action: 'click_text', text, reasoning } : null;
+    }
+    default:
+      return null;
+  }
+}
 
-  if (!parsed) return null;
+function isActionLike(value: unknown): boolean {
+  return (
+    Array.isArray(value) ||
+    (!!value && typeof value === 'object' && typeof (value as { action?: unknown }).action === 'string')
+  );
+}
+
+/**
+ * Parses the model's reply into DONE or a list of validated actions. A
+ * sequence with any malformed action is rejected as a whole.
+ */
+export function parseBrowserResponse(response: string): BrowserResponse | null {
+  const parsed = parseJsonFromModel(response, isActionLike);
+  if (parsed === undefined) {
+    return null;
+  }
 
   if (Array.isArray(parsed)) {
-    const actions = (parsed as unknown[]).filter(
-      (a): a is Exclude<BrowserAction, { action: 'DONE' }> =>
-        !!a && typeof (a as any).action === 'string' && (a as any).action !== 'DONE',
-    );
-    return actions.length > 0 ? { type: 'actions', actions } : null;
+    const steps = parsed.filter((a) => (a as { action?: unknown } | null)?.action !== 'DONE');
+    const actions = steps.map(normalizeBrowserAction);
+    if (actions.length === 0 || actions.some((a) => a === null)) {
+      return null;
+    }
+    return { type: 'actions', actions: actions as BrowserStep[] };
   }
 
-  if (parsed && typeof (parsed as any).action === 'string') {
-    const obj = parsed as BrowserAction;
-    if (obj.action === 'DONE') return { type: 'done', reasoning: obj.reasoning };
-    return { type: 'actions', actions: [obj as Exclude<BrowserAction, { action: 'DONE' }>] };
+  const obj = parsed as { action: string; reasoning?: unknown };
+  if (obj.action === 'DONE') {
+    return { type: 'done', reasoning: typeof obj.reasoning === 'string' ? obj.reasoning : '' };
   }
-
-  return null;
+  const action = normalizeBrowserAction(parsed);
+  return action ? { type: 'actions', actions: [action] } : null;
 }
 
 // === DESCRIBE ===
