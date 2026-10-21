@@ -3,22 +3,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getExtensionResponse } from './providers';
 import { log } from './log';
-import { buildCommitMessageSystemPrompt, getCommitMessageStyle } from './commitMessageStyle';
+import {
+  MAX_RECENT_COMMITS,
+  buildCommitMessageSystemPrompt,
+  buildCommitUserPrompt,
+  cleanCommitMessage,
+  formatCommitExamples,
+  getCommitMessageStyle,
+} from '@common/commitMessage';
 import { getGitRepository, rootUriFromArg, type GitRepositoryLike } from './git';
-
-// Sentinel returned by providers when the model produces no text.
-const NO_RESPONSE = 'No response';
-
-// Cap the diff we send to the model so a huge changeset doesn't blow up the
-// context window or latency. The file summary is always sent in full.
-const MAX_DIFF_CHARS = 12_000;
-
-// The repository's recent commit messages are sent to the model as style
-// examples so generated messages match the user's existing habits.
-const MAX_RECENT_COMMITS = 10;
-
-// Cap each example message so huge commit bodies don't dominate the prompt.
-const MAX_EXAMPLE_MESSAGE_CHARS = 500;
 
 // Context key that swaps the SCM sparkle button for a stop button.
 const RUNNING_CONTEXT_KEY = 'askii.commitMessageRunning';
@@ -37,81 +30,48 @@ export function cancelCommitMessageCommand(): void {
 
 /**
  * Collects the diff to send to the model. Prefers staged changes; falls back
- * to the working-tree diff when nothing is staged. Returns a file summary and
- * a (possibly truncated) unified diff.
+ * to the working-tree diff when nothing is staged.
  */
 async function collectDiff(
   repo: GitRepositoryLike,
-): Promise<{ diff: string; fileSummary: string; hasStaged: boolean }> {
+): Promise<{ diff: string; files: string[]; hasStaged: boolean }> {
   const stagedFiles = (repo.state.indexChanges ?? []).map((c) => path.basename(c.uri.fsPath));
   const workingFiles = (repo.state.workingTreeChanges ?? []).map((c) =>
     path.basename(c.uri.fsPath),
   );
 
   // Prefer staged diff; fall back to working-tree diff.
-  let raw = '';
+  let diff = '';
   let hasStaged = stagedFiles.length > 0;
   try {
     if (hasStaged) {
-      raw = await repo.diff(true);
+      diff = await repo.diff(true);
     }
-    if (!raw || !raw.trim()) {
-      raw = await repo.diff(false);
+    if (!diff || !diff.trim()) {
+      diff = await repo.diff(false);
       hasStaged = false;
     }
   } catch {
-    raw = '';
+    diff = '';
   }
 
-  const diff =
-    raw.length > MAX_DIFF_CHARS ? `${raw.slice(0, MAX_DIFF_CHARS)}\n…[diff truncated]` : raw;
-
-  const changedFiles = hasStaged ? stagedFiles : workingFiles;
-  const fileSummary =
-    changedFiles.length > 0 ? changedFiles.join('\n') : '(no file list available)';
-
-  return { diff, fileSummary, hasStaged };
+  return { diff, files: hasStaged ? stagedFiles : workingFiles, hasStaged };
 }
 
 /**
- * Formats one example commit message: caps its length and indents wrapped
- * lines so multi-line messages stay nested under their numbered bullet.
- */
-function formatExampleMessage(message: string): string {
-  const normalized = message.replace(/\r\n/g, '\n').trim();
-  const capped =
-    normalized.length > MAX_EXAMPLE_MESSAGE_CHARS
-      ? `${normalized.slice(0, MAX_EXAMPLE_MESSAGE_CHARS)}…`
-      : normalized;
-  return capped.replace(/\n/g, '\n   ');
-}
-
-/**
- * Fetches the repository's last commit messages to use as style examples for
- * the model. Returns '' when the log is unavailable (older Git extension,
- * no commits yet) so the prompt simply omits the section.
+ * Fetches the repository's last commit messages as style examples. Returns ''
+ * when the log is unavailable (older Git extension, no commits yet).
  */
 async function collectRecentCommitMessages(repo: GitRepositoryLike): Promise<string> {
   if (!repo.log) {
     return '';
   }
-  let messages: string[];
   try {
     const commits = await repo.log({ maxEntries: MAX_RECENT_COMMITS });
-    messages = (commits ?? [])
-      .map((c) => (c.message ?? '').trim())
-      .filter(Boolean)
-      .map(formatExampleMessage);
+    return formatCommitExamples((commits ?? []).map((c) => c.message ?? ''));
   } catch {
     return '';
   }
-  if (messages.length === 0) {
-    return '';
-  }
-  return (
-    'Recent commit messages (style examples from this repository):\n' +
-    messages.map((m, i) => `${i + 1}. ${m}`).join('\n')
-  );
 }
 
 /**
@@ -155,33 +115,6 @@ function loadCommitInstructions(): string {
 const INSTRUCTION_FILE_EXTENSIONS = new Set(['.md', '.markdown', '.txt']);
 const MAX_INSTRUCTIONS_BYTES = 64 * 1024;
 
-/**
- * Cleans the model output into a bare commit message: strips markdown fences,
- * leading/trailing quotes, and common "Commit message:" labels.
- */
-function cleanCommitMessage(raw: string): string {
-  let text = raw.trim();
-
-  // Strip surrounding markdown code fences.
-  const fenceMatch = text.match(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/);
-  if (fenceMatch) {
-    text = fenceMatch[1].trim();
-  }
-
-  // Strip a leading "Commit message:" / "Message:" label.
-  text = text.replace(/^(commit\s*message|message)\s*[:\-]\s*/i, '');
-
-  // Strip surrounding quotes.
-  if (
-    (text.startsWith('"') && text.endsWith('"')) ||
-    (text.startsWith("'") && text.endsWith("'"))
-  ) {
-    text = text.slice(1, -1).trim();
-  }
-
-  return text.trim();
-}
-
 export async function generateCommitMessageCommand(sourceControl?: unknown): Promise<void> {
   if (activeGeneration) {
     return; // already running — the SCM button is a stop button meanwhile
@@ -209,8 +142,8 @@ async function generateCommitMessage(sourceControl: unknown, signal: AbortSignal
     return;
   }
 
-  const { diff, fileSummary, hasStaged } = await collectDiff(repo);
-  if (!diff.trim() && fileSummary === '(no file list available)') {
+  const { diff, files, hasStaged } = await collectDiff(repo);
+  if (!diff.trim() && files.length === 0) {
     vscode.window.showInformationMessage('ASKII: No changes to commit. (´･_･`)');
     return;
   }
@@ -220,14 +153,7 @@ async function generateCommitMessage(sourceControl: unknown, signal: AbortSignal
   const system = buildCommitMessageSystemPrompt(style, instructions);
   const examples = await collectRecentCommitMessages(repo);
 
-  const scope = hasStaged ? 'staged' : 'working-tree';
-  const userPrompt =
-    `Changed files (${scope}):\n${fileSummary}\n\n` +
-    `Unified diff (${scope}):\n${diff || '(empty)'}\n\n` +
-    (examples ? `${examples}\n\n` : '') +
-    (examples
-      ? 'Write the commit message now, matching the style of the example messages above.'
-      : 'Write the commit message now.');
+  const userPrompt = buildCommitUserPrompt({ files, diff, staged: hasStaged, examples });
 
   await vscode.window.withProgress(
     {
@@ -251,7 +177,7 @@ async function generateCommitMessage(sourceControl: unknown, signal: AbortSignal
           return;
         }
 
-        if (!raw || raw.trim() === NO_RESPONSE) {
+        if (!raw || !raw.trim()) {
           vscode.window.showWarningMessage(
             'ASKII: The model returned no commit message. Try again.',
           );

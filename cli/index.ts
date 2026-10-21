@@ -6,6 +6,14 @@ import {
   hasBackups,
 } from '@common/workspace';
 import { runDoAgent } from '@common/doAgent';
+import {
+  MAX_RECENT_COMMITS,
+  buildCommitMessageSystemPrompt,
+  buildCommitUserPrompt,
+  cleanCommitMessage,
+  formatCommitExamples,
+  type CommitMessageStyle,
+} from '@common/commitMessage';
 import { extractCode } from '@common/utils';
 import { buildWikiIndex, hasWikiIndex, searchWiki } from '@common/wiki';
 import {
@@ -98,6 +106,7 @@ interface Config {
   wikiPath: string | undefined;
   useWiki: boolean;
   useCodeWiki: boolean;
+  commitStyle: CommitMessageStyle;
 }
 
 /** Exit code for a run stopped with Ctrl+C (128 + SIGINT), as shells expect. */
@@ -151,6 +160,7 @@ const VALUE_FLAGS = new Set([
   '--chrome-path',
   '--dir',
   '--wiki-path',
+  '--commit-style',
   '-c',
   '--code',
   '--lang',
@@ -271,6 +281,13 @@ function getConfig(flags: string[]): Config {
     throw new UsageError(`--mode must be 'helpful' or 'funny' (got: '${mode}')`);
   }
 
+  const commitStyle = getFlagValue(flags, '--commit-style') || process.env.ASKII_COMMIT_STYLE || 'oneliner';
+  if (commitStyle !== 'oneliner' && commitStyle !== 'brief' && commitStyle !== 'descriptive') {
+    throw new UsageError(
+      `--commit-style must be 'oneliner', 'brief' or 'descriptive' (got: '${commitStyle}')`,
+    );
+  }
+
   const timeoutSeconds = parsePositiveInt(
     getFlagValue(flags, '--timeout') || process.env.ASKII_TIMEOUT,
     '--timeout',
@@ -306,6 +323,7 @@ function getConfig(flags: string[]): Config {
     wikiPath: getFlagValue(flags, '--wiki-path') || process.env.ASKII_WIKI_PATH || undefined,
     useWiki: hasFlag(flags, '--use-wiki') || process.env.ASKII_USE_WIKI === '1',
     useCodeWiki: hasFlag(flags, '--use-code-wiki') || process.env.ASKII_USE_CODE_WIKI === '1',
+    commitStyle,
   };
 }
 
@@ -1125,6 +1143,7 @@ Options:
       --askiicloud-model <m> ASKII Cloud model (default: askii-default)
       --askiicloud-url <url> ASKII Cloud base URL (env: ASKII_CLOUD_URL, default: https://api.askii.dev/v1)
       --timeout <seconds>    Per-request timeout (env: ASKII_TIMEOUT, default: 600)
+      --commit-style <s>     "commit" style: oneliner, brief, descriptive (env: ASKII_COMMIT_STYLE, default: oneliner)
       --mode <mode>          Response mode: helpful, funny (default: funny)
       --max-rounds <n>       Max agent rounds for "do" / "control" (default: 5)
       --dir <path>           Working directory for "do" (default: cwd)
@@ -2143,84 +2162,21 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
  * workDir is not a git repository or the LLM call fails.
  */
 async function generateCliCommitMessage(workDir: string, config: Config): Promise<string | null> {
-  const { execSync } = await import('child_process');
-
-  const MAX_DIFF_CHARS = 12_000;
-  // The repository's recent commit messages are sent to the model as style
-  // examples so generated messages match the user's existing habits.
-  const MAX_RECENT_COMMITS = 10;
-  // Cap each example message so huge commit bodies don't dominate the prompt.
-  const MAX_EXAMPLE_MESSAGE_CHARS = 500;
-
-  const COMMIT_SYSTEM_PROMPT = `You are an expert at writing Git commit messages.
-Given a list of changed files and a unified diff, write a single, well-formed Git commit message.
-Rules:
-- Use the Conventional Commits format when appropriate (type(scope): subject).
-- The first line is the subject: imperative mood, <= 72 characters, no trailing period.
-- Optionally follow with a blank line and a concise body explaining the "why" (not the "what").
-- Output ONLY the raw commit message text — no markdown fences, no quotes, no "Commit message:" label, no preamble.
-- If the diff is empty or trivial, output a single short subject line describing the change.`;
-
-  function cleanCommitMessage(raw: string): string {
-    let text = raw.trim();
-    const fenceMatch = text.match(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/);
-    if (fenceMatch) text = fenceMatch[1].trim();
-    text = text.replace(/^(commit\s*message|message)\s*[:\-]\s*/i, '');
-    if (
-      (text.startsWith('"') && text.endsWith('"')) ||
-      (text.startsWith("'") && text.endsWith("'"))
-    ) {
-      text = text.slice(1, -1).trim();
-    }
-    return text.trim();
-  }
+  const { execFileSync } = await import('child_process');
 
   function git(args: string[]): string {
     try {
       // Large buffer: a big staged diff (e.g. a lockfile) would otherwise
       // overflow the 1 MB default and silently come back empty.
-      return execSync('git ' + args.join(' '), {
+      return execFileSync('git', args, {
         cwd: workDir,
         encoding: 'utf-8',
         maxBuffer: 64 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'ignore'],
       });
     } catch {
       return '';
     }
-  }
-
-  /**
-   * Formats one example commit message: caps its length and indents wrapped
-   * lines so multi-line messages stay nested under their numbered bullet.
-   */
-  function formatExampleMessage(message: string): string {
-    const normalized = message.replace(/\r\n/g, '\n').trim();
-    const capped =
-      normalized.length > MAX_EXAMPLE_MESSAGE_CHARS
-        ? `${normalized.slice(0, MAX_EXAMPLE_MESSAGE_CHARS)}…`
-        : normalized;
-    return capped.replace(/\n/g, '\n   ');
-  }
-
-  // Recent commit messages give the model concrete style examples. Returns
-  // '' when the log is unavailable (no commits yet) so the prompt omits it.
-  function collectRecentCommitMessages(): string {
-    const raw = git(['log', '-n', String(MAX_RECENT_COMMITS), '-z', '--format=%B']);
-    if (!raw.trim()) {
-      return '';
-    }
-    const messages = raw
-      .split('\0')
-      .map((m) => m.trim())
-      .filter(Boolean)
-      .map(formatExampleMessage);
-    if (messages.length === 0) {
-      return '';
-    }
-    return (
-      'Recent commit messages (style examples from this repository):\n' +
-      messages.map((m, i) => `${i + 1}. ${m}`).join('\n')
-    );
   }
 
   // Confirm we are inside a git repo.
@@ -2229,44 +2185,36 @@ Rules:
   }
 
   // Prefer staged diff; fall back to working-tree diff.
-  let raw = git(['diff', '--cached']);
-  const hasStaged = raw.trim().length > 0;
+  let diff = git(['diff', '--cached']);
+  const hasStaged = diff.trim().length > 0;
   if (!hasStaged) {
-    raw = git(['diff']);
+    diff = git(['diff']);
   }
 
   // File list (staged or working-tree).
   const nameStatus = hasStaged
     ? git(['diff', '--cached', '--name-only'])
     : git(['status', '--porcelain', '--untracked-files=no']);
-  const changedFiles = nameStatus
+  const files = nameStatus
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => l.replace(/^\S+\s+/, '').replace(/^"|"$/g, ''))
+    .map((l) => (hasStaged ? l : l.replace(/^\S+\s+/, '')).replace(/^"|"$/g, ''))
     .map((f) => path.basename(f));
 
-  if (!raw.trim() && changedFiles.length === 0) {
+  if (!diff.trim() && files.length === 0) {
     return null;
   }
 
-  const diff =
-    raw.length > MAX_DIFF_CHARS ? `${raw.slice(0, MAX_DIFF_CHARS)}\n…[diff truncated]` : raw;
-
-  const scope = hasStaged ? 'staged' : 'working-tree';
-  const fileSummary =
-    changedFiles.length > 0 ? changedFiles.join('\n') : '(no file list available)';
-  const examples = collectRecentCommitMessages();
-  const userPrompt =
-    `Changed files (${scope}):\n${fileSummary}\n\n` +
-    `Unified diff (${scope}):\n${diff || '(empty)'}\n\n` +
-    (examples ? `${examples}\n\n` : '') +
-    (examples
-      ? 'Write the commit message now, matching the style of the example messages above.'
-      : 'Write the commit message now.');
+  // Recent commit messages give the model concrete style examples
+  const examples = formatCommitExamples(
+    git(['log', '-n', String(MAX_RECENT_COMMITS), '-z', '--format=%B']).split('\0'),
+  );
+  const userPrompt = buildCommitUserPrompt({ files, diff, staged: hasStaged, examples });
+  const system = buildCommitMessageSystemPrompt(config.commitStyle, '');
 
   console.error(`ASKII is generating a commit message... ${getRandomThinkingKaomoji()}`);
-  const response = await getResponse(config, userPrompt, COMMIT_SYSTEM_PROMPT);
+  const response = await getResponse(config, userPrompt, system);
   return cleanCommitMessage(response);
 }
 
