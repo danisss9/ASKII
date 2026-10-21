@@ -12,12 +12,23 @@ export function escapeHtml(text: string): string {
 /**
  * Action strings arrive already decoded by JSON.parse. Some models escape them
  * twice, which shows up as content with no real newline but literal "\n"
- * sequences — only then is a second JSON-string decode applied. Anything else
- * (including code that legitimately contains "\n" in a string literal) is
- * returned untouched.
+ * sequences *between statements*. Only then is a second JSON-string decode
+ * applied. Anything else is returned untouched — including real multi-line
+ * code with "\n" in string literals, and single-line files (minified JS,
+ * JSON) whose "\n" only appear inside string literals.
  */
 export function decodeIfDoubleEscaped(str: string): string {
   if (str.includes('\n') || !str.includes('\\n')) {return str;}
+  // Every double quote escaped (\") and none bare: the whole text was escaped
+  const allQuotesEscaped = /\\"/.test(str) && !/(?<!\\)"/.test(str);
+  if (!allQuotesEscaped) {
+    // A literal \n left after removing string literals separates lines of code
+    const outsideStrings = str.replace(
+      /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/g,
+      '""',
+    );
+    if (!outsideStrings.includes('\\n')) {return str;}
+  }
   try {
     // Escape bare quotes and raw tabs/CRs so the text forms one valid JSON string
     const quoted = str.replace(/(?<!\\)"/g, '\\"').replace(/\t/g, '\\t').replace(/\r/g, '\\r');

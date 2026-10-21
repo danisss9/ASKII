@@ -39,6 +39,16 @@ const MODEL_FILES = [
 ];
 const DOWNLOAD_LOCK = path.join(MODEL_CACHE_DIR, '.download.lock');
 const LOCK_POLL_MS = 1000;
+// A first download is ~314 MB; past this, waiting on another process is given up
+const LOCK_MAX_WAIT_MS = 30 * 60 * 1000;
+// Sizes of the files of the last load that succeeded — a later mismatch means
+// a file was truncated or replaced, and it is deleted so it downloads again.
+const VERIFIED_MANIFEST = path.join(MODEL_REPO_DIR, '.askii-verified.json');
+const FETCH_TIMEOUT_MS = 30_000;
+
+function fileUrl(file: string): string {
+  return `https://huggingface.co/${HF_REPO}/resolve/main/${file}`;
+}
 
 /**
  * The upstream repo is multimodal — its config makes Transformers.js create
@@ -51,13 +61,19 @@ const LOCK_POLL_MS = 1000;
  */
 async function seedTextOnlyConfig(): Promise<void> {
   const configPath = path.join(MODEL_REPO_DIR, 'config.json');
-  let config: Record<string, unknown>;
+  let config: Record<string, unknown> | undefined;
   if (fs.existsSync(configPath)) {
-    config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  } else {
-    const res = await fetch(`https://huggingface.co/${HF_REPO}/resolve/main/config.json`);
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    } catch {
+      // Corrupt (e.g. a write cut short) — drop it and fetch a fresh copy
+      fs.rmSync(configPath, { force: true });
+    }
+  }
+  if (!config) {
+    const res = await fetch(fileUrl('config.json'), { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`config.json download failed: ${res.status}`);
-    config = await res.json();
+    config = (await res.json()) as Record<string, unknown>;
   }
   if (!('vision_config' in config) && !('audio_config' in config)) return; // already text-only
 
@@ -89,8 +105,80 @@ async function seedTextOnlyConfig(): Promise<void> {
   }
 }
 
+function readManifest(): Record<string, number> | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(VERIFIED_MANIFEST, 'utf-8'));
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function fileSize(file: string): number {
+  try {
+    return fs.statSync(path.join(MODEL_REPO_DIR, file)).size;
+  } catch {
+    return -1;
+  }
+}
+
+/** Records the sizes of a cache that loaded successfully. */
+function writeManifest(): void {
+  try {
+    const sizes = Object.fromEntries(MODEL_FILES.map((file) => [file, fileSize(file)]));
+    fs.writeFileSync(VERIFIED_MANIFEST, JSON.stringify(sizes, null, 2));
+  } catch {
+    // best-effort
+  }
+}
+
+/**
+ * True when every model file is present and non-empty — and, once a load has
+ * succeeded, the same size as then. A file that no longer matches (truncated
+ * download, partial copy) is deleted so the next load fetches it again.
+ */
 function isModelCached(): boolean {
-  return MODEL_FILES.every((file) => fs.existsSync(path.join(MODEL_REPO_DIR, file)));
+  const manifest = readManifest();
+  let complete = true;
+  for (const file of MODEL_FILES) {
+    const size = fileSize(file);
+    const expected = manifest?.[file];
+    if (size <= 0 || (typeof expected === 'number' && expected !== size)) {
+      if (size >= 0) fs.rmSync(path.join(MODEL_REPO_DIR, file), { force: true });
+      complete = false;
+    }
+  }
+  if (!complete) fs.rmSync(VERIFIED_MANIFEST, { force: true });
+  return complete;
+}
+
+/**
+ * After a failed load: compares each cached file with the size Hugging Face
+ * reports and deletes the ones that differ, so a retry re-downloads only
+ * those. Returns the names of the files removed.
+ */
+async function removeMismatchedFiles(): Promise<string[]> {
+  const removed: string[] = [];
+  for (const file of MODEL_FILES) {
+    const size = fileSize(file);
+    if (size < 0) continue;
+    try {
+      const res = await fetch(fileUrl(file), {
+        method: 'HEAD',
+        redirect: 'follow',
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      const remote = Number(res.headers.get('x-linked-size') ?? res.headers.get('content-length'));
+      // config.json is rewritten locally (text-only), so only sizes of the others are comparable
+      if (file !== 'config.json' && res.ok && remote > 0 && remote !== size) {
+        fs.rmSync(path.join(MODEL_REPO_DIR, file), { force: true });
+        removed.push(file);
+      }
+    } catch {
+      // offline — nothing to compare against
+    }
+  }
+  return removed;
 }
 
 /** A lock is stale when its owner process is gone (crashed mid-download). */
@@ -115,6 +203,7 @@ function isLockStale(): boolean {
  */
 async function withDownloadLock<T>(fn: () => Promise<T>): Promise<T> {
   fs.mkdirSync(MODEL_CACHE_DIR, { recursive: true });
+  const started = Date.now();
   for (;;) {
     try {
       fs.writeFileSync(DOWNLOAD_LOCK, String(process.pid), { flag: 'wx' });
@@ -125,6 +214,11 @@ async function withDownloadLock<T>(fn: () => Promise<T>): Promise<T> {
     if (isLockStale()) {
       fs.rmSync(DOWNLOAD_LOCK, { force: true });
       continue;
+    }
+    if (Date.now() - started > LOCK_MAX_WAIT_MS) {
+      throw new Error(
+        `another ASKII process has been downloading the embedding model for over 30 minutes (lock: ${DOWNLOAD_LOCK}) — delete the lock file if that process is gone`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
   }
@@ -211,13 +305,19 @@ async function getExtractor(onProgress?: EmbedderProgress): Promise<Extractor> {
             : {}),
         });
       };
-      return isModelCached() ? load() : withDownloadLock(load);
-    })().catch((error) => {
+      const extractor = await (isModelCached() ? load() : withDownloadLock(load));
+      writeManifest();
+      return extractor;
+    })().catch(async (error) => {
       extractorPromise = null; // allow a retry on the next call
+      const removed = await removeMismatchedFiles();
+      const hint = removed.length
+        ? ` Incomplete cached file(s) removed (${removed.join(', ')}) — try again to re-download them.`
+        : '';
       throw new Error(
         `Failed to load the local embedding model (${HF_REPO}) — first use downloads ~314 MB to ${MODEL_CACHE_DIR}: ${
           error instanceof Error ? error.message : 'Unknown error'
-        }`,
+        }.${hint}`,
       );
     });
   }

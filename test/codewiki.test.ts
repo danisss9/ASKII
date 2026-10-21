@@ -290,4 +290,107 @@ suite('common/vectordb', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test('a corrupt meta.json is rebuilt from scratch instead of crashing every rebuild', async () => {
+    const root = makeTmpWorkspace();
+    const indexDir = path.join(root, '.askii', 'code-wiki');
+    try {
+      write(root, 'a.ts', lines(30, 'alpha'));
+      await rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed);
+      const metaPath = path.join(indexDir, 'meta.json');
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+      meta.offset = meta.offset.slice(0, 4); // valid base64, truncated array
+      fs.writeFileSync(metaPath, JSON.stringify(meta));
+
+      const stats = await rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed);
+      assert.strictEqual(stats.cachedFiles, 0);
+      assert.strictEqual(stats.embeddedFiles, 1);
+      invalidateVectorCache(indexDir);
+      const hits = await searchVectorIndex(indexDir, 'alpha', 'test-model', fakeEmbed, 1);
+      assert.match(hits[0].content, /alpha line/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a data file that does not match meta.json is never reused', async () => {
+    const root = makeTmpWorkspace();
+    const indexDir = path.join(root, '.askii', 'code-wiki');
+    try {
+      write(root, 'a.ts', lines(30, 'alpha'));
+      await rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed);
+      const vectors = fs.readdirSync(indexDir).find((f) => f.startsWith('vectors.'))!;
+      fs.truncateSync(path.join(indexDir, vectors), 3);
+      invalidateVectorCache(indexDir);
+      assert.deepStrictEqual(
+        await searchVectorIndex(indexDir, 'alpha', 'test-model', fakeEmbed, 1),
+        [],
+      );
+      const stats = await rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed);
+      assert.strictEqual(stats.cachedFiles, 0);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('each rebuild commits a new generation and removes the old one', async () => {
+    const root = makeTmpWorkspace();
+    const indexDir = path.join(root, '.askii', 'code-wiki');
+    try {
+      write(root, 'a.ts', lines(30, 'alpha'));
+      await rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed);
+      const firstFiles = fs.readdirSync(indexDir).filter((f) => f.endsWith('.bin'));
+      assert.strictEqual(firstFiles.length, 4);
+      await rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed);
+      const secondFiles = fs.readdirSync(indexDir).filter((f) => f.endsWith('.bin'));
+      assert.strictEqual(secondFiles.length, 4);
+      assert.ok(secondFiles.every((f) => !firstFiles.includes(f)));
+      assert.ok(!fs.existsSync(path.join(indexDir, 'rebuild.lock')));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a cached index is reloaded after another process rebuilds it', async () => {
+    const root = makeTmpWorkspace();
+    const indexDir = path.join(root, '.askii', 'code-wiki');
+    try {
+      write(root, 'a.ts', lines(30, 'alpha'));
+      await rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed);
+      assert.match((await searchVectorIndex(indexDir, 'alpha', 'test-model', fakeEmbed, 1))[0].content, /alpha/);
+
+      // Simulate the other process: rewrite the file, rebuild, and bump meta's mtime
+      write(root, 'a.ts', lines(30, 'omega'));
+      await rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed);
+      const future = new Date(Date.now() + 5000);
+      fs.utimesSync(path.join(indexDir, 'meta.json'), future, future);
+
+      const hits = await searchVectorIndex(indexDir, 'omega', 'test-model', fakeEmbed, 1);
+      assert.match(hits[0].content, /omega line/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('concurrent rebuilds of one index are serialized', async () => {
+    const root = makeTmpWorkspace();
+    const indexDir = path.join(root, '.askii', 'code-wiki');
+    try {
+      write(root, 'a.ts', lines(30, 'alpha'));
+      write(root, 'b.ts', lines(30, 'beta'));
+      const [one, two] = await Promise.all([
+        rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed),
+        rebuildVectorIndex(indexDir, 'test-model', specFor(root), fakeEmbed),
+      ]);
+      assert.strictEqual(one.fileCount, 2);
+      assert.strictEqual(two.fileCount, 2);
+      invalidateVectorCache(indexDir);
+      assert.strictEqual(
+        (await searchVectorIndex(indexDir, 'beta beta', 'test-model', fakeEmbed, 1))[0].source,
+        'b.ts',
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

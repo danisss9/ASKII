@@ -27,11 +27,19 @@ export type WikiHit = VectorHit;
 
 // ── File discovery ───────────────────────────────────────────────────────────
 
-function walkMdFiles(dir: string): string[] {
+function walkMdFiles(dir: string, isRoot = true): string[] {
   const files: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    // An unreadable subfolder is skipped; only a missing/unreadable root is an error
+    if (isRoot) throw error;
+    return files;
+  }
+  for (const entry of entries) {
     if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
-      files.push(...walkMdFiles(path.join(dir, entry.name)));
+      files.push(...walkMdFiles(path.join(dir, entry.name), false));
     } else if (entry.isFile() && entry.name.endsWith('.md')) {
       files.push(path.join(dir, entry.name));
     }

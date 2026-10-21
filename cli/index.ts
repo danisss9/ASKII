@@ -1185,21 +1185,38 @@ function noteGenId(): string {
   return randomBytes(8).toString('hex') + Date.now().toString(36);
 }
 
+/**
+ * Reads ~/.askii/notes.json. A file that exists but is not a notes array is
+ * never treated as "no notes" — saving over it would wipe every entry — so a
+ * copy is kept and the command fails with a message instead.
+ */
 function loadCliNotes(): NoteEntry[] {
+  if (!fs.existsSync(NOTES_FILE)) return [];
+  const raw = fs.readFileSync(NOTES_FILE, 'utf-8');
+  if (!raw.trim()) return [];
+  let parsed: unknown;
   try {
-    if (!fs.existsSync(NOTES_FILE)) return [];
-    const raw = fs.readFileSync(NOTES_FILE, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as NoteEntry[]) : [];
+    parsed = JSON.parse(raw);
   } catch {
-    return [];
+    parsed = undefined;
   }
+  if (!Array.isArray(parsed)) {
+    const backup = `${NOTES_FILE}.corrupt-${Date.now()}`;
+    fs.copyFileSync(NOTES_FILE, backup);
+    throw new Error(
+      `${NOTES_FILE} is not a valid notes file, so it was left untouched (a copy is at ${backup}). Fix or remove it and try again.`,
+    );
+  }
+  return parsed as NoteEntry[];
 }
 
+/** Writes the notes atomically (temp file + rename), so a crash never leaves half a file. */
 function saveCliNotes(notes: NoteEntry[]): void {
   const dir = path.dirname(NOTES_FILE);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(NOTES_FILE, JSON.stringify(notes, null, 2));
+  const tmp = `${NOTES_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(notes, null, 2));
+  fs.renameSync(tmp, NOTES_FILE);
 }
 
 function currentWorkspaceTagCli(): string | undefined {
