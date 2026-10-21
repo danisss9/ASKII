@@ -33,16 +33,21 @@ function getOpenCodeGoSessionId(): string {
   return opencodeGoSessionId;
 }
 
+// Replaced at build time by esbuild `define` with the bundle's own package
+// version (extension or CLI); undefined in the tsc-compiled test output.
+declare const __ASKII_VERSION__: string | undefined;
+
+export function getAskiiVersion(): string {
+  return typeof __ASKII_VERSION__ === 'string' && __ASKII_VERSION__ ? __ASKII_VERSION__ : 'unknown';
+}
+
+export function getAskiiUserAgent(): string {
+  return `askii/${getAskiiVersion()}`;
+}
+
 export function getOpenCodeGoHeaders(): Record<string, string> {
-  let version = 'unknown';
-  try {
-    // Inlined into the bundles at build time by esbuild; may be missing from compiled tests.
-    version = (require('../package.json') as { version?: string }).version || version;
-  } catch {
-    // Keep the fallback version.
-  }
   return {
-    'User-Agent': `askii/${version}`,
+    'User-Agent': getAskiiUserAgent(),
     'x-opencode-session': getOpenCodeGoSessionId(),
   };
 }

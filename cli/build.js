@@ -37,6 +37,9 @@ async function main() {
       '@common': path.resolve(__dirname, '..', 'common'),
       ...embeddingAlias,
     },
+    define: {
+      __ASKII_VERSION__: JSON.stringify(require('./package.json').version),
+    },
     logLevel: 'info',
   });
 

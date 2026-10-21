@@ -75,6 +75,7 @@ function delay(ms: number, token: vscode.CancellationToken): Promise<void> {
       resolve();
       return;
     }
+    // eslint-disable-next-line prefer-const -- assigned after the timer that reads it
     let sub: vscode.Disposable | undefined;
     const timer = setTimeout(() => {
       sub?.dispose();

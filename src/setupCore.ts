@@ -162,3 +162,68 @@ export function isUnsupportedModelListError(error: unknown): boolean {
   const status = getErrorStatus(error);
   return status === 404 || status === 405 || status === 501;
 }
+
+const DISCOVERY_TIMEOUT_MS = 10_000;
+
+export class ProviderConnectionError extends Error {
+  constructor(
+    message: string,
+    readonly kind: 'missing' | 'authentication' | 'connection' | 'timeout',
+  ) {
+    super(message);
+    this.name = 'ProviderConnectionError';
+  }
+}
+
+export interface InspectedStringSetting {
+  globalValue?: string;
+  workspaceValue?: string;
+  workspaceFolderValue?: string;
+}
+
+export interface SecretStore {
+  get(key: string): PromiseLike<string | undefined>;
+  store(key: string, value: string): PromiseLike<void>;
+}
+
+export function getLegacyCredentialValue(inspected: InspectedStringSetting | undefined): string {
+  if (!inspected) {
+    return '';
+  }
+  const values = [inspected.workspaceFolderValue, inspected.workspaceValue, inspected.globalValue];
+  return values.find((value) => typeof value === 'string' && value.trim())?.trim() ?? '';
+}
+
+export async function migrateLegacyCredential(
+  secretKey: string,
+  legacyValue: string,
+  secrets: SecretStore,
+  clearLegacyValue: () => Promise<void>,
+): Promise<void> {
+  const existing = await secrets.get(secretKey);
+  if (!existing?.trim()) {
+    await secrets.store(secretKey, legacyValue);
+  }
+  await clearLegacyValue();
+}
+
+export function withDiscoveryTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs = DISCOVERY_TIMEOUT_MS,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new ProviderConnectionError('The provider did not respond within 10 seconds.', 'timeout'),
+        ),
+      timeoutMs,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+}

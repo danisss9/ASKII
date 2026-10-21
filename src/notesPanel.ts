@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
-import { type NoteEntry, type NoteKind, searchNotes, describeRecurrence, describeEventTrigger } from '@common/notes';
+import { type NoteKind, searchNotes, describeRecurrence, describeEventTrigger } from '@common/notes';
 import {
   loadNotes,
   saveNotes,

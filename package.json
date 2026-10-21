@@ -372,13 +372,19 @@
     "package": "npm run check-types && npm run lint && node esbuild.js --production",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
-    "pretest": "npm run compile-tests && npm run compile && npm run lint",
-    "check-types": "tsc --noEmit",
-    "lint": "eslint src common",
+    "pretest": "npm run compile-tests && npm run compile",
+    "check-types": "tsc --noEmit && tsc --noEmit -p cli",
+    "lint": "eslint src common test cli/index.ts",
     "test": "vscode-test",
+    "test:unit": "npm run compile-tests && mocha --ui tdd \"out/test/**/*.test.js\"",
+    "check-versions": "node scripts/check-versions.js",
     "release": "vsce publish"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@huggingface/transformers": "^4.3.1",
+    "@lmstudio/immer-with-plugins": "^10.1.1",
+    "@lmstudio/sdk": "^1.5.0",
     "@types/markdown-it": "^14.1.2",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
@@ -388,23 +394,18 @@
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.27.2",
     "eslint": "^9.39.2",
-    "npm-run-all": "^4.1.5",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.52.0"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.78.0",
-    "@huggingface/transformers": "^4.3.1",
-    "@lmstudio/immer-with-plugins": "^10.1.1",
-    "@lmstudio/sdk": "^1.5.0",
     "ignore": "^7.0.5",
     "jimp": "^0.22.12",
     "markdown-it": "^14.1.1",
     "minisearch": "^7.2.0",
+    "mocha": "^11.8.0",
+    "npm-run-all": "^4.1.5",
     "ollama": "^0.6.3",
-    "onnxruntime-web": "^1.31.0-dev.20260914-8d85527a0",
+    "onnxruntime-web": "1.31.0-dev.20260914-8d85527a0",
     "openai": "^6.25.0",
     "puppeteer-core": "^24.37.5",
-    "screenshot-desktop": "^1.12.7"
+    "screenshot-desktop": "^1.12.7",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.52.0"
   }
 }

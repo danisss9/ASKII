@@ -22,7 +22,6 @@ const NORMS_FILE = 'norms.bin';
 const CHUNKS_FILE = 'chunks.bin';
 
 const FORMAT_VERSION = 1;
-const MAX_FILE_BYTES = 200 * 1024; // skip files over 200 KB
 const MIN_CHUNK_CHARS = 40; // minimum non-whitespace chars per chunk
 
 // ── Public types ─────────────────────────────────────────────────────────────

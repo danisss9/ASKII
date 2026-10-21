@@ -1193,7 +1193,7 @@ async function runBrowserTask(task: string) {
 
   acquireTaskPanel('ASKII Control (Browser)');
 
-  const puppeteer = require('puppeteer-core') as typeof import('puppeteer-core');
+  const puppeteer = await import('puppeteer-core');
   let browser: import('puppeteer-core').Browser | undefined;
   let page: import('puppeteer-core').Page | undefined;
 

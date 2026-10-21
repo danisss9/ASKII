@@ -2013,7 +2013,7 @@ async function runScreenControl(instruction: string, config: Config): Promise<vo
         break;
       }
 
-      let { actions } = parsed;
+      const { actions } = parsed;
 
       // Two-phase zoom: refine coordinates for a single position-based click
       if (actions.length === 1 && ZOOM_ACTIONS.has(actions[0].action)) {

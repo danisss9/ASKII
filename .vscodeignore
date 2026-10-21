@@ -16,7 +16,8 @@ common/**
 cli/**
 scripts/**
 stubs/**
-scratch/**
+test/**
+.github/**
 # The local embedding stack (embeddinggemma2 via Transformers.js + the
 # onnxruntime-web WASM runtime) is bundled into dist/ by esbuild — the VSIX is
 # packaged with --no-dependencies, so nothing from node_modules ships.
