@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getExtensionResponse, getEnabledWikiContext } from './providers';
+import { isExcludedFromInline } from './privacy';
+import { log } from './log';
 
 export const INLINE_ACCEPT_COMMAND = 'askii.inlineCompletionAccepted';
 
@@ -75,6 +77,7 @@ function delay(ms: number, token: vscode.CancellationToken): Promise<void> {
       resolve();
       return;
     }
+    // eslint-disable-next-line prefer-const -- assigned after the timer that reads it
     let sub: vscode.Disposable | undefined;
     const timer = setTimeout(() => {
       sub?.dispose();
@@ -112,7 +115,7 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
     token: vscode.CancellationToken,
   ): Promise<vscode.InlineCompletionItem[]> {
     const config = vscode.workspace.getConfiguration('askii');
-    if (!config.get<boolean>('inlineCompletionEnabled')) {
+    if (!config.get<boolean>('inlineCompletionEnabled') || isExcludedFromInline(document)) {
       return [];
     }
 
@@ -151,10 +154,10 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
     const cancelSub = token.onCancellationRequested(() => controller.abort());
 
     try {
-      return await this.fetchCompletions(position, token, config, id, ctx, controller.signal);
+      return await this.fetchCompletions(position, token, id, ctx, controller.signal);
     } catch (e) {
       if (!controller.signal.aborted) {
-        console.error('Error fetching inline completion:', e);
+        log.error('Inline completion failed', e);
       }
       return [];
     } finally {
@@ -219,7 +222,6 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
   private async fetchCompletions(
     position: vscode.Position,
     token: vscode.CancellationToken,
-    config: vscode.WorkspaceConfiguration,
     id: number,
     ctx: BaseContext,
     signal: AbortSignal,
@@ -256,8 +258,7 @@ export class AskiiInlineCompletionProvider implements vscode.InlineCompletionIte
     const completionText = await getExtensionResponse(
       prompt,
       SYSTEM_PROMPT,
-      config.get<string>('llmInlinePlatform'),
-      config.get<string>('llmInlineModel'),
+      'inline',
       signal,
     );
 

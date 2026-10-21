@@ -767,7 +767,7 @@ export function parseReminderTimeLocal(text: string, now: Date = new Date()): st
       const tod =
         todFromGroups(revNextWeek, 2) ?? extractExplicitTime(t) ?? extractPartOfDay(t);
       // Monday of next week, then advance to the target day.
-      let d = new Date(now);
+      const d = new Date(now);
       do {
         d.setDate(d.getDate() + 1);
       } while (d.getDay() !== 1);

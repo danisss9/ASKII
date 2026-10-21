@@ -1,16 +1,24 @@
+import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import * as path from 'path';
 
 // ── Generic quantized vector store ───────────────────────────────────────────
 // File layout inside <indexDir>:
-//   meta.json    — commit point: scalar metadata, file table, per-chunk meta as
-//                  base64-packed typed arrays (paths/headings deduped into tables)
-//   vectors.bin  — Int8-quantized embeddings, chunkCount * dim bytes
-//   scales.bin   — Float32 per-chunk dequantization scale
-//   norms.bin    — Float32 per-chunk L2 norm of the dequantized vector
-//   chunks.bin   — concatenated UTF-8 chunk texts, addressed by byte offset
-//                  (chunk text is read from disk only for the top-k hits)
+//   meta.json          — commit point: scalar metadata, file table, per-chunk
+//                        meta as base64-packed typed arrays (paths/headings
+//                        deduped into tables), and the data files' generation
+//   vectors.<gen>.bin  — Int8-quantized embeddings, chunkCount * dim bytes
+//   scales.<gen>.bin   — Float32 per-chunk dequantization scale
+//   norms.<gen>.bin    — Float32 per-chunk L2 norm of the dequantized vector
+//   chunks.<gen>.bin   — concatenated UTF-8 chunk texts, addressed by byte offset
+//                        (chunk text is read from disk only for the top-k hits)
+//
+// Every rebuild writes a new generation of data files and then atomically
+// replaces meta.json, so a crash at any point leaves either the old or the new
+// index intact — never old metadata over new data. Older generations are
+// deleted after the commit. Version-1 indexes (unsuffixed file names) are
+// still read, and are replaced on the next rebuild.
 //
 // Memory profile vs. Float32 JSON: ~1/4 the resident vector bytes, no per-chunk
 // objects, and chunk text never loaded unless retrieved.
@@ -21,8 +29,12 @@ const SCALES_FILE = 'scales.bin';
 const NORMS_FILE = 'norms.bin';
 const CHUNKS_FILE = 'chunks.bin';
 
-const FORMAT_VERSION = 1;
-const MAX_FILE_BYTES = 200 * 1024; // skip files over 200 KB
+const FORMAT_VERSION = 2;
+const READABLE_VERSIONS = new Set([1, 2]);
+const LOCK_FILE = 'rebuild.lock';
+const LOCK_POLL_MS = 500;
+const LOCK_MAX_WAIT_MS = 10 * 60 * 1000;
+const LOCK_STALE_MS = 30 * 60 * 1000;
 const MIN_CHUNK_CHARS = 40; // minimum non-whitespace chars per chunk
 
 // ── Public types ─────────────────────────────────────────────────────────────
@@ -122,6 +134,8 @@ interface FileRecord {
 
 interface IndexMeta {
   version: number;
+  /** Data-file generation (absent in version-1 indexes). */
+  generation?: string;
   model: string;
   dim: number;
   builtAt: string;
@@ -141,6 +155,8 @@ interface IndexMeta {
 
 interface LoadedIndex {
   meta: IndexMeta;
+  /** meta.json mtime when loaded — a rebuild by another process changes it. */
+  metaMtimeMs: number;
   vectors: Int8Array;   // chunkCount * dim
   scales: Float32Array; // chunkCount
   norms: Float32Array;  // chunkCount
@@ -176,10 +192,139 @@ function unpackFloat64(b64: string, count: number): Float64Array {
 function decodeMeta(raw: string): IndexMeta | null {
   try {
     const meta = JSON.parse(raw) as IndexMeta;
-    if (meta.version !== FORMAT_VERSION || typeof meta.chunkCount !== 'number') return null;
+    if (!READABLE_VERSIONS.has(meta.version) || typeof meta.chunkCount !== 'number') return null;
+    if (meta.version >= 2 && typeof meta.generation !== 'string') return null;
     return meta;
   } catch {
     return null;
+  }
+}
+
+type DataFile = typeof VECTORS_FILE | typeof SCALES_FILE | typeof NORMS_FILE | typeof CHUNKS_FILE;
+
+/** Path of a data file for a generation ("vectors.<gen>.bin"; v1: "vectors.bin"). */
+function dataPath(indexDir: string, file: DataFile, generation: string | undefined): string {
+  return path.join(indexDir, generation ? file.replace(/\.bin$/, `.${generation}.bin`) : file);
+}
+
+function chunkMetaOrNull(meta: IndexMeta): ChunkMetaArrays | null {
+  try {
+    const chunkMeta = getChunkMeta(meta);
+    const count = meta.chunkCount;
+    for (const arr of Object.values(chunkMeta)) {
+      if (arr.length !== count) return null;
+    }
+    return chunkMeta;
+  } catch {
+    return null; // truncated or invalid base64 arrays
+  }
+}
+
+/**
+ * Checks that the data files on disk match meta exactly (sizes, chunk text
+ * spans). Returns the unpacked chunk arrays, or null for a corrupt index.
+ */
+function validateIndexFiles(indexDir: string, meta: IndexMeta): ChunkMetaArrays | null {
+  const count = meta.chunkCount;
+  const size = (file: DataFile): number => {
+    try {
+      return fs.statSync(dataPath(indexDir, file, meta.generation)).size;
+    } catch {
+      return -1;
+    }
+  };
+  if (
+    size(VECTORS_FILE) !== count * meta.dim ||
+    size(SCALES_FILE) !== count * 4 ||
+    size(NORMS_FILE) !== count * 4
+  ) {
+    return null;
+  }
+  const chunkMeta = chunkMetaOrNull(meta);
+  if (!chunkMeta) return null;
+  const last = count - 1;
+  const chunksSize = size(CHUNKS_FILE);
+  const expected = count === 0 ? 0 : chunkMeta.offset[last] + chunkMeta.length[last];
+  return chunksSize === expected ? chunkMeta : null;
+}
+
+/** Reads exactly buf.length bytes at position, or throws (file shrank / was replaced). */
+async function readExactly(handle: fsp.FileHandle, buf: Buffer, position: number): Promise<void> {
+  let done = 0;
+  while (done < buf.length) {
+    const { bytesRead } = await handle.read(buf, done, buf.length - done, position + done);
+    if (bytesRead === 0) {
+      throw new Error('Vector index file is shorter than its metadata says — rebuild the index.');
+    }
+    done += bytesRead;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isLockStale(lockPath: string): boolean {
+  try {
+    const stat = fs.statSync(lockPath);
+    if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) return true;
+    const pid = Number(fs.readFileSync(lockPath, 'utf-8').split(':')[0]);
+    if (!Number.isInteger(pid) || pid <= 0) return Date.now() - stat.mtimeMs > 60_000;
+    process.kill(pid, 0); // throws ESRCH when the owner is gone
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'EPERM';
+  }
+}
+
+/**
+ * Serializes rebuilds of one index across processes (the extension and the
+ * CLI may rebuild the same .askii/code-wiki), waiting for the other one.
+ */
+async function withRebuildLock<T>(
+  indexDir: string,
+  signal: AbortSignal | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const lockPath = path.join(indexDir, LOCK_FILE);
+  const started = Date.now();
+  for (;;) {
+    throwIfAborted(signal);
+    try {
+      fs.writeFileSync(lockPath, `${process.pid}:${Date.now()}`, { flag: 'wx' });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    if (isLockStale(lockPath)) {
+      fs.rmSync(lockPath, { force: true });
+      continue;
+    }
+    if (Date.now() - started > LOCK_MAX_WAIT_MS) {
+      throw new Error(`Another ASKII process is rebuilding this index (${lockPath}) — try again later.`);
+    }
+    await sleep(LOCK_POLL_MS);
+  }
+  try {
+    return await fn();
+  } finally {
+    fs.rmSync(lockPath, { force: true });
+  }
+}
+
+/** Deletes data files of generations other than `keep` (and leftover staging files). */
+function removeOtherGenerations(indexDir: string, keep: string): void {
+  let names: string[];
+  try {
+    names = fs.readdirSync(indexDir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const isData = /^(vectors|scales|norms|chunks)(\.[A-Za-z0-9]+)?\.bin(\.tmp)?$/.test(name);
+    if ((isData && !name.includes(`.${keep}.bin`)) || /^meta\.json(\.[A-Za-z0-9]+)?\.tmp$/.test(name)) {
+      fs.rmSync(path.join(indexDir, name), { force: true });
+    }
   }
 }
 
@@ -203,36 +348,42 @@ export function invalidateVectorCache(indexDir?: string): void {
 // ── Load (search path) ───────────────────────────────────────────────────────
 
 function loadIndex(indexDir: string): LoadedIndex | null {
-  const cached = indexCache.get(indexDir);
-  if (cached) return cached;
-
-  let meta: IndexMeta;
+  const metaPath = path.join(indexDir, META_FILE);
+  let metaMtimeMs: number;
   try {
-    meta = decodeMeta(fs.readFileSync(path.join(indexDir, META_FILE), 'utf-8'))!;
-    if (!meta) return null;
+    metaMtimeMs = fs.statSync(metaPath).mtimeMs;
+  } catch {
+    indexCache.delete(indexDir);
+    return null;
+  }
+  const cached = indexCache.get(indexDir);
+  // Reload after a rebuild — possibly by another process (CLI vs extension)
+  if (cached && cached.metaMtimeMs === metaMtimeMs) return cached;
+  indexCache.delete(indexDir);
+
+  let meta: IndexMeta | null;
+  try {
+    meta = decodeMeta(fs.readFileSync(metaPath, 'utf-8'));
   } catch {
     return null;
   }
+  if (!meta || meta.chunkCount === 0) return null;
 
-  const count = meta.chunkCount;
-  const dim = meta.dim;
   try {
-    const vectorsBuf = fs.readFileSync(path.join(indexDir, VECTORS_FILE));
-    const scalesBuf = fs.readFileSync(path.join(indexDir, SCALES_FILE));
-    const normsBuf = fs.readFileSync(path.join(indexDir, NORMS_FILE));
-    const chunksStat = fs.statSync(path.join(indexDir, CHUNKS_FILE));
-
-    // Validate layout against meta — a mismatched set of files is treated as no index
-    if (
-      vectorsBuf.length !== count * dim ||
-      scalesBuf.length !== count * 4 ||
-      normsBuf.length !== count * 4
-    ) {
+    // A mismatched set of files is treated as no index
+    if (!validateIndexFiles(indexDir, meta)) return null;
+    const count = meta.chunkCount;
+    const dim = meta.dim;
+    const vectorsBuf = fs.readFileSync(dataPath(indexDir, VECTORS_FILE, meta.generation));
+    const scalesBuf = fs.readFileSync(dataPath(indexDir, SCALES_FILE, meta.generation));
+    const normsBuf = fs.readFileSync(dataPath(indexDir, NORMS_FILE, meta.generation));
+    if (vectorsBuf.length !== count * dim || scalesBuf.length !== count * 4 || normsBuf.length !== count * 4) {
       return null;
     }
 
     const index: LoadedIndex = {
       meta,
+      metaMtimeMs,
       vectors: new Int8Array(vectorsBuf.buffer, vectorsBuf.byteOffset, count * dim),
       scales: new Float32Array(count),
       norms: new Float32Array(count),
@@ -240,15 +391,6 @@ function loadIndex(indexDir: string): LoadedIndex | null {
     for (let i = 0; i < count; i++) {
       index.scales[i] = scalesBuf.readFloatLE(i * 4);
       index.norms[i] = normsBuf.readFloatLE(i * 4);
-    }
-    // Chunk text spans must exactly cover chunks.bin
-    const chunkMeta = getChunkMeta(meta);
-    const last = count - 1;
-    if (count === 0 || chunkMeta.offset[last] + chunkMeta.length[last] !== chunksStat.size) {
-      return null;
-    }
-    for (const arr of [chunkMeta.pathIdx, chunkMeta.headingIdx, chunkMeta.startLine, chunkMeta.endLine]) {
-      if (arr.length !== count) return null;
     }
 
     indexCache.set(indexDir, index);
@@ -309,8 +451,20 @@ export async function rebuildVectorIndex(
   embedDocs: EmbedFn,
   opts: VectorRebuildOptions = {},
 ): Promise<VectorIndexStats> {
-  const files = spec.listFiles().sort((a, b) => (a.relPath < b.relPath ? -1 : 1));
   fs.mkdirSync(indexDir, { recursive: true });
+  return withRebuildLock(indexDir, opts.signal, () =>
+    rebuildLocked(indexDir, model, spec, embedDocs, opts),
+  );
+}
+
+async function rebuildLocked(
+  indexDir: string,
+  model: string,
+  spec: VectorIndexSpec,
+  embedDocs: EmbedFn,
+  opts: VectorRebuildOptions,
+): Promise<VectorIndexStats> {
+  const files = spec.listFiles().sort((a, b) => (a.relPath < b.relPath ? -1 : 1));
 
   // Previous index — reused only when the format and model match
   let oldMeta: IndexMeta | null = null;
@@ -325,24 +479,24 @@ export async function rebuildVectorIndex(
     // no previous index — full rebuild
   }
 
-  const oldVectorsPath = path.join(indexDir, VECTORS_FILE);
-  const oldScalesPath = path.join(indexDir, SCALES_FILE);
-  const oldNormsPath = path.join(indexDir, NORMS_FILE);
-  const oldChunksPath = path.join(indexDir, CHUNKS_FILE);
-  const oldReadable =
-    !!oldMeta &&
-    fs.existsSync(oldVectorsPath) &&
-    fs.existsSync(oldScalesPath) &&
-    fs.existsSync(oldNormsPath) &&
-    fs.existsSync(oldChunksPath);
-  const oldChunkMeta = oldReadable && oldMeta ? getChunkMeta(oldMeta) : null;
+  const oldGeneration = oldMeta?.generation;
+  const oldVectorsPath = dataPath(indexDir, VECTORS_FILE, oldGeneration);
+  const oldScalesPath = dataPath(indexDir, SCALES_FILE, oldGeneration);
+  const oldNormsPath = dataPath(indexDir, NORMS_FILE, oldGeneration);
+  const oldChunksPath = dataPath(indexDir, CHUNKS_FILE, oldGeneration);
+  // Reuse only an index whose files match its metadata exactly — a corrupt
+  // or half-written one is rebuilt from scratch instead of copied from
+  const oldChunkMeta = oldMeta ? validateIndexFiles(indexDir, oldMeta) : null;
+  const oldReadable = !!oldChunkMeta;
 
+  // Staged straight into this build's generation files; meta.json.tmp → meta.json commits
+  const generation = randomBytes(6).toString('hex');
   const tmpPaths = {
-    vectors: path.join(indexDir, `${VECTORS_FILE}.tmp`),
-    scales: path.join(indexDir, `${SCALES_FILE}.tmp`),
-    norms: path.join(indexDir, `${NORMS_FILE}.tmp`),
-    chunks: path.join(indexDir, `${CHUNKS_FILE}.tmp`),
-    meta: path.join(indexDir, `${META_FILE}.tmp`),
+    vectors: dataPath(indexDir, VECTORS_FILE, generation),
+    scales: dataPath(indexDir, SCALES_FILE, generation),
+    norms: dataPath(indexDir, NORMS_FILE, generation),
+    chunks: dataPath(indexDir, CHUNKS_FILE, generation),
+    meta: path.join(indexDir, `${META_FILE}.${generation}.tmp`),
   };
 
   let out: TmpWriter | null = null;
@@ -469,7 +623,12 @@ export async function rebuildVectorIndex(
       opts.onProgress?.('indexing', fi + 1, files.length);
       const relPath = entry.relPath.replace(/\\/g, '/');
 
-      const stat = fs.statSync(entry.fullPath);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(entry.fullPath);
+      } catch {
+        continue; // deleted while indexing
+      }
       const oldRecord = oldReadable ? oldFilesByPath.get(relPath) : undefined;
       const canReuse = !!oldRecord && oldRecord.size === stat.size && oldRecord.mtimeMs === stat.mtimeMs;
 
@@ -485,7 +644,7 @@ export async function rebuildVectorIndex(
         const vecBuf = Buffer.alloc(vecLen);
         const vh = await fsp.open(oldVectorsPath, 'r');
         try {
-          await vh.read(vecBuf, 0, vecLen, vecStart);
+          await readExactly(vh, vecBuf, vecStart);
         } finally {
           await vh.close();
         }
@@ -498,7 +657,7 @@ export async function rebuildVectorIndex(
           const buf = Buffer.alloc(count * bytesPerItem);
           const h = await fsp.open(oldPath, 'r');
           try {
-            await h.read(buf, 0, buf.length, oldRecord.chunkIndex * bytesPerItem);
+            await readExactly(h, buf, oldRecord.chunkIndex * bytesPerItem);
           } finally {
             await h.close();
           }
@@ -511,7 +670,7 @@ export async function rebuildVectorIndex(
         const textBuf = Buffer.alloc(textLen);
         const ch = await fsp.open(oldChunksPath, 'r');
         try {
-          await ch.read(textBuf, 0, textLen, textStart);
+          await readExactly(ch, textBuf, textStart);
         } finally {
           await ch.close();
         }
@@ -579,6 +738,7 @@ export async function rebuildVectorIndex(
 
     const meta: IndexMeta = {
       version: FORMAT_VERSION,
+      generation,
       model,
       dim,
       builtAt: new Date().toISOString(),
@@ -595,21 +755,18 @@ export async function rebuildVectorIndex(
       length: packUint32(Uint32Array.from(lengths)),
     };
 
-    // Commit: data files first, meta.json last — readers treat any mismatch
-    // (validated on load) as a missing index and the next rebuild self-heals.
-    await writer.vectors.close();
-    await writer.scales.close();
-    await writer.norms.close();
-    await writer.chunks.close();
+    // Commit: the new generation's data files are complete; replacing
+    // meta.json (one atomic rename) switches readers over to them.
+    for (const handle of [writer.vectors, writer.scales, writer.norms, writer.chunks]) {
+      await handle.sync();
+      await handle.close();
+    }
     out = null;
-    await fsp.rename(tmpPaths.vectors, path.join(indexDir, VECTORS_FILE));
-    await fsp.rename(tmpPaths.scales, path.join(indexDir, SCALES_FILE));
-    await fsp.rename(tmpPaths.norms, path.join(indexDir, NORMS_FILE));
-    await fsp.rename(tmpPaths.chunks, path.join(indexDir, CHUNKS_FILE));
     fs.writeFileSync(tmpPaths.meta, JSON.stringify(meta), 'utf-8');
     await fsp.rename(tmpPaths.meta, path.join(indexDir, META_FILE));
 
     invalidateVectorCache(indexDir);
+    removeOtherGenerations(indexDir, generation);
 
     return {
       fileCount: newFiles.length,
@@ -665,16 +822,16 @@ function topKIndices(scores: Float32Array, k: number): number[] {
 
 async function readChunkTexts(
   indexDir: string,
+  generation: string | undefined,
   indices: number[],
   chunkMeta: ChunkMetaArrays,
 ): Promise<string[]> {
-  const handle = await fsp.open(path.join(indexDir, CHUNKS_FILE), 'r');
+  const handle = await fsp.open(dataPath(indexDir, CHUNKS_FILE, generation), 'r');
   try {
     const texts: string[] = [];
     for (const i of indices) {
-      const len = chunkMeta.length[i];
-      const buf = Buffer.alloc(len);
-      await handle.read(buf, 0, len, chunkMeta.offset[i]);
+      const buf = Buffer.alloc(chunkMeta.length[i]);
+      await readExactly(handle, buf, chunkMeta.offset[i]);
       texts.push(buf.toString('utf-8'));
     }
     return texts;
@@ -694,6 +851,17 @@ export async function searchVectorIndex(
   model: string,
   embedQuery: EmbedFn,
   topK = 3,
+): Promise<VectorHit[]> {
+  return searchOnce(indexDir, query, model, embedQuery, topK, false);
+}
+
+async function searchOnce(
+  indexDir: string,
+  query: string,
+  model: string,
+  embedQuery: EmbedFn,
+  topK: number,
+  retried: boolean,
 ): Promise<VectorHit[]> {
   const q = query.trim();
   if (!q) return [];
@@ -733,7 +901,15 @@ export async function searchVectorIndex(
   if (indices.length === 0) return [];
 
   const chunkMeta = getChunkMeta(meta);
-  const texts = await readChunkTexts(indexDir, indices, chunkMeta);
+  let texts: string[];
+  try {
+    texts = await readChunkTexts(indexDir, meta.generation, indices, chunkMeta);
+  } catch (error) {
+    // Rebuilt underneath us (old generation deleted) — drop the stale cache, retry once
+    if (retried) throw error;
+    indexCache.delete(indexDir);
+    return searchOnce(indexDir, query, model, embedQuery, topK, true);
+  }
   return indices.map((i, rank) => ({
     source: meta.paths[chunkMeta.pathIdx[i]],
     heading: meta.headings[chunkMeta.headingIdx[i]],

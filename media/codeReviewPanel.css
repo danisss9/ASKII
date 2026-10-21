@@ -1,0 +1,49 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family, sans-serif); font-size: var(--vscode-font-size, 13px); }
+button { font: inherit; }
+.shell { width: min(900px, calc(100% - 32px)); margin: 0 auto; padding: 20px 0 40px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-bottom: 14px; border-bottom: 1px solid var(--vscode-editorWidget-border); }
+.heading { flex: 1; min-width: 220px; }
+h1 { margin: 0; font-size: 18px; }
+.kaomoji { font-family: var(--vscode-editor-font-family, monospace); color: var(--vscode-descriptionForeground); font-weight: normal; margin-left: 6px; }
+.subtitle { margin: 4px 0 0; color: var(--vscode-descriptionForeground); }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.count { color: var(--vscode-descriptionForeground); }
+.toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+.toggle input { margin: 0; accent-color: var(--vscode-focusBorder); }
+.btn { color: var(--vscode-button-foreground); background: var(--vscode-button-background); border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; padding: 4px 12px; cursor: pointer; }
+.btn:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
+.btn.secondary { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
+.btn.secondary:hover:not(:disabled) { background: var(--vscode-button-secondaryHoverBackground); }
+.btn:disabled { opacity: .55; cursor: default; }
+.btn:focus-visible, .loc:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.hidden { display: none !important; }
+.notice { display: flex; align-items: center; gap: 10px; margin: 18px 0; padding: 12px 14px; border-radius: 6px; background: var(--vscode-sideBar-background); border: 1px solid var(--vscode-editorWidget-border); }
+.notice.error { color: var(--vscode-errorForeground); background: var(--vscode-inputValidation-errorBackground); border-color: var(--vscode-inputValidation-errorBorder); }
+.spinner { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--vscode-progressBar-background); border-right-color: transparent; animation: spin .8s linear infinite; }
+.list { display: grid; gap: 10px; margin-top: 16px; }
+.card { border: 1px solid var(--vscode-editorWidget-border); border-left-width: 3px; border-radius: 6px; padding: 12px 14px; background: var(--vscode-sideBar-background); }
+.card.sev-error { border-left-color: var(--vscode-editorError-foreground, #f14c4c); }
+.card.sev-warning { border-left-color: var(--vscode-editorWarning-foreground, #cca700); }
+.card.sev-info { border-left-color: var(--vscode-editorInfo-foreground, #3794ff); }
+.card.fixed { opacity: .6; }
+.card.fixed .title { text-decoration: line-through; }
+.card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
+.badge { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; padding: 1px 7px; border-radius: 9px; border: 1px solid currentColor; }
+.badge.sev-error { color: var(--vscode-editorError-foreground, #f14c4c); }
+.badge.sev-warning { color: var(--vscode-editorWarning-foreground, #cca700); }
+.badge.sev-info { color: var(--vscode-editorInfo-foreground, #3794ff); }
+.badge.done { color: var(--vscode-testing-iconPassed, #73c991); }
+.loc { color: var(--vscode-textLink-foreground); font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; word-break: break-all; }
+.loc:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
+.title { font-weight: 600; margin: 0 0 6px; }
+.desc, .rec { margin: 0 0 6px; line-height: 1.5; white-space: pre-wrap; }
+.rec-label { font-weight: 600; }
+.fix-error { margin: 6px 0; color: var(--vscode-errorForeground); white-space: pre-wrap; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.actions .spinner { width: 12px; height: 12px; }
+.empty { text-align: center; color: var(--vscode-descriptionForeground); margin: 36px 0; }
+.empty .face { font-family: var(--vscode-editor-font-family, monospace); font-size: 20px; display: block; margin-bottom: 6px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }

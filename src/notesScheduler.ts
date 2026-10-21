@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import * as path from 'path';
+import { execFile } from 'child_process';
 import {
   type NoteEntry,
   computeNextOccurrence,
@@ -32,17 +34,76 @@ function clearAllTimers(): void {
   timers.clear();
 }
 
+/** The OS's own notification sound player — VS Code has no sound API for extensions. */
+function soundCommand(): [string, string[]] | undefined {
+  switch (process.platform) {
+    case 'darwin':
+      return ['afplay', ['/System/Library/Sounds/Glass.aiff']];
+    case 'win32':
+      return [
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', '[System.Media.SystemSounds]::Asterisk.Play(); Start-Sleep -Milliseconds 600'],
+      ];
+    case 'linux':
+      return ['canberra-gtk-play', ['--id', 'message-new-instant', '--description', 'ASKII reminder']];
+    default:
+      return undefined;
+  }
+}
+
 function playReminderSound(): void {
   const config = vscode.workspace.getConfiguration('askii');
   if (!(config.get<boolean>('noteReminderSound') ?? true)) {return;}
-  // VS Code has no cross-platform sound API; best-effort via a terminal bell
-  // through the integrated terminal is noisy, so we rely on the notification
-  // toast itself. (A bundled wav played via the panel's Audio API is handled
-  // in notesPanel.ts when the panel is open.)
+  const command = soundCommand();
+  if (!command) {return;}
+  // Best-effort: a missing player just means a silent reminder
+  execFile(command[0], command[1], { timeout: 5000, windowsHide: true }, (error) => {
+    if (error && process.platform === 'linux') {
+      execFile('paplay', ['/usr/share/sounds/freedesktop/stereo/message.oga'], { timeout: 5000 }, () => {});
+    }
+  });
+}
+
+// ── Cross-window firing claims ────────────────────────────────────────────────
+// Every VS Code window runs this scheduler over the same globalState, and
+// windows see each other's writes only after a delay — so each firing claims
+// an exclusive file first and only the window that creates it notifies.
+
+const CLAIM_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function claimDir(): string | undefined {
+  return _context ? path.join(_context.globalStorageUri.fsPath, 'note-fire-claims') : undefined;
+}
+
+/** Returns false when another window already fired this occurrence. */
+function claimFiring(note: NoteEntry): boolean {
+  const dir = claimDir();
+  if (!dir) {return true;}
+  // Every-time event triggers fire per window event (a save in this window)
+  if (note.event && note.event.everyTime && !note.dueAt) {return true;}
+  const occurrence = note.dueAt ?? 'event';
+  const key = `${note.id}-${occurrence}`.replace(/[^a-zA-Z0-9-]/g, '_');
   try {
-    vscode.commands.executeCommand('workbench.action.playSound', 'notification');
-  } catch {
-    // no-op — some VS Code builds don't expose this command
+    fs.mkdirSync(dir, { recursive: true });
+    fs.closeSync(fs.openSync(path.join(dir, `${key}.claim`), 'wx'));
+    return true;
+  } catch (error) {
+    // EEXIST: another window won. Anything else (read-only disk...) — fire anyway.
+    return (error as NodeJS.ErrnoException).code !== 'EEXIST';
+  }
+}
+
+function pruneOldClaims(): void {
+  const dir = claimDir();
+  if (!dir || !fs.existsSync(dir)) {return;}
+  const cutoff = Date.now() - CLAIM_MAX_AGE_MS;
+  for (const name of fs.readdirSync(dir)) {
+    try {
+      const file = path.join(dir, name);
+      if (fs.statSync(file).mtimeMs < cutoff) {fs.unlinkSync(file);}
+    } catch {
+      // another window pruned it
+    }
   }
 }
 
@@ -83,6 +144,16 @@ async function fireTrigger(note: NoteEntry): Promise<void> {
   if (idx === -1) {return;}
   // If already fired (e.g. snooze re-arm race), don't double-fire.
   if (notes[idx].fired) {return;}
+  if (!claimFiring(notes[idx])) {
+    // Another window notified. A recurring entry still needs this window's
+    // timer for the next occurrence (the winner's write may not be visible yet).
+    const rule = notes[idx].recur;
+    const next = rule ? computeNextOccurrence(rule, new Date()) : null;
+    if (next) {
+      arm({ ...notes[idx], dueAt: next.toISOString(), missed: false });
+    }
+    return;
+  }
 
   const recur = notes[idx].recur;
   const event = notes[idx].event;
@@ -283,6 +354,11 @@ function registerEventListeners(): void {
  */
 export function startNoteScheduler(context: vscode.ExtensionContext): void {
   _context = context;
+  try {
+    pruneOldClaims();
+  } catch {
+    // best-effort cleanup
+  }
   const notes = loadNotes(context);
   rescheduleAll(notes);
   registerEventListeners();

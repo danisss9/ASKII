@@ -100,6 +100,24 @@ suite('common/utils — decodeIfDoubleEscaped', () => {
       'line one\nsay "hi"\n\tindented',
     );
   });
+
+  test('leaves single-line files with \\n only inside string literals untouched', () => {
+    const minified = 'var a="x\\ny",b=\'p\\nq\';function f(){return a+b}';
+    assert.strictEqual(decodeIfDoubleEscaped(minified), minified);
+    const json = '{"msg":"line1\\nline2","n":1}';
+    assert.strictEqual(decodeIfDoubleEscaped(json), json);
+  });
+
+  test('decodes double-escaped code without quotes or with single quotes', () => {
+    assert.strictEqual(
+      decodeIfDoubleEscaped('def f():\\n    return 1\\n'),
+      'def f():\n    return 1\n',
+    );
+    assert.strictEqual(
+      decodeIfDoubleEscaped("const a = 'x';\\nfoo();"),
+      "const a = 'x';\nfoo();",
+    );
+  });
 });
 
 suite('common/workspace — backups and undo', () => {

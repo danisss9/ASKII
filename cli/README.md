@@ -90,7 +90,7 @@ cat myfile.ts | askii edit "add error handling" > myfile-edited.ts
 
 ```bash
 askii do "create a Jest test file for src/utils.ts"
-askii do --yes "scaffold a README for this project"    # auto-confirm all
+askii do --yes "scaffold a README for this project"    # auto-confirm file edits
 askii do --dir ./my-project "refactor index.ts"
 ```
 
@@ -99,10 +99,12 @@ Prints the working directory's top-level listing, then loops until the AI return
 | Action                                                           | Description                                                     | Confirm      |
 | ---------------------------------------------------------------- | --------------------------------------------------------------- | ------------ |
 | `list`, `view`, `search`                                         | Explore the workspace (`list` labels `[file]` / `[folder]`)     | No           |
-| `wiki_search`                                                    | BM25 search over indexed `.md` docs (needs `--use-wiki`)        | No           |
+| `wiki_search`                                                    | Semantic vector search over indexed `.md` docs (needs `--use-wiki`) | No       |
 | `code_search`                                                    | Semantic vector search over indexed workspace code (needs `--use-code-wiki`) | No |
 | `create`, `write`, `modify`, `rename`, `copy`, `mkdir`, `delete` | Write files (existing files are backed up to `.askii/backups/`) | Yes          |
 | `run`                                                            | Run a shell command                                             | Yes (always) |
+
+Safety rails that `--yes` never turns off: `run` always asks (Ctrl+C or the 30 s timeout kills the command and everything it started); files that can run code — `.vscode/`, `.husky/`, `.githooks/`, `.devcontainer/` — always ask; nothing inside `.git/` or `.askii/` is ever written; paths that escape the directory (`../`, absolute paths, symlinks pointing outside it) are blocked; a reply cut off at the model's token limit is never applied. When the run ends you can undo every change. The first Ctrl+C stops the agent (and the request in flight) and still offers the undo; a second one exits immediately.
 
 ### commit — generate a commit message
 
@@ -194,20 +196,31 @@ Both wikis embed with **embeddinggemma2 running locally in JavaScript** (Transfo
 | `--opencodego-url`   | `ASKII_OPENCODEGO_URL`   | opencode Go base URL                                                    | `https://opencode.ai/zen/go/v1` |
 | `--askiicloud-key`   | `ASKII_CLOUD_KEY`        | ASKII Cloud API key                                                     |                                 |
 | `--askiicloud-model` | `ASKII_CLOUD_MODEL`      | ASKII Cloud model                                                       | `askii-default`                 |
+| `--askiicloud-url`   | `ASKII_CLOUD_URL`        | ASKII Cloud base URL                                                    | `https://api.askii.dev/v1`      |
+| `--timeout`          | `ASKII_TIMEOUT`          | Per-request timeout in seconds                                          | `600`                           |
 | `--mode`             | `ASKII_MODE`             | Response style: `helpful` or `funny`                                    | `funny`                         |
 | `--max-rounds`       | `ASKII_MAX_ROUNDS`       | Max agent rounds for `do` / `control`                                   | `5`                             |
 | `--dir`              |                          | Working directory for `do`                                              | cwd                             |
 | `-c`, `--code`       |                          | Code input (alternative to stdin)                                       |                                 |
 | `--file`             |                          | Filename of the code (e.g. `src/utils.ts`)                              |                                 |
 | `--lang`             |                          | Language of the code (e.g. `typescript`)                                |                                 |
-| `-y`, `--yes`        |                          | Auto-confirm all actions                                                |                                 |
+| `-y`, `--yes`        |                          | Auto-confirm `do` file edits and `control` actions (never `run`)        |                                 |
 | `--target`           | `ASKII_CONTROL_TARGET`   | Target for `control`: `screen` or `browser`                             | `screen`                        |
 | `--headless`         |                          | Run Puppeteer headlessly for `control --target browser`                 | visible                         |
 | `--chrome-path`      | `ASKII_CHROME_PATH`      | Browser executable for `control --target browser`                       | auto-detect                     |
 | `--wiki-path`        | `ASKII_WIKI_PATH`        | Docs folder for wiki RAG                                                |                                 |
 | `--use-wiki`         | `ASKII_USE_WIKI=1`       | Inject wiki context into `ask` / `edit` / `do`                          |                                 |
 | `--use-code-wiki`    | `ASKII_USE_CODE_WIKI=1`  | Inject code wiki context into `ask` / `edit` / `do`                     |                                 |
+| `-v`, `--version`    |                          | Print the version                                                       |                                 |
 | `-h`, `--help`       |                          | Show help                                                               |                                 |
+
+Unknown options print a warning; invalid values (`--max-rounds abc`, an unknown `--platform`) are errors.
+
+**API keys:** prefer the `ASKII_*_KEY` environment variables — values passed as `--*-key` flags are visible to other users in the process list and stay in your shell history.
+
+**Exit codes:** `0` success · `1` error · `2` invalid usage · `130` stopped with Ctrl+C.
+
+LLM requests time out after `--timeout` seconds and are retried with backoff on network errors, rate limits (429) and server errors (5xx) — never on authentication or other client errors.
 
 ## Platforms
 
@@ -220,17 +233,18 @@ askii ask "what is a closure?"
 askii -p lmstudio ask "explain this function"
 
 # OpenAI — or any OpenAI-compatible API (Azure, etc.)
-askii -p openai --openai-key sk-... do "add error handling"
-askii -p openai --openai-key sk-... --openai-url https://my-resource.openai.azure.com ask "explain"
+export ASKII_OPENAI_KEY=sk-...
+askii -p openai do "add error handling"
+askii -p openai --openai-url https://my-resource.openai.azure.com ask "explain"
 
 # Anthropic
-askii -p anthropic --anthropic-key sk-ant-... do "add error handling"
+ASKII_ANTHROPIC_KEY=sk-ant-... askii -p anthropic do "add error handling"
 
 # opencode Go — routes OpenAI-/Anthropic-compatible per model automatically
-askii -p opencodego --opencodego-key ... --opencodego-model kimi-k2.7-code do "add error handling"
+ASKII_OPENCODEGO_KEY=... askii -p opencodego --opencodego-model kimi-k2.7-code do "add error handling"
 
-# ASKII Cloud — base URL fixed to https://api.askii.dev/v1
-askii -p askiicloud --askiicloud-key ... ask "what does this do?"
+# ASKII Cloud — https://api.askii.dev/v1 (override with --askiicloud-url)
+ASKII_CLOUD_KEY=... askii -p askiicloud ask "what does this do?"
 ```
 
 ## Development

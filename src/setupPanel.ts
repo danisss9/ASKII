@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { mediaRoot, webviewAssets } from './webviewAssets';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
 import {
@@ -177,7 +178,7 @@ export async function openSetupPanel(context: vscode.ExtensionContext): Promise<
     'askiiSetup',
     'ASKII Setup',
     vscode.ViewColumn.Active,
-    { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
+    { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [mediaRoot()] },
   );
   currentPanel = panel;
   const nonce = randomBytes(16).toString('base64');
@@ -196,6 +197,25 @@ async function updateGlobalSettings(values: Record<string, unknown>): Promise<vo
   const config = vscode.workspace.getConfiguration('askii');
   for (const [setting, value] of Object.entries(values)) {
     await config.update(setting, value, vscode.ConfigurationTarget.Global);
+  }
+  // Setup saves user settings; a workspace value would silently win over them
+  const overridden = Object.keys(values).filter((setting) => {
+    const inspected = config.inspect(setting);
+    return inspected?.workspaceValue !== undefined || inspected?.workspaceFolderValue !== undefined;
+  });
+  if (overridden.length > 0) {
+    void vscode.window
+      .showWarningMessage(
+        `ASKII: saved to your user settings, but this workspace overrides ${overridden
+          .map((s) => `askii.${s}`)
+          .join(', ')} — the workspace values still apply here.`,
+        'Open Workspace Settings',
+      )
+      .then((choice) => {
+        if (choice) {
+          void vscode.commands.executeCommand('workbench.action.openWorkspaceSettingsFile');
+        }
+      });
   }
 }
 
@@ -413,85 +433,15 @@ async function handleSetupMessage(
   }
 }
 
-function serializeForHtml(value: unknown): string {
-  return JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
-}
-
-function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState): string {
-  const initialState = serializeForHtml(state);
+export function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState): string {
+  const assets = webviewAssets(webview, 'setupPanel', { state });
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:;">
-  <style nonce="${nonce}">
-    :root { color-scheme: light dark; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; color: var(--vscode-foreground); background: radial-gradient(circle at 50% -20%, var(--vscode-editor-inactiveSelectionBackground), transparent 50%), var(--vscode-editor-background); font-family: var(--vscode-font-family, sans-serif); }
-    button, input, select { font: inherit; }
-    .shell { width: min(840px, calc(100% - 32px)); margin: 0 auto; padding: 30px 0 48px; }
-    .hero { text-align: center; margin-bottom: 24px; animation: welcome .65s ease both; }
-    .mascot { font: 700 28px/1.2 var(--vscode-editor-font-family, monospace); letter-spacing: 2px; display: inline-block; animation: float 2.6s ease-in-out infinite; }
-    h1 { font-size: 26px; margin: 10px 0 6px; }
-    .subtitle { color: var(--vscode-descriptionForeground); margin: 0; }
-    .steps { display: flex; justify-content: center; gap: 8px; margin: 20px 0 26px; }
-    .dot { width: 34px; height: 5px; border-radius: 9px; background: var(--vscode-progressBar-background); opacity: .25; transition: opacity .2s, transform .2s; }
-    .dot.active { opacity: 1; transform: scaleX(1.12); }
-    .screen { display: none; }
-    .screen.active { display: block; animation: enter .28s ease both; }
-    .panel { border: 1px solid var(--vscode-widget-border, var(--vscode-editorWidget-border)); background: var(--vscode-sideBar-background); border-radius: 14px; padding: 24px; box-shadow: 0 12px 36px rgba(0,0,0,.12); }
-    .panel h2 { margin: 0 0 6px; font-size: 20px; }
-    .lead { color: var(--vscode-descriptionForeground); margin: 0 0 20px; }
-    .providers { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
-    .provider { text-align: left; color: inherit; background: var(--vscode-editor-background); border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border)); border-radius: 9px; padding: 14px; cursor: pointer; opacity: 0; animation: card .35s ease forwards; }
-    .provider:hover { border-color: var(--vscode-focusBorder); }
-    .provider.selected { border-color: var(--vscode-focusBorder); outline: 1px solid var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
-    .provider strong { display: block; margin-bottom: 4px; }
-    .provider span { display: block; font-size: 12px; line-height: 1.45; color: var(--vscode-descriptionForeground); }
-    .provider.selected span { color: inherit; opacity: .82; }
-    .connection { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--vscode-editorWidget-border); }
-    .field { margin-bottom: 14px; }
-    .field label, .field-title { display: block; font-weight: 600; margin-bottom: 6px; }
-    .hint { display: block; color: var(--vscode-descriptionForeground); font-size: 12px; margin-top: 5px; line-height: 1.4; }
-    input, select { width: 100%; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border)); border-radius: 5px; padding: 9px 10px; outline: none; }
-    input:focus, select:focus { border-color: var(--vscode-focusBorder); outline: 1px solid var(--vscode-focusBorder); }
-    .saved { color: var(--vscode-testing-iconPassed, #73c991); font-size: 12px; margin-left: 6px; }
-    .models { display: grid; gap: 14px; }
-    .model-card { background: var(--vscode-editor-background); border: 1px solid var(--vscode-editorWidget-border); border-radius: 9px; padding: 15px; }
-    .model-card label { font-weight: 600; display: block; margin-bottom: 4px; }
-    .warning, .error { border-radius: 6px; padding: 10px 12px; margin: 12px 0; font-size: 13px; }
-    .warning { color: var(--vscode-editorWarning-foreground); background: var(--vscode-inputValidation-warningBackground); border: 1px solid var(--vscode-inputValidation-warningBorder); }
-    .error { color: var(--vscode-errorForeground); background: var(--vscode-inputValidation-errorBackground); border: 1px solid var(--vscode-inputValidation-errorBorder); display: none; }
-    .error.show { display: block; }
-    .option { display: flex; align-items: flex-start; gap: 11px; padding: 13px 0; border-bottom: 1px solid var(--vscode-editorWidget-border); }
-    .option:last-child { border-bottom: 0; }
-    .option input[type=checkbox] { width: auto; margin-top: 3px; }
-    .option-body { flex: 1; }
-    .option-body label { font-weight: 600; display: block; }
-    .option select { margin-top: 8px; max-width: 280px; }
-    .danger { color: var(--vscode-errorForeground); }
-    .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; }
-    .actions .spacer { flex: 1; }
-    .btn { border: 0; border-radius: 5px; padding: 9px 16px; cursor: pointer; color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
-    .btn:hover { background: var(--vscode-button-hoverBackground); }
-    .btn.secondary { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
-    .btn.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
-    .btn:disabled { opacity: .5; cursor: default; }
-    .btn.small { padding: 7px 12px; font-size: 12px; white-space: nowrap; }
-    .pick-row { display: flex; gap: 8px; margin-top: 8px; }
-    .pick-row input { flex: 1; min-width: 0; }
-    .loader { display: none; align-items: center; gap: 10px; margin-right: auto; color: var(--vscode-descriptionForeground); }
-    .loader.show { display: flex; }
-    .spinner { width: 20px; height: 20px; border: 2px solid var(--vscode-progressBar-background); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
-    @keyframes welcome { from { opacity: 0; transform: translateY(-12px); } }
-    @keyframes enter { from { opacity: 0; transform: translateX(15px); } }
-    @keyframes card { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-    @keyframes float { 50% { transform: translateY(-5px) rotate(-1deg); } }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    @media (max-width: 620px) { .providers { grid-template-columns: 1fr; } .panel { padding: 18px; } .actions { flex-wrap: wrap; } }
-    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
-  </style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${assets.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:;">
+  <link rel="stylesheet" href="${assets.style}">
 </head>
 <body>
   <main class="shell">
@@ -538,8 +488,8 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
 
     <section id="wikiScreen" class="screen panel">
       <h2>Wiki &amp; commit rules</h2><p class="lead">Finish applies these globally. Ignore keeps their current values.</p>
-      <div class="option"><input id="wikiEnabled" type="checkbox"><div class="option-body"><label for="wikiEnabled">Enable wiki RAG</label><span class="hint">Use the wiki as retrieval context for Ask, Edit, and Do. Requires a wiki folder and an index built via ASKII: Reload Wiki.</span></div></div>
-      <div class="option"><div class="option-body"><label for="wikiPathInput">Wiki folder</label><span class="hint">Folder of .md documentation files used for wiki RAG context. Run ASKII: Reload Wiki to index it.</span><div class="pick-row"><input id="wikiPathInput" type="text" spellcheck="false" placeholder="Absolute path to your wiki folder"><button id="wikiPathBrowse" class="btn secondary small" type="button">Browse…</button></div></div></div>
+      <div class="option"><input id="wikiEnabled" type="checkbox"><div class="option-body"><label for="wikiEnabled">Enable wiki RAG</label><span class="hint">Use the wiki as retrieval context for Ask, Edit, and Do. Requires a wiki folder and an index built via ASKII: Reload Wikis.</span></div></div>
+      <div class="option"><div class="option-body"><label for="wikiPathInput">Wiki folder</label><span class="hint">Folder of .md documentation files used for wiki RAG context. Run ASKII: Reload Wikis to index it.</span><div class="pick-row"><input id="wikiPathInput" type="text" spellcheck="false" placeholder="Absolute path to your wiki folder"><button id="wikiPathBrowse" class="btn secondary small" type="button">Browse…</button></div></div></div>
       <div class="option"><input id="wikiAutoReload" type="checkbox"><div class="option-body"><label for="wikiAutoReload">Auto-reload wiki on startup</label><span class="hint">Rebuild and reload the wiki index whenever the extension starts. Requires wiki RAG and a wiki folder.</span></div></div>
       <h3>Code wiki</h3>
       <div class="option"><input id="codeWikiEnabled" type="checkbox"><div class="option-body"><label for="codeWikiEnabled">Enable code wiki</label><span class="hint">Vector index over workspace code (code files only) used as retrieval context for Ask, Edit, and Do. Runs the embeddinggemma2 model locally — the first index build downloads it once — then run ASKII: Reload Wikis.</span></div></div>
@@ -549,105 +499,8 @@ function getSetupHtml(webview: vscode.Webview, nonce: string, state: SetupState)
       <div class="actions"><button id="wikiBack" class="btn secondary">Back</button><span class="spacer"></span><button id="ignore" class="btn secondary">Ignore</button><button id="finish" class="btn">Finish</button></div>
     </section>
   </main>
-  <script nonce="${nonce}">
-    const vscode = acquireVsCodeApi();
-    const state = ${initialState};
-    const screens = { provider: document.getElementById('providerScreen'), models: document.getElementById('modelsScreen'), options: document.getElementById('optionsScreen'), wiki: document.getElementById('wikiScreen') };
-    const dots = Array.from(document.querySelectorAll('.dot'));
-    const stepIndex = { provider: 0, models: 1, options: 2, wiki: 3 };
-    let selectedProvider = state.provider;
-    let currentStep = state.step;
-
-    function showError(id, text) { const el = document.getElementById(id); el.textContent = text || ''; el.classList.toggle('show', Boolean(text)); }
-    function showStep(step) { currentStep = step; Object.entries(screens).forEach(([name, el]) => el.classList.toggle('active', name === step)); dots.forEach((dot, index) => dot.classList.toggle('active', index <= stepIndex[step])); window.scrollTo({ top: 0, behavior: 'smooth' }); }
-    function providerDefinition() { return state.providers.find((provider) => provider.id === selectedProvider); }
-    function selectProvider(provider) {
-      selectedProvider = provider;
-      document.querySelectorAll('.provider').forEach((card) => card.classList.toggle('selected', card.dataset.provider === provider));
-      const definition = providerDefinition();
-      document.getElementById('apiKeyField').hidden = definition.connection !== 'apiKey';
-      document.getElementById('serverUrlField').hidden = definition.connection !== 'serverUrl';
-      document.getElementById('openaiUrlField').hidden = !definition.supportsCustomBaseUrl;
-      document.getElementById('savedCredential').textContent = state.savedCredentials[provider] ? '✓ saved' : '';
-      document.getElementById('serverUrl').value = provider === 'ollama' ? state.urls.ollama : provider === 'lmstudio' ? state.urls.lmstudio : '';
-      document.getElementById('openaiUrl').value = state.urls.openai;
-      document.getElementById('apiKey').value = '';
-      showError('providerError', '');
-    }
-    const providersHost = document.getElementById('providers');
-    state.providers.forEach((provider, index) => {
-      const card = document.createElement('button'); card.type = 'button'; card.className = 'provider'; card.dataset.provider = provider.id; card.style.animationDelay = (index * 55) + 'ms';
-      const title = document.createElement('strong'); title.textContent = provider.label; const description = document.createElement('span'); description.textContent = provider.description;
-      card.append(title, description); card.addEventListener('click', () => selectProvider(provider.id)); providersHost.appendChild(card);
-    });
-
-    function buildModelControl(role, value) {
-      const host = document.getElementById(role + 'ModelHost'); host.textContent = '';
-      const control = document.createElement(state.manualModels ? 'input' : 'select'); control.id = role + 'Model'; control.dataset.role = role;
-      if (state.manualModels) { control.type = 'text'; control.placeholder = 'Enter the exact model ID'; control.value = value || ''; }
-      else { const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = 'Choose a model…'; control.appendChild(placeholder); state.models.forEach((model) => { const option = document.createElement('option'); option.value = model; option.textContent = model; control.appendChild(option); }); control.value = value || ''; }
-      host.appendChild(control);
-    }
-    function renderModels() {
-      document.getElementById('modelLead').textContent = state.manualModels ? 'Enter the exact model ID for each ASKII role.' : state.models.length + ' models found for ' + providerDefinition().label + '.';
-      const warning = document.getElementById('modelWarning'); warning.hidden = !state.modelWarning; warning.textContent = state.modelWarning;
-      buildModelControl('general', state.selections.general); buildModelControl('inline', state.selections.inline); buildModelControl('vision', state.selections.vision);
-    }
-    document.getElementById('inlineCompletionEnabled').checked = state.options.inlineCompletionEnabled;
-    document.getElementById('inlineCompletionEagerness').value = state.options.inlineCompletionEagerness;
-    document.getElementById('inlineHelperMode').value = state.options.inlineHelperMode;
-    document.getElementById('formatAfterEdit').checked = state.options.formatAfterEdit;
-    document.getElementById('doAutoConfirm').checked = state.options.doAutoConfirm;
-    document.getElementById('wikiEnabled').checked = state.options.wikiEnabled;
-    document.getElementById('wikiPathInput').value = state.options.wikiPath;
-    document.getElementById('wikiAutoReload').checked = state.options.wikiAutoReload;
-    document.getElementById('codeWikiEnabled').checked = state.options.codeWikiEnabled;
-    document.getElementById('codeWikiAutoReload').checked = state.options.codeWikiAutoReload;
-    document.getElementById('chromePathInput').value = state.options.chromePath;
-    document.getElementById('commitRulesInput').value = state.options.commitMessageInstructions;
-
-    document.getElementById('providerNext').addEventListener('click', () => {
-      const definition = providerDefinition(); const apiKey = document.getElementById('apiKey').value.trim(); const serverUrl = document.getElementById('serverUrl').value.trim();
-      if (definition.connection === 'apiKey' && !apiKey && !state.savedCredentials[selectedProvider]) { showError('providerError', 'Enter an API key.'); return; }
-      if (definition.connection === 'serverUrl' && !serverUrl) { showError('providerError', 'Enter a server URL.'); return; }
-      showError('providerError', ''); document.getElementById('providerLoader').classList.add('show'); document.getElementById('providerNext').disabled = true;
-      vscode.postMessage({ type: 'validateProvider', provider: selectedProvider, apiKey, serverUrl, openaiBaseUrl: document.getElementById('openaiUrl').value.trim() });
-    });
-    document.getElementById('modelsBack').addEventListener('click', () => showStep('provider'));
-    document.getElementById('modelsNext').addEventListener('click', () => {
-      const values = { general: document.getElementById('generalModel').value.trim(), inline: document.getElementById('inlineModel').value.trim(), vision: document.getElementById('visionModel').value.trim() };
-      if (!values.general || !values.inline || !values.vision) { showError('modelsError', 'Choose a model for all three roles.'); return; }
-      state.selections = values; showError('modelsError', ''); document.getElementById('modelsNext').disabled = true; vscode.postMessage({ type: 'saveModels', provider: selectedProvider, ...values });
-    });
-    document.getElementById('optionsBack').addEventListener('click', () => showStep('models'));
-    document.getElementById('optionsNext').addEventListener('click', () => showStep('wiki'));
-    document.getElementById('wikiBack').addEventListener('click', () => showStep('options'));
-    function setFinalActions(disabled) { document.getElementById('optionsIgnore').disabled = disabled; document.getElementById('ignore').disabled = disabled; document.getElementById('finish').disabled = disabled; }
-    function requestIgnore() { setFinalActions(true); vscode.postMessage({ type: 'ignore' }); }
-    document.getElementById('optionsIgnore').addEventListener('click', requestIgnore);
-    document.getElementById('ignore').addEventListener('click', requestIgnore);
-    function wirePathPicker(inputId, buttonId, target) { document.getElementById(buttonId).addEventListener('click', () => vscode.postMessage({ type: 'pickPath', target, current: document.getElementById(inputId).value.trim() })); }
-    wirePathPicker('wikiPathInput', 'wikiPathBrowse', 'wikiPath');
-    wirePathPicker('chromePathInput', 'chromePathBrowse', 'chromePath');
-    wirePathPicker('commitRulesInput', 'commitRulesBrowse', 'commitMessageInstructions');
-    function finishPayload() { return { inlineCompletionEnabled: document.getElementById('inlineCompletionEnabled').checked, inlineCompletionEagerness: document.getElementById('inlineCompletionEagerness').value, inlineHelperMode: document.getElementById('inlineHelperMode').value, formatAfterEdit: document.getElementById('formatAfterEdit').checked, doAutoConfirm: document.getElementById('doAutoConfirm').checked, wikiEnabled: document.getElementById('wikiEnabled').checked, wikiPath: document.getElementById('wikiPathInput').value.trim(), wikiAutoReload: document.getElementById('wikiAutoReload').checked, codeWikiEnabled: document.getElementById('codeWikiEnabled').checked, codeWikiAutoReload: document.getElementById('codeWikiAutoReload').checked, chromePath: document.getElementById('chromePathInput').value.trim(), commitMessageInstructions: document.getElementById('commitRulesInput').value.trim() }; }
-    document.getElementById('finish').addEventListener('click', () => { setFinalActions(true); vscode.postMessage({ type: 'finish', ...finishPayload() }); });
-
-    window.addEventListener('message', (event) => {
-      const message = event.data; if (!message || typeof message !== 'object') return;
-      if (message.type === 'providerValidated') {
-        document.getElementById('providerLoader').classList.remove('show'); document.getElementById('providerNext').disabled = false; document.getElementById('apiKey').value = '';
-        state.savedCredentials[selectedProvider] = message.savedCredential || state.savedCredentials[selectedProvider]; state.models = message.models; state.manualModels = message.manual; state.modelWarning = message.warning; state.selections = message.selections; renderModels(); showStep('models');
-      } else if (message.type === 'modelsSaved') { document.getElementById('modelsNext').disabled = false; showStep('options'); }
-      else if (message.type === 'pathPicked') { const inputIds = { wikiPath: 'wikiPathInput', chromePath: 'chromePathInput', commitMessageInstructions: 'commitRulesInput' }; const input = document.getElementById(inputIds[message.target]); if (input && message.path) input.value = message.path; }
-      else if (message.type === 'setupError') {
-        if (message.operation === 'validateProvider') { document.getElementById('providerLoader').classList.remove('show'); document.getElementById('providerNext').disabled = false; showError('providerError', message.message); }
-        else if (message.operation === 'saveModels') { document.getElementById('modelsNext').disabled = false; showError('modelsError', message.message); }
-        else { setFinalActions(false); showError(currentStep === 'options' ? 'optionsError' : 'wikiError', message.message); }
-      }
-    });
-    selectProvider(selectedProvider); renderModels(); showStep(currentStep);
-  </script>
+  <script id="askii-data" type="application/json">${assets.data}</script>
+  <script nonce="${nonce}" src="${assets.script}"></script>
 </body>
 </html>`;
 }

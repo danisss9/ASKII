@@ -1,27 +1,50 @@
-import typescriptEslint from "typescript-eslint";
+import tseslint from "typescript-eslint";
 
-export default [{
-    files: ["**/*.ts"],
-}, {
-    plugins: {
-        "@typescript-eslint": typescriptEslint.plugin,
+export default tseslint.config(
+    {
+        ignores: ["**/dist/**", "**/out/**", "**/node_modules/**", "stubs/**", "*.js", "cli/*.js"],
     },
-
-    languageOptions: {
-        parser: typescriptEslint.parser,
-        ecmaVersion: 2022,
-        sourceType: "module",
+    ...tseslint.configs.recommended,
+    {
+        files: ["**/*.ts"],
+        languageOptions: {
+            parser: tseslint.parser,
+            ecmaVersion: 2022,
+            sourceType: "module",
+        },
+        rules: {
+            "@typescript-eslint/naming-convention": ["error", {
+                selector: "import",
+                format: ["camelCase", "PascalCase"],
+            }],
+            "@typescript-eslint/no-unused-vars": ["error", {
+                argsIgnorePattern: "^_",
+                varsIgnorePattern: "^_",
+                caughtErrorsIgnorePattern: "^_",
+            }],
+            curly: ["error", "multi-line"],
+            eqeqeq: "error",
+            "no-throw-literal": "error",
+            semi: "error",
+        },
     },
-
-    rules: {
-        "@typescript-eslint/naming-convention": ["warn", {
-            selector: "import",
-            format: ["camelCase", "PascalCase"],
-        }],
-
-        curly: "warn",
-        eqeqeq: "warn",
-        "no-throw-literal": "warn",
-        semi: "warn",
+    {
+        // Webview scripts: plain browser JavaScript, loaded as classic scripts
+        files: ["media/**/*.js"],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: "script",
+        },
+        rules: {
+            "@typescript-eslint/no-unused-vars": ["error", {
+                argsIgnorePattern: "^_",
+                varsIgnorePattern: "^_",
+                caughtErrorsIgnorePattern: "^_",
+            }],
+            curly: ["error", "multi-line"],
+            eqeqeq: ["error", "smart"],
+            "no-throw-literal": "error",
+            semi: "error",
+        },
     },
-}];
+);

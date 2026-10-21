@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            cli/package-lock.json
+
+      - name: Check extension and CLI versions match
+        run: npm run check-versions
+
+      - name: Install extension dependencies
+        run: npm ci
+
+      - name: Install CLI dependencies
+        working-directory: ./cli
+        run: npm ci
+
+      - name: Type-check (extension + CLI)
+        run: npm run check-types
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests (plain Node)
+        run: npm run test:unit
+
+      - name: Integration tests (VS Code host)
+        run: xvfb-run -a npm test
+
+      - name: Build CLI (production)
+        working-directory: ./cli
+        run: npm run build:prod
+
+      - name: CLI smoke test
+        working-directory: ./cli
+        run: |
+          node dist/index.js --version
+          node dist/index.js --help > /dev/null
+
+      - name: Package VS Code extension
+        run: npx @vscode/vsce package --no-dependencies -o askii.vsix
+
+      - name: Check VSIX size budget
+        run: |
+          size=$(stat -c %s askii.vsix)
+          budget=$((8 * 1024 * 1024))
+          echo "VSIX size: $size bytes (budget $budget)"
+          if [ "$size" -gt "$budget" ]; then
+            echo "::error::VSIX is larger than the 8 MB budget"
+            exit 1
+          fi

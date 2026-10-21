@@ -51,6 +51,9 @@ async function main() {
     // bundled; only onnxruntime-node stays external — the embedder redirects
     // it to the WASM shim built into dist/onnxruntime-node (stubs/build.js).
     external: ['onnxruntime-node', 'vscode'],
+    define: {
+      __ASKII_VERSION__: JSON.stringify(require('./package.json').version),
+    },
     logLevel: 'silent',
     alias: {
       '@common': path.resolve(__dirname, 'common'),

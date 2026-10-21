@@ -1,21 +1,27 @@
 import {
   getWorkspaceStructure,
-  parseWorkspaceActions,
-  sandboxPath,
-  executeViewAction,
-  executeSearchAction,
   buildDoSystemPrompt,
-  writeBackup,
-  backupOrRecordCreated,
-  applyModifyAction,
-  INVALID_ACTIONS_FEEDBACK,
   deleteAllBackups,
   restoreAllBackups,
   hasBackups,
-  type WorkspaceAction,
-  type ActionResult,
 } from '@common/workspace';
-import { decodeIfDoubleEscaped, extractCode } from '@common/utils';
+import { runDoAgent } from '@common/doAgent';
+import {
+  runBrowserAgent,
+  runScreenAgent,
+  type ControlEvent,
+  type VisionAsk,
+} from '@common/controlAgent';
+import { buildNoteEntry, classifyNote, genNoteId } from '@common/noteClassify';
+import {
+  MAX_RECENT_COMMITS,
+  buildCommitMessageSystemPrompt,
+  buildCommitUserPrompt,
+  cleanCommitMessage,
+  formatCommitExamples,
+  type CommitMessageStyle,
+} from '@common/commitMessage';
+import { extractCode } from '@common/utils';
 import { buildWikiIndex, hasWikiIndex, searchWiki } from '@common/wiki';
 import {
   rebuildCodeWikiIndex,
@@ -25,69 +31,39 @@ import {
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import { FILE_CITATION_INSTRUCTIONS } from '@common/links';
 import {
-  getOllamaResponse,
-  getLMStudioResponse,
-  getOllamaChatStreaming,
-  getLMStudioChatStreaming,
-  getOpenAIResponse,
-  getOpenAIChatStreaming,
-  getAnthropicResponse,
-  getAnthropicChatStreaming,
-  getOpenCodeGoResponse,
-  getOpenCodeGoChatStreaming,
   OPENCODE_GO_URL,
-  getAskiiCloudResponse,
-  getAskiiCloudChatStreaming,
   ASKII_CLOUD_URL,
-  retryLLMCall,
+  DEFAULT_LMSTUDIO_URL,
+  DEFAULT_OLLAMA_URL,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  complete,
+  completePrompt,
+  getAskiiVersion,
+  isPlatformId,
   type ChatMessage,
+  type ChatReply,
+  type PlatformId,
+  type ProviderConnection,
 } from '@common/providers';
-import {
-  buildControlSystemPrompt,
-  takeScreenshot,
-  describeAction,
-  executeControlAction,
-  getMonitors,
-  getSystemInfo,
-  parseControlResponse,
-  refineCoordinates,
-  checkControlDependencies,
-  type ControlAction,
-  type ControlHistoryEntry,
-  type SystemInfo,
-} from '@common/control';
-import {
-  buildBrowserSystemPrompt,
-  parseBrowserResponse,
-  describeBrowserAction,
-  executeBrowserAction,
-  takePageScreenshot,
-  detectBrowserExecutable,
-} from '@common/browser';
+import { checkControlDependencies, getMonitors, takeScreenshot } from '@common/control';
+import { browserLaunchArgs, detectBrowserExecutable } from '@common/browser';
 import {
   type NoteEntry,
   type NoteKind,
   type TaskPriority,
   type NoteContext,
-  type RecurRule,
-  type EventTrigger,
   searchNotes,
-  parseReminderTimeLocal,
-  parseReminderTrigger,
-  parseRecurrence,
-  parseEventTrigger,
   computeNextOccurrence,
   describeRecurrence,
   describeEventTrigger,
 } from '@common/notes';
-import { randomBytes } from 'crypto';
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
 interface Config {
-  platform: 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego' | 'askiicloud';
+  platform: PlatformId;
   url: string;
   ollamaUrl: string;
   lmStudioUrl: string;
@@ -98,8 +74,10 @@ interface Config {
   opencodegoApiKey: string;
   opencodegoBaseURL: string;
   askiicloudApiKey: string;
+  askiicloudBaseURL: string;
   mode: 'helpful' | 'funny';
   maxRounds: number;
+  timeoutMs: number;
   yes: boolean;
   headless: boolean;
   controlTarget: 'screen' | 'browser';
@@ -107,12 +85,22 @@ interface Config {
   wikiPath: string | undefined;
   useWiki: boolean;
   useCodeWiki: boolean;
+  commitStyle: CommitMessageStyle;
 }
+
+/** Exit code for a run stopped with Ctrl+C (128 + SIGINT), as shells expect. */
+const EXIT_INTERRUPTED = 130;
+/** Exit code for invalid command-line usage. */
+const EXIT_USAGE = 2;
+
+/** A usage error (bad flag value, unknown platform...) — printed, then exit code 2. */
+class UsageError extends Error {}
 
 function getFlagValue(flags: string[], ...names: string[]): string | undefined {
   for (const name of names) {
     const i = flags.indexOf(name);
-    if (i !== -1 && flags[i + 1] && !flags[i + 1].startsWith('-')) {
+    // A value may start with '-' only if it is a number ("--max-rounds -1" is still rejected later)
+    if (i !== -1 && flags[i + 1] !== undefined && (!flags[i + 1].startsWith('-') || /^-\d/.test(flags[i + 1]))) {
       return flags[i + 1];
     }
   }
@@ -142,13 +130,16 @@ const VALUE_FLAGS = new Set([
   '--opencodego-url',
   '--askiicloud-key',
   '--askiicloud-model',
+  '--askiicloud-url',
   '--model',
   '--mode',
   '--max-rounds',
+  '--timeout',
   '--target',
   '--chrome-path',
   '--dir',
   '--wiki-path',
+  '--commit-style',
   '-c',
   '--code',
   '--lang',
@@ -156,13 +147,27 @@ const VALUE_FLAGS = new Set([
   '-f',
 ]);
 
+const BOOLEAN_FLAGS = new Set([
+  '-h',
+  '--help',
+  '-v',
+  '--version',
+  '-y',
+  '--yes',
+  '--headless',
+  '--use-wiki',
+  '--use-code-wiki',
+  '--shot',
+  '--screenshot',
+]);
+
 /** Non-flag tokens, skipping each value flag's value (same rule as getFlagValue). */
 function getPositionals(tokens: string[]): string[] {
   const positionals: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
-    if (token.startsWith('-')) {
-      if (VALUE_FLAGS.has(token) && tokens[i + 1] && !tokens[i + 1].startsWith('-')) i++;
+    if (token.startsWith('-') && !/^-\d/.test(token)) {
+      if (VALUE_FLAGS.has(token) && tokens[i + 1] !== undefined && (!tokens[i + 1].startsWith('-') || /^-\d/.test(tokens[i + 1]))) i++;
       continue;
     }
     positionals.push(token);
@@ -170,18 +175,35 @@ function getPositionals(tokens: string[]): string[] {
   return positionals;
 }
 
+/** Flags that are neither known value flags nor known switches. */
+function getUnknownFlags(tokens: string[]): string[] {
+  return tokens.filter(
+    (t) => t.startsWith('-') && !/^-\d/.test(t) && !VALUE_FLAGS.has(t) && !BOOLEAN_FLAGS.has(t),
+  );
+}
+
+function parsePositiveInt(value: string | undefined, name: string, fallback: number): number {
+  if (value === undefined || value === '') return fallback;
+  if (!/^\d+$/.test(value.trim()) || parseInt(value, 10) < 1) {
+    throw new UsageError(`${name} must be a positive whole number (got: '${value}')`);
+  }
+  return parseInt(value, 10);
+}
+
 function getConfig(flags: string[]): Config {
-  const platform = (getFlagValue(flags, '-p', '--platform') ||
-    process.env.ASKII_PLATFORM ||
-    'ollama') as 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'opencodego' | 'askiicloud';
+  const platformValue = getFlagValue(flags, '-p', '--platform') || process.env.ASKII_PLATFORM || 'ollama';
+  if (!isPlatformId(platformValue)) {
+    throw new UsageError(
+      `Unknown platform '${platformValue}' — use ollama, lmstudio, openai, anthropic, opencodego or askiicloud`,
+    );
+  }
+  const platform = platformValue;
 
   const ollamaUrl =
-    getFlagValue(flags, '--ollama-url') || process.env.ASKII_OLLAMA_URL || 'http://localhost:11434';
+    getFlagValue(flags, '--ollama-url') || process.env.ASKII_OLLAMA_URL || DEFAULT_OLLAMA_URL;
 
   const lmStudioUrl =
-    getFlagValue(flags, '--lmstudio-url') ||
-    process.env.ASKII_LMSTUDIO_URL ||
-    'ws://localhost:1234';
+    getFlagValue(flags, '--lmstudio-url') || process.env.ASKII_LMSTUDIO_URL || DEFAULT_LMSTUDIO_URL;
 
   const ollamaModel =
     getFlagValue(flags, '--ollama-model') || process.env.ASKII_OLLAMA_MODEL || 'gemma4:e4b';
@@ -222,6 +244,9 @@ function getConfig(flags: string[]): Config {
   const askiicloudModel =
     getFlagValue(flags, '--askiicloud-model') || process.env.ASKII_CLOUD_MODEL || 'askii-default';
 
+  const askiicloudBaseURL =
+    getFlagValue(flags, '--askiicloud-url') || process.env.ASKII_CLOUD_URL || ASKII_CLOUD_URL;
+
   const modelMap: Record<string, string> = {
     lmstudio: lmStudioModel,
     openai: openaiModel,
@@ -229,6 +254,24 @@ function getConfig(flags: string[]): Config {
     opencodego: opencodegoModel,
     askiicloud: askiicloudModel,
   };
+
+  const mode = getFlagValue(flags, '--mode') || process.env.ASKII_MODE || 'funny';
+  if (mode !== 'helpful' && mode !== 'funny') {
+    throw new UsageError(`--mode must be 'helpful' or 'funny' (got: '${mode}')`);
+  }
+
+  const commitStyle = getFlagValue(flags, '--commit-style') || process.env.ASKII_COMMIT_STYLE || 'oneliner';
+  if (commitStyle !== 'oneliner' && commitStyle !== 'brief' && commitStyle !== 'descriptive') {
+    throw new UsageError(
+      `--commit-style must be 'oneliner', 'brief' or 'descriptive' (got: '${commitStyle}')`,
+    );
+  }
+
+  const timeoutSeconds = parsePositiveInt(
+    getFlagValue(flags, '--timeout') || process.env.ASKII_TIMEOUT,
+    '--timeout',
+    DEFAULT_REQUEST_TIMEOUT_MS / 1000,
+  );
 
   return {
     platform,
@@ -242,10 +285,14 @@ function getConfig(flags: string[]): Config {
     opencodegoApiKey,
     opencodegoBaseURL,
     askiicloudApiKey,
-    mode: (getFlagValue(flags, '--mode') || process.env.ASKII_MODE || 'funny') as
-      | 'helpful'
-      | 'funny',
-    maxRounds: parseInt(getFlagValue(flags, '--max-rounds') || process.env.ASKII_MAX_ROUNDS || '5'),
+    askiicloudBaseURL,
+    mode,
+    maxRounds: parsePositiveInt(
+      getFlagValue(flags, '--max-rounds') || process.env.ASKII_MAX_ROUNDS,
+      '--max-rounds',
+      5,
+    ),
+    timeoutMs: timeoutSeconds * 1000,
     yes: hasFlag(flags, '-y', '--yes'),
     headless: hasFlag(flags, '--headless'),
     controlTarget: (getFlagValue(flags, '--target') ||
@@ -255,6 +302,7 @@ function getConfig(flags: string[]): Config {
     wikiPath: getFlagValue(flags, '--wiki-path') || process.env.ASKII_WIKI_PATH || undefined,
     useWiki: hasFlag(flags, '--use-wiki') || process.env.ASKII_USE_WIKI === '1',
     useCodeWiki: hasFlag(flags, '--use-code-wiki') || process.env.ASKII_USE_CODE_WIKI === '1',
+    commitStyle,
   };
 }
 
@@ -308,176 +356,58 @@ async function reloadCliCodeWiki(dir: string): Promise<void> {
   );
 }
 
+function getConnection(config: Config): ProviderConnection {
+  const { platform, model } = config;
+  switch (platform) {
+    case 'ollama':
+      return { platform, model, baseURL: config.ollamaUrl };
+    case 'lmstudio':
+      return { platform, model, baseURL: config.lmStudioUrl };
+    case 'openai':
+      return { platform, model, apiKey: config.openaiApiKey, baseURL: config.openaiBaseURL };
+    case 'anthropic':
+      return { platform, model, apiKey: config.anthropicApiKey };
+    case 'opencodego':
+      return { platform, model, apiKey: config.opencodegoApiKey, baseURL: config.opencodegoBaseURL };
+    case 'askiicloud':
+      return { platform, model, apiKey: config.askiicloudApiKey, baseURL: config.askiicloudBaseURL };
+  }
+}
+
+function logRetry(attempt: number, error: Error, delayMs: number): void {
+  console.error(`\nLLM call failed (${error.message}) — retry ${attempt} in ${delayMs / 1000}s...`);
+}
+
 async function getResponse(
   config: Config,
   prompt: string,
   system?: string,
   imageBase64?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
-  if (config.platform === 'anthropic') {
-    return getAnthropicResponse(prompt, config.anthropicApiKey, config.model, system, imageBase64);
-  } else if (config.platform === 'opencodego') {
-    return getOpenCodeGoResponse(
-      prompt,
-      config.opencodegoApiKey,
-      config.model,
-      config.opencodegoBaseURL,
-      system,
-      imageBase64,
-    );
-  } else if (config.platform === 'askiicloud') {
-    return getAskiiCloudResponse(
-      prompt,
-      config.askiicloudApiKey,
-      config.model,
-      ASKII_CLOUD_URL,
-      system,
-      imageBase64,
-    );
-  } else if (config.platform === 'lmstudio') {
-    return getLMStudioResponse(prompt, config.url, config.model, system, imageBase64);
-  } else if (config.platform === 'openai') {
-    return getOpenAIResponse(
-      prompt,
-      config.openaiApiKey,
-      config.model,
-      config.openaiBaseURL,
-      system,
-      imageBase64,
-    );
-  } else {
-    return getOllamaResponse(
-      prompt,
-      config.url,
-      config.model,
-      system,
-      imageBase64 ? [imageBase64] : undefined,
-    );
-  }
+  const reply = await completePrompt(getConnection(config), prompt, {
+    system,
+    image: imageBase64,
+    signal,
+    timeoutMs: config.timeoutMs,
+    onRetry: logRetry,
+  });
+  return reply.text;
 }
 
 async function getChatResponseStreaming(
   config: Config,
   messages: ChatMessage[],
   onChunk: (chunk: string) => void,
-): Promise<string> {
-  if (config.platform === 'anthropic') {
-    return getAnthropicChatStreaming(messages, config.anthropicApiKey, config.model, onChunk);
-  } else if (config.platform === 'opencodego') {
-    return getOpenCodeGoChatStreaming(
-      messages,
-      config.opencodegoApiKey,
-      config.model,
-      onChunk,
-      config.opencodegoBaseURL,
-    );
-  } else if (config.platform === 'askiicloud') {
-    return getAskiiCloudChatStreaming(
-      messages,
-      config.askiicloudApiKey,
-      config.model,
-      onChunk,
-      ASKII_CLOUD_URL,
-    );
-  } else if (config.platform === 'lmstudio') {
-    return getLMStudioChatStreaming(messages, config.url, config.model, onChunk);
-  } else if (config.platform === 'openai') {
-    return getOpenAIChatStreaming(
-      messages,
-      config.openaiApiKey,
-      config.model,
-      onChunk,
-      config.openaiBaseURL,
-    );
-  }
-  return getOllamaChatStreaming(messages, config.url, config.model, onChunk);
-}
-
-function executeCliWriteAction(
-  action: WorkspaceAction,
-  filePath: string,
-  workDir: string,
-): 'ok' | string {
-  switch (action.type) {
-    case 'mkdir': {
-      fs.mkdirSync(filePath, { recursive: true });
-      console.error(`  ✓ Created directory: ${action.path}`);
-      return 'ok';
-    }
-
-    case 'copy': {
-      if (!action.newPath) return 'copy requires newPath';
-      const destPath = sandboxPath(workDir, action.newPath);
-      const destDir = path.dirname(destPath);
-      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-      backupOrRecordCreated(workDir, destPath);
-      fs.copyFileSync(filePath, destPath);
-      console.error(`  ✓ Copied: ${action.path} → ${action.newPath}`);
-      return 'ok';
-    }
-
-    case 'create':
-    case 'write': {
-      // Either type may target an existing file — back it up rather than
-      // recording it as created (undo would otherwise delete the original).
-      backupOrRecordCreated(workDir, filePath);
-      const dir = path.dirname(filePath);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(filePath, decodeIfDoubleEscaped(action.content ?? ''));
-      console.error(`  ✓ ${action.type === 'create' ? 'Created' : 'Wrote'}: ${action.path}`);
-      return 'ok';
-    }
-
-    case 'modify': {
-      const result = applyModifyAction(fs.readFileSync(filePath, 'utf-8'), action);
-      if ('error' in result) return result.error;
-      writeBackup(workDir, filePath);
-      fs.writeFileSync(filePath, result.text);
-      console.error(
-        action.startLine !== undefined || action.endLine !== undefined
-          ? `  ✓ Modified (lines ${action.startLine}–${action.endLine}): ${action.path}`
-          : `  ✓ Modified: ${action.path}`,
-      );
-      return 'ok';
-    }
-
-    case 'delete': {
-      writeBackup(workDir, filePath);
-      fs.unlinkSync(filePath);
-      console.error(`  ✓ Deleted: ${action.path}`);
-      return 'ok';
-    }
-
-    case 'rename': {
-      if (!action.newPath) return 'rename requires newPath';
-      writeBackup(workDir, filePath);
-      const newFilePath = sandboxPath(workDir, action.newPath);
-      const newDir = path.dirname(newFilePath);
-      if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
-      backupOrRecordCreated(workDir, newFilePath);
-      fs.renameSync(filePath, newFilePath);
-      console.error(`  ✓ Renamed: ${action.path} → ${action.newPath}`);
-      return 'ok';
-    }
-
-    default:
-      return `Unknown action type: ${(action as WorkspaceAction).type}`;
-  }
-}
-
-function buildCliConfirmMessage(action: WorkspaceAction): string {
-  switch (action.type) {
-    case 'delete':
-      return `Delete file: ${action.path}? (backup will be created)`;
-    case 'rename':
-      return `Rename: ${action.path} → ${action.newPath}?`;
-    case 'copy':
-      return `Copy: ${action.path} → ${action.newPath}?`;
-    case 'mkdir':
-      return `Create directory: ${action.path}?`;
-    default:
-      return `${action.type}: ${action.path}?`;
-  }
+  signal?: AbortSignal,
+): Promise<ChatReply> {
+  return complete(getConnection(config), {
+    messages,
+    onChunk,
+    signal,
+    timeoutMs: config.timeoutMs,
+    onRetry: logRetry,
+  });
 }
 
 async function readStdin(): Promise<string | null> {
@@ -500,7 +430,21 @@ async function confirm(
     return true;
   }
   return new Promise((resolve) => {
-    rl.question(`${question} (y/N) `, (answer) => resolve(answer.toLowerCase() === 'y'));
+    // Input already ended (piped stdin ran out) or closes while asking: that's a "no"
+    const onClose = () => {
+      console.error(`${question} (no input — answered no)`);
+      resolve(false);
+    };
+    try {
+      rl.once('close', onClose);
+      rl.question(`${question} (y/N) `, (answer) => {
+        rl.off('close', onClose);
+        resolve(answer.trim().toLowerCase() === 'y');
+      });
+    } catch {
+      rl.off('close', onClose);
+      onClose();
+    }
   });
 }
 
@@ -579,7 +523,12 @@ function mergeConfigOverride(base: Config, tokens: string[]): Config {
 
   const platform = getFlagValue(tokens, '-p', '--platform');
   if (platform) {
-    result.platform = platform as Config['platform'];
+    if (!isPlatformId(platform)) {
+      throw new UsageError(
+        `Unknown platform '${platform}' — use ollama, lmstudio, openai, anthropic, opencodego or askiicloud`,
+      );
+    }
+    result.platform = platform;
     // Ollama and LM Studio listen on different servers (http vs ws)
     result.url = platform === 'lmstudio' ? result.lmStudioUrl : result.ollamaUrl;
     // Switch to the platform's default model unless an explicit model flag is also present
@@ -596,8 +545,11 @@ function mergeConfigOverride(base: Config, tokens: string[]): Config {
     getFlagValue(tokens, '--askiicloud-model');
   if (model) result.model = model;
 
-  const maxRoundsStr = getFlagValue(tokens, '--max-rounds');
-  if (maxRoundsStr) result.maxRounds = parseInt(maxRoundsStr, 10) || result.maxRounds;
+  result.maxRounds = parsePositiveInt(
+    getFlagValue(tokens, '--max-rounds'),
+    '--max-rounds',
+    result.maxRounds,
+  );
 
   const mode = getFlagValue(tokens, '--mode');
   if (mode) result.mode = mode as Config['mode'];
@@ -633,9 +585,10 @@ async function runReplAsk(question: string, config: Config, history: ChatMessage
   process.stderr.write(`\nASKII: `);
   let response = '';
   try {
-    response = await getChatResponseStreaming(config, history, (chunk) =>
+    const reply = await getChatResponseStreaming(config, history, (chunk) =>
       process.stdout.write(chunk),
     );
+    response = reply.text;
   } catch (err) {
     console.error(`\nError: ${err instanceof Error ? err.message : 'Unknown error'}`);
     history.pop();
@@ -645,245 +598,145 @@ async function runReplAsk(question: string, config: Config, history: ChatMessage
   history.push({ role: 'assistant', content: response });
 }
 
-async function runReplDo(
+/**
+ * Runs the Do agent in workDir with terminal output and y/N confirmations,
+ * then offers to undo every change. Shared by `askii do` and the REPL /do.
+ * Returns the number of completed write actions.
+ */
+async function runCliDo(
   task: string,
   config: Config,
   rl: readline.Interface,
-  abortController: AbortController,
-): Promise<void> {
-  const workDir = path.resolve(process.cwd());
-
+  workDir: string,
+  signal: AbortSignal,
+): Promise<number> {
   deleteAllBackups(workDir);
   console.error(`ASKII is working... ${getRandomThinkingKaomoji()}`);
-  console.error('Press Ctrl+C to cancel.\n');
+  console.error('Press Ctrl+C to stop at any time.\n');
 
+  const workspaceStructure = getWorkspaceStructure(workDir);
+  console.error(`Workspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
+
+  const wikiPath = config.wikiPath;
+  const wikiAvailable = !!(wikiPath && hasWikiIndex(wikiPath));
+  const codeWikiAvailable = config.useCodeWiki && hasCodeWikiIndex(workDir);
+  const messages: ChatMessage[] = [
+    {
+      role: 'system',
+      content: buildDoSystemPrompt(workspaceStructure, wikiAvailable, codeWikiAvailable),
+    },
+    { role: 'user', content: task },
+  ];
+
+  let completedActions = 0;
   try {
-    const workspaceStructure = getWorkspaceStructure(workDir);
-    console.error(`Workspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
-
-    const wikiAvailable = !!(config.wikiPath && hasWikiIndex(config.wikiPath));
-    const codeWikiAvailable = config.useCodeWiki && hasCodeWikiIndex(workDir);
-    const systemPrompt = buildDoSystemPrompt(workspaceStructure, wikiAvailable, codeWikiAvailable);
-
-    const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: task },
-    ];
-
-    let completedActions = 0;
-    let roundCount = 0;
-
-    while (roundCount < config.maxRounds && !abortController.signal.aborted) {
-      console.error(`\n[Round ${roundCount + 1}/${config.maxRounds}]`);
-
-      process.stderr.write('AI: ');
-      const responseText = await retryLLMCall(
-        () => getChatResponseStreaming(config, messages, (chunk) => process.stderr.write(chunk)),
-        2,
-        (attempt, err) =>
-          console.error(`\nLLM call failed (attempt ${attempt}): ${err.message}. Retrying...`),
-      );
-      process.stderr.write('\n');
-
-      if (abortController.signal.aborted) break;
-      messages.push({ role: 'assistant', content: responseText });
-
-      const actions = parseWorkspaceActions(responseText);
-      if (actions === null) {
-        console.error('  ✗ Response was not a valid JSON action array — asking again.');
-        messages.push({ role: 'user', content: INVALID_ACTIONS_FEEDBACK });
-        roundCount++;
-        continue;
-      }
-      if (actions.length === 0) {
-        console.error('No actions returned. Done.');
-        break;
-      }
-
-      const readActions = actions.filter(
-        (a) =>
-          a.type === 'view' ||
-          a.type === 'list' ||
-          a.type === 'search' ||
-          a.type === 'wiki_search' ||
-          a.type === 'code_search',
-      );
-      const writeActions = actions.filter(
-        (a) =>
-          a.type !== 'view' &&
-          a.type !== 'list' &&
-          a.type !== 'search' &&
-          a.type !== 'wiki_search' &&
-          a.type !== 'code_search',
-      );
-
-      const feedbackParts: string[] = [];
-
-      const viewResults: Record<string, string> = {};
-      for (const action of readActions) {
-        try {
-          if (action.type === 'wiki_search') {
-            const q = action.query ?? '';
-            console.error(`  → Wiki search: "${q}"`);
-            viewResults[`wiki_search:${q}`] =
-              config.wikiPath && hasWikiIndex(config.wikiPath)
-                ? (await searchWiki(config.wikiPath, q)) || 'No wiki results found'
-                : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
-          } else if (action.type === 'code_search') {
-            const q = action.query ?? '';
-            console.error(`  → Code search: "${q}"`);
-            viewResults[`code_search:${q}`] = codeWikiAvailable
-              ? (await searchCodeWiki(workDir, q)) || 'No code wiki results found'
-              : 'Code wiki not available — run: askii wiki-reload (with --use-code-wiki)';
-          } else if (action.type === 'search') {
-            console.error(`  → Search: "${action.pattern}"`);
-            viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);
-          } else if (action.type === 'view' && action.paths) {
-            for (const p of action.paths) {
-              console.error(`  → Viewing: ${p}`);
-              try {
-                viewResults[p] = executeViewAction(
-                  { ...action, path: p, paths: undefined },
-                  workDir,
-                );
-              } catch (e) {
-                viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
-              }
-            }
-          } else {
-            console.error(`  → ${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`);
-            viewResults[action.path!] = executeViewAction(action, workDir);
-          }
-        } catch (e) {
-          viewResults[action.path ?? 'unknown'] =
-            `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
+    const result = await runDoAgent({
+      workspaceRoot: workDir,
+      messages,
+      maxRounds: config.maxRounds,
+      signal,
+      autoConfirm: config.yes,
+      chat: (msgs, onChunk, chatSignal) =>
+        getChatResponseStreaming(config, msgs, onChunk, chatSignal),
+      confirm: ({ kind, message, action }) => {
+        if (kind === 'run') {
+          // run ALWAYS requires explicit confirmation — ignores -y/--yes
+          return confirm(rl, `Run command: "${action.command}"? (executes shell code)`, false);
         }
-      }
-
-      if (Object.keys(viewResults).length > 0) {
-        feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
-      }
-
-      const actionResults: ActionResult[] = [];
-
-      for (const action of writeActions) {
-        // run has no path — handle it before the sandbox check
-        if (action.type === 'run') {
-          console.error(`  → Run: ${action.command}`);
-          const ok = await confirm(
+        if (kind === 'sensitive') {
+          return confirm(
             rl,
-            `Run command: "${action.command}"? (executes shell code)`,
+            `${message} (this file can make your editor or git run code — confirmation required even with --yes)`,
             false,
           );
-          if (!ok) {
-            actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
-            continue;
-          }
-          try {
-            const { execSync } = await import('child_process');
-            const output = execSync(action.command!, {
-              cwd: workDir,
-              encoding: 'utf-8',
-              timeout: 30000,
-            });
-            console.error(`  ✓ Run output:\n${output}`);
-            actionResults.push({
-              action: `run:${action.command}`,
-              status: 'ok',
-              detail: output.substring(0, 500),
-            });
-          } catch (e: unknown) {
-            const err = e as { stdout?: string; stderr?: string; message?: string };
-            const detail =
-              `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
-            console.error(`  ✗ Run failed:\n${detail}`);
-            actionResults.push({
-              action: `run:${action.command}`,
-              status: 'error',
-              detail: detail.substring(0, 500),
-            });
-          }
-          continue;
         }
-
-        let filePath: string;
-        try {
-          if (!action.path) throw new Error(`${action.type} requires path`);
-          filePath = sandboxPath(workDir, action.path);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : 'Path error';
-          console.error(`  ✗ BLOCKED: ${msg}`);
-          actionResults.push({
-            action: `${action.type}:${action.path}`,
-            status: 'error',
-            detail: msg,
-          });
-          continue;
+        return confirm(rl, message, config.yes);
+      },
+      emit: (event) => {
+        switch (event.type) {
+          case 'round-start':
+            console.error(`\n[Round ${event.round}/${event.maxRounds}]`);
+            process.stderr.write('AI: ');
+            break;
+          case 'chunk':
+            process.stderr.write(event.text);
+            break;
+          case 'round-end':
+            process.stderr.write(event.truncated ? '\n[response cut off at the token limit]\n' : '\n');
+            break;
+          case 'invalid-response':
+            console.error(
+              event.truncated
+                ? '  ✗ Response was cut off at the output token limit — asking for smaller steps.'
+                : '  ✗ Response was not a valid JSON action array — asking again.',
+            );
+            break;
+          case 'complete':
+            console.error('No actions returned. Done.');
+            break;
+          case 'notice':
+            console.error(`  ! ${event.message}`);
+            break;
+          case 'action-start':
+            if (READ_ACTION_TYPES.has(event.action.type) || event.action.type === 'run') {
+              console.error(`  → ${event.label}`);
+            }
+            break;
+          case 'action-end':
+            if (event.status === 'blocked') {
+              console.error(`  ✗ BLOCKED: ${event.detail}`);
+            } else if (event.status === 'error') {
+              console.error(`  ✗ Failed: ${event.detail ?? event.label}`);
+            } else if (event.status === 'ok' && event.action.type === 'run') {
+              console.error(`  ✓ Run output:\n${event.detail ?? ''}`);
+            } else if (event.status === 'ok' && !READ_ACTION_TYPES.has(event.action.type)) {
+              console.error(`  ✓ ${event.label}`);
+            }
+            break;
+          case 'max-rounds':
+            console.error(`\nMax rounds (${event.maxRounds}) reached.`);
+            break;
         }
-
-        const promptMsg = buildCliConfirmMessage(action);
-        const ok = await confirm(rl, promptMsg, config.yes);
-        if (!ok) {
-          actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
-          continue;
-        }
-
-        try {
-          const result = executeCliWriteAction(action, filePath, workDir);
-          if (result === 'ok') completedActions++;
-          actionResults.push({
-            action: `${action.type}:${action.path}`,
-            status: result === 'ok' ? 'ok' : 'error',
-            detail: result === 'ok' ? undefined : result,
-          });
-        } catch (e) {
-          const detail = e instanceof Error ? e.message : 'Unknown error';
-          console.error(`  ✗ Failed: ${detail}`);
-          actionResults.push({ action: `${action.type}:${action.path}`, status: 'error', detail });
-        }
-      }
-
-      if (actionResults.length > 0) {
-        feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
-      }
-
-      if (feedbackParts.length === 0) break;
-
-      messages.push({
-        role: 'user',
-        content:
-          feedbackParts.join('\n\n') +
-          '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
-      });
-
-      roundCount++;
-    }
-
-    if (roundCount >= config.maxRounds) {
-      console.error(`\nMax rounds (${config.maxRounds}) reached.`);
-    }
-    console.error(`\nCompleted ${completedActions} actions! ${getRandomKaomoji()}`);
-
-    if (hasBackups(workDir)) {
-      const doUndo = await confirm(
-        rl,
-        'Undo all changes? (y = restore backups, n = keep changes and delete backups)',
-        false,
-      );
-      if (doUndo) {
-        const { restored, deleted } = restoreAllBackups(workDir);
-        deleteAllBackups(workDir);
-        console.error(
-          `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
-        );
-      } else {
-        deleteAllBackups(workDir);
-      }
-    }
+      },
+      searchWiki: wikiAvailable && wikiPath ? (q) => searchWiki(wikiPath, q) : undefined,
+      searchCode: codeWikiAvailable ? (q) => searchCodeWiki(workDir, q) : undefined,
+      wikiUnavailableMessage: 'Wiki not available — run: askii wiki-reload --wiki-path <path>',
+      codeWikiUnavailableMessage:
+        'Code wiki not available — run: askii wiki-reload (with --use-code-wiki)',
+    });
+    completedActions = result.completedActions;
   } catch (error) {
-    console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    if (!signal.aborted) {
+      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
+
+  console.error(
+    signal.aborted
+      ? `\nStopped after ${completedActions} action(s).`
+      : `\nCompleted ${completedActions} actions! ${getRandomKaomoji()}`,
+  );
+
+  if (hasBackups(workDir)) {
+    const doUndo = await confirm(
+      rl,
+      'Undo all changes? (y = restore backups, n = keep changes and delete backups)',
+      false,
+    );
+    if (doUndo) {
+      const { restored, deleted } = restoreAllBackups(workDir);
+      deleteAllBackups(workDir);
+      console.error(
+        `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
+      );
+    } else {
+      deleteAllBackups(workDir);
+    }
+  }
+  return completedActions;
 }
+
+const READ_ACTION_TYPES = new Set(['view', 'list', 'search', 'wiki_search', 'code_search']);
 
 async function handleReplInput(
   line: string,
@@ -1084,7 +937,7 @@ async function handleReplInput(
           // readline closed
         }
 
-        await runReplDo(task, doConfig, rl, abortController);
+        await runCliDo(task, doConfig, rl, path.resolve(process.cwd()), abortController.signal);
         return false;
       }
 
@@ -1267,6 +1120,9 @@ Options:
       --opencodego-url <url> opencode Go base URL (env: ASKII_OPENCODEGO_URL)
       --askiicloud-key <key> ASKII Cloud API key (env: ASKII_CLOUD_KEY)
       --askiicloud-model <m> ASKII Cloud model (default: askii-default)
+      --askiicloud-url <url> ASKII Cloud base URL (env: ASKII_CLOUD_URL, default: https://api.askii.dev/v1)
+      --timeout <seconds>    Per-request timeout (env: ASKII_TIMEOUT, default: 600)
+      --commit-style <s>     "commit" style: oneliner, brief, descriptive (env: ASKII_COMMIT_STYLE, default: oneliner)
       --mode <mode>          Response mode: helpful, funny (default: funny)
       --max-rounds <n>       Max agent rounds for "do" / "control" (default: 5)
       --dir <path>           Working directory for "do" (default: cwd)
@@ -1279,8 +1135,15 @@ Options:
       --wiki-path <path>     Path to folder with .md docs for wiki RAG (env: ASKII_WIKI_PATH)
       --use-wiki             Inject wiki context into ask/edit/do (env: ASKII_USE_WIKI=1)
       --use-code-wiki        Inject code wiki context into ask/edit/do (env: ASKII_USE_CODE_WIKI=1)
-  -y, --yes                  Auto-confirm all actions
+  -y, --yes                  Auto-confirm file edits in "do" (shell commands and files that can run
+                             code — .vscode/, .husky/, git hooks — are always confirmed)
+  -v, --version              Print the version
   -h, --help                 Show help
+
+API keys: prefer the environment variables below over --*-key flags — flag values are
+visible to other users in the process list and stay in your shell history.
+
+Exit codes: 0 success, 1 error, 2 invalid usage, 130 stopped with Ctrl+C
 
 Environment variables:
   ASKII_PLATFORM
@@ -1289,8 +1152,8 @@ Environment variables:
   ASKII_OPENAI_KEY      ASKII_OPENAI_MODEL    ASKII_OPENAI_URL
   ASKII_ANTHROPIC_KEY   ASKII_ANTHROPIC_MODEL
   ASKII_OPENCODEGO_KEY  ASKII_OPENCODEGO_MODEL  ASKII_OPENCODEGO_URL
-  ASKII_CLOUD_KEY       ASKII_CLOUD_MODEL
-  ASKII_MODE            ASKII_MAX_ROUNDS      ASKII_CONTROL_TARGET
+  ASKII_CLOUD_KEY       ASKII_CLOUD_MODEL     ASKII_CLOUD_URL
+  ASKII_MODE            ASKII_MAX_ROUNDS      ASKII_CONTROL_TARGET  ASKII_TIMEOUT
   ASKII_WIKI_PATH       ASKII_USE_WIKI      ASKII_USE_CODE_WIKI
 
 Examples:
@@ -1330,25 +1193,39 @@ Examples:
 
 const NOTES_FILE = path.join(os.homedir(), '.askii', 'notes.json');
 
-function noteGenId(): string {
-  return randomBytes(8).toString('hex') + Date.now().toString(36);
-}
 
+/**
+ * Reads ~/.askii/notes.json. A file that exists but is not a notes array is
+ * never treated as "no notes" — saving over it would wipe every entry — so a
+ * copy is kept and the command fails with a message instead.
+ */
 function loadCliNotes(): NoteEntry[] {
+  if (!fs.existsSync(NOTES_FILE)) return [];
+  const raw = fs.readFileSync(NOTES_FILE, 'utf-8');
+  if (!raw.trim()) return [];
+  let parsed: unknown;
   try {
-    if (!fs.existsSync(NOTES_FILE)) return [];
-    const raw = fs.readFileSync(NOTES_FILE, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as NoteEntry[]) : [];
+    parsed = JSON.parse(raw);
   } catch {
-    return [];
+    parsed = undefined;
   }
+  if (!Array.isArray(parsed)) {
+    const backup = `${NOTES_FILE}.corrupt-${Date.now()}`;
+    fs.copyFileSync(NOTES_FILE, backup);
+    throw new Error(
+      `${NOTES_FILE} is not a valid notes file, so it was left untouched (a copy is at ${backup}). Fix or remove it and try again.`,
+    );
+  }
+  return parsed as NoteEntry[];
 }
 
+/** Writes the notes atomically (temp file + rename), so a crash never leaves half a file. */
 function saveCliNotes(notes: NoteEntry[]): void {
   const dir = path.dirname(NOTES_FILE);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(NOTES_FILE, JSON.stringify(notes, null, 2));
+  const tmp = `${NOTES_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(notes, null, 2));
+  fs.renameSync(tmp, NOTES_FILE);
 }
 
 function currentWorkspaceTagCli(): string | undefined {
@@ -1363,236 +1240,6 @@ function currentWorkspaceTagCli(): string | undefined {
 function captureContextCli(): NoteContext {
   return {
     workspaceFolder: currentWorkspaceTagCli(),
-  };
-}
-
-// ── Classification (mirrors src/notes.ts classifyNoteInput) ──────────────────
-
-interface CliClassification {
-  kind: NoteKind;
-  priority: TaskPriority | null;
-  dueAt: string | null;
-  recur: RecurRule | null;
-  event: EventTrigger | null;
-  tags: string[];
-  needsClarification: boolean;
-  clarifyingQuestion: string | null;
-  summary: string;
-}
-
-const NOTE_CLASSIFY_SYSTEM = `You are ASKII Note, an assistant that classifies free-text notes from the user into one of three kinds and extracts structured metadata.
-
-Current date/time (ISO8601): {NOW}
-Workspace: {WORKSPACE}
-
-Kinds:
-- "note"  : a plain piece of information to remember (no deadline, no priority).
-- "task"  : an actionable item that should be done. Extract a priority: "low" | "medium" | "high". If the text names a deadline ("by friday", "due 2026-07-08", "finish today at 5pm"), also extract "dueAt" as an ISO8601 timestamp in UTC.
-- "reminder" : something the user wants to be pinged about. Extract "dueAt" as an ISO8601 timestamp in UTC. Resolve relative phrases against the current date/time above. Phrases you can rely on resolving include: "in 90 seconds", "in 30 minutes", "in 2 hours", "in 1 hour and 30 minutes", "in 1h30m", "in half an hour", "in a bit", "in two hours", "in a couple of hours", "in a few minutes", "in a fortnight", "20 minutes from now", "an hour from now", "at 5pm", "at 17:30", "at noon", "at midnight", "tomorrow at noon", "at 9 in the morning", "half past 5", "quarter to 6", "today at 3pm", "later today", "this morning/afternoon/evening", "tonight at 8pm", "tomorrow", "tomorrow 9am", "tomorrow morning/afternoon/evening", "this time tomorrow", "first thing in the morning", "day after tomorrow", "on friday", "this fri", "by tuesday", "due monday at 9am", "friday evening", "next monday", "next week on wednesday at 10am", "friday next week", "next month", "this weekend", "over the weekend", "end of day", "eod", "end of week", "eow", "end of month", "eom", "end of year", "eoy", "on the 15th", "by the 1st of next month", "july 8th", "8 july 2026 at 3pm", "2026-07-08 14:30".
-
-Recurring triggers: if the user wants a repeating trigger ("every day at 9am", "daily", "every morning", "every weekday at 9", "every monday at 10", "every monday and wednesday at 6pm", "every mon, wed, fri", "weekly on friday at 5pm", "every weekend", "every 2 hours", "every 30 minutes", "every hour", "hourly", "every half hour", "every quarter hour", "every other day", "biweekly", "fortnightly", "every month", "monthly", "quarterly", "every month on the 15th", "every 15th of the month", "every year", "yearly", "every year on july 8"), extract "dueAt" for the FIRST occurrence, and mention the recurrence phrase verbatim inside "summary". Recurring TASKS are valid too ("water the plants every 3 days", "submit the weekly report every friday") — set kind "task"; the recurrence phrase itself is detected automatically from the text.
-
-Event triggers: phrases like "when I open VS Code", "on startup", "when I open this workspace", "when I open/save <file>" ("when I open package.json", "every time I save .env", "when I save a ts file", "when I save this file") are valid triggers tied to editor events instead of a time. They are detected automatically from the text — for them leave "dueAt" null and do NOT set "needsClarification". If the text names BOTH a time and an event, keep the time in "dueAt" (the event is ignored).
-
-Rules:
-- If the user's text is ambiguous about WHEN a reminder should fire (e.g. "later", "soon", "remind me"), set "needsClarification": true and provide a short "clarifyingQuestion" asking for a concrete time. Otherwise set "needsClarification": false and "clarifyingQuestion": null.
-- "remind me to stretch" with no time = ambiguous (needsClarification). "remind me to stretch every hour" = recurring (not ambiguous).
-- Extract up to 5 short lowercase tags (single words or hyphenated phrases) that describe the topic.
-- "summary" is a short (<= 80 chars) human-readable title for the entry.
-- Respond with ONLY a single JSON object, no markdown, no extra text.
-
-Output schema:
-{"kind":"note"|"task"|"reminder","priority":"low"|"medium"|"high"|null,"dueAt":<ISO8601 or null>,"tags":[],"needsClarification":false,"clarifyingQuestion":null,"summary":""}`;
-
-function buildNoteClassifyPrompt(text: string, context: NoteContext): string {
-  const ctxLines: string[] = [];
-  if (context.workspaceFolder) ctxLines.push(`- Workspace: ${context.workspaceFolder}`);
-  const ctxSection = ctxLines.length
-    ? `\n\nContext the user currently has open:\n${ctxLines.join('\n')}`
-    : '';
-  return `Classify this user note:${ctxSection}\n\nUser note:\n"""\n${text}\n"""`;
-}
-
-function safeParseJsonRaw(raw: string): Record<string, unknown> | null {
-  let s = raw.trim();
-  s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-  const start = s.indexOf('{');
-  const end = s.lastIndexOf('}');
-  if (start !== -1 && end !== -1 && end > start) s = s.slice(start, end + 1);
-  try {
-    return JSON.parse(s) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function coerceKind(v: unknown): NoteKind {
-  return v === 'task' || v === 'reminder' ? (v as NoteKind) : 'note';
-}
-
-function coercePriority(v: unknown): TaskPriority | null {
-  return v === 'low' || v === 'medium' || v === 'high' ? (v as TaskPriority) : null;
-}
-
-function coerceTags(v: unknown): string[] {
-  if (!Array.isArray(v)) return [];
-  return v
-    .filter((x): x is string => typeof x === 'string')
-    .map((x) => x.toLowerCase().trim())
-    .filter((x) => x.length > 0)
-    .slice(0, 5);
-}
-
-async function classifyNoteCli(
-  text: string,
-  context: NoteContext,
-  config: Config,
-): Promise<CliClassification> {
-  const now = new Date();
-  const system = NOTE_CLASSIFY_SYSTEM.replace('{NOW}', now.toISOString()).replace(
-    '{WORKSPACE}',
-    context.workspaceFolder ?? '(no workspace)',
-  );
-
-  try {
-    const raw = await getResponse(config, buildNoteClassifyPrompt(text, context), system);
-    const obj = safeParseJsonRaw(raw);
-    if (obj) {
-      const kind = coerceKind(obj['kind']);
-      const priority = coercePriority(obj['priority']);
-      const tags = coerceTags(obj['tags']);
-      const needsClarification = obj['needsClarification'] === true;
-      const clarifyingQuestion =
-        typeof obj['clarifyingQuestion'] === 'string' ? obj['clarifyingQuestion'] : null;
-      const summary =
-        typeof obj['summary'] === 'string' && obj['summary'].trim()
-          ? obj['summary'].trim().slice(0, 120)
-          : text.slice(0, 80);
-      let dueAt: string | null = null;
-      if (typeof obj['dueAt'] === 'string' && obj['dueAt']) {
-        const d = new Date(obj['dueAt']);
-        if (!isNaN(d.getTime())) dueAt = d.toISOString();
-      }
-      // Recurrence detection stays local — the rule format is ours. Tasks can
-      // recur too ("water the plants every 3 days").
-      const recur = kind === 'note' ? null : parseRecurrence(text, now);
-      let event: EventTrigger | null = null;
-      if (recur) {
-        const first = computeNextOccurrence(recur, now);
-        if (first) dueAt = first.toISOString();
-      } else if (!dueAt && !needsClarification) {
-        // Event triggers ("when I open VS Code", "when I save .env") come
-        // before clock-time parsing; a time phrase wins if an event isn't found.
-        event = kind === 'note' ? null : parseEventTrigger(text, context.workspaceFolder, context.fileName);
-        if (!event && kind === 'reminder') {
-          dueAt = parseReminderTimeLocal(text, now);
-          if (!dueAt) {
-            return {
-              kind,
-              priority,
-              dueAt: null,
-              recur: null,
-              event: null,
-              tags,
-              needsClarification: true,
-              clarifyingQuestion:
-                'When should I remind you? (e.g. "in 2 hours", "tomorrow 9am", "every day at 9am", "2026-07-08 14:30")',
-              summary,
-            };
-          }
-        } else if (!event && kind === 'task') {
-          dueAt = parseReminderTimeLocal(text, now);
-        }
-      }
-      return { kind, priority, dueAt, recur, event, tags, needsClarification, clarifyingQuestion, summary };
-    }
-  } catch {
-    // fall through to heuristic
-  }
-
-  // Heuristic fallback (mirrors src/notes.ts)
-  const lower = text.toLowerCase();
-  let kind: NoteKind = 'note';
-  let priority: TaskPriority | null = null;
-  let needsClarification = false;
-  let clarifyingQuestion: string | null = null;
-
-  const trigger = parseReminderTrigger(text, now);
-  const { dueAt, recur } = trigger;
-  // Event triggers are only used when no time trigger was found.
-  let event = parseEventTrigger(text, context.workspaceFolder, context.fileName);
-  if (event && (dueAt || recur)) event = null;
-  const hasTimeTrigger = Boolean(dueAt || recur || event);
-
-  const reminderWord =
-    /\b(?:remind|reminder|ping me|notify|alert|wake me|follow up|appointment)\b/.test(lower) ||
-    /\bdon'?t (?:let me )?forget\b/.test(lower) ||
-    /\bremember to\b/.test(lower);
-  const taskWord =
-    /\b(?:task|todo|to-do|fix|implement|add|create|write|update|refactor|review|ship|deploy|release|debug|finish|complete|build|migrate|integrate|draft|prepare|submit|buy|pay|send|book)\b/.test(
-      lower,
-    ) ||
-    /\b(?:need to|needs to|should|must|have to|gotta|plan to|going to|want to)\b/.test(lower) ||
-    /^\s*(?:do|try|check|make|read|watch|ask|pick up|set up|clean up)\b/.test(lower);
-  // "meeting at 3pm" / "call mom tomorrow" — only a reminder with a time trigger.
-  const scheduledEvent =
-    hasTimeTrigger &&
-    /\b(?:meeting|standup|stand-up|appointment|call|text|email|deadline|due|interview)\b/.test(
-      lower,
-    );
-
-  if (reminderWord || scheduledEvent || ((recur || event) && !taskWord)) {
-    // A recurrence or event trigger with no task wording is still a trigger
-    // ("standup every weekday at 9am", "when I open VS Code, check email"),
-    // so treat it as a reminder.
-    kind = 'reminder';
-    if (!hasTimeTrigger) {
-      needsClarification = true;
-      clarifyingQuestion =
-        'When should I remind you? (e.g. "in 2 hours", "tomorrow 9am", "every day at 9am")';
-    }
-  } else if (taskWord) {
-    kind = 'task';
-    if (/\b(?:high|critical|urgent|asap|p0)\b/.test(lower)) priority = 'high';
-    else if (/\b(?:low|minor|whenever|someday|p3)\b/.test(lower)) priority = 'low';
-    else priority = 'medium';
-  }
-
-  return {
-    kind,
-    priority,
-    dueAt,
-    recur: kind === 'note' ? null : (recur ?? null),
-    event: kind === 'note' ? null : event,
-    tags: [],
-    needsClarification,
-    clarifyingQuestion,
-    summary: text.slice(0, 80),
-  };
-}
-
-function buildCliEntry(text: string, cls: CliClassification, context: NoteContext): NoteEntry {
-  // Tasks can carry a deadline trigger; reminders always can. Tasks may also
-  // recur ("water the plants every 3 days") or fire on an event ("when I open
-  // VS Code") — classify sets dueAt to the first occurrence in the recur case.
-  const triggered =
-    cls.kind === 'reminder' || (cls.kind === 'task' && (Boolean(cls.dueAt) || Boolean(cls.event)));
-  return {
-    id: noteGenId(),
-    kind: cls.kind,
-    text,
-    summary: cls.summary,
-    tags: cls.tags,
-    createdAt: new Date().toISOString(),
-    workspaceTag: context.workspaceFolder,
-    priority: cls.kind === 'task' ? (cls.priority ?? 'medium') : undefined,
-    done: cls.kind === 'task' ? false : undefined,
-    dueAt: triggered ? (cls.dueAt ?? undefined) : undefined,
-    fired: triggered ? false : undefined,
-    missed: cls.kind === 'reminder' ? false : undefined,
-    recur: triggered ? (cls.recur ?? undefined) : undefined,
-    event: triggered ? (cls.event ?? undefined) : undefined,
-    context,
   };
 }
 
@@ -1662,7 +1309,7 @@ async function noteAdd(
       const dir = path.join(path.dirname(NOTES_FILE), 'notes-screenshots');
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       const { base64 } = await takeScreenshot();
-      const id = noteGenId();
+      const id = genNoteId();
       screenshotPath = path.join(dir, `${id}.png`);
       fs.writeFileSync(screenshotPath, Buffer.from(base64, 'base64'));
       console.error(`  ✓ Screenshot saved: ${screenshotPath}`);
@@ -1673,7 +1320,7 @@ async function noteAdd(
     }
   }
 
-  let cls = await classifyNoteCli(text, ctx, config);
+  let cls = await classifyNote(text, ctx, (prompt, system) => getResponse(config, prompt, system));
 
   // Clarifying-question loop (max 2 rounds), only in interactive REPL
   let rounds = 0;
@@ -1698,7 +1345,9 @@ async function noteAdd(
       break;
     }
     const combined = `${text}\n\n[clarified: ${answer}]`;
-    cls = await classifyNoteCli(combined, ctx, config);
+    cls = await classifyNote(combined, ctx, (prompt, system) =>
+      getResponse(config, prompt, system),
+    );
     rounds++;
   }
 
@@ -1718,7 +1367,7 @@ async function noteAdd(
     };
   }
 
-  const entry = buildCliEntry(text, cls, ctx);
+  const entry = buildNoteEntry(text, cls, ctx);
   if (screenshotPath) entry.screenshotPath = screenshotPath;
 
   const notes = loadCliNotes();
@@ -1910,6 +1559,49 @@ Examples:
 // `askii browse` is an alias for browser mode. Mirrors askiiControlCommand /
 // runScreenControlTask / runBrowserTask in src/commands.ts.
 
+/** Terminal rendering of Control agent events (shared by screen and browser). */
+function printControlEvent(event: ControlEvent): void {
+  switch (event.type) {
+    case 'round-start':
+      console.error(`Round ${event.round}/${event.maxRounds} — taking screenshot...`);
+      break;
+    case 'screenshot':
+      if (event.note) console.error(event.note);
+      console.error('Asking AI...');
+      break;
+    case 'parse-error':
+      console.error('Error: could not parse AI response.');
+      console.error(`Raw response: ${event.raw}`);
+      break;
+    case 'done':
+      console.error(`\nDone! ${getRandomKaomoji()}`);
+      console.error(`Reasoning: ${event.reasoning}`);
+      break;
+    case 'action-planned':
+      console.error(`\nAction:    ${event.label}`);
+      console.error(`Reasoning: ${event.reasoning}`);
+      break;
+    case 'action-update':
+      if (event.detail) console.error(event.detail);
+      if (event.status === 'ok') console.error('Executed.');
+      if (event.status === 'error') console.error('Action failed.');
+      break;
+    case 'notice':
+      console.error(`${event.level === 'warning' ? 'Warning: ' : ''}${event.message}`);
+      break;
+    case 'max-rounds':
+      console.error(`Max rounds (${event.maxRounds}) reached.`);
+      break;
+    case 'round-end':
+      break;
+  }
+}
+
+function cliVisionAsk(config: Config): VisionAsk {
+  return (system, prompt, image, signal) =>
+    getResponse(config, prompt, system || undefined, image, signal);
+}
+
 async function runScreenControl(instruction: string, config: Config): Promise<void> {
   const missingDeps = checkControlDependencies();
   if (missingDeps.length > 0) {
@@ -1928,7 +1620,7 @@ async function runScreenControl(instruction: string, config: Config): Promise<vo
     abortController.abort();
     console.error('\n\nStopped by user (Ctrl+C).');
     rl.close();
-    process.exit(0);
+    process.exit(EXIT_INTERRUPTED);
   };
   process.once('SIGINT', stop);
   rl.on('SIGINT', stop);
@@ -1957,147 +1649,21 @@ async function runScreenControl(instruction: string, config: Config): Promise<vo
       // proceed with default monitor
     }
 
-    const history: ControlHistoryEntry[] = [];
-    const ZOOM_ACTIONS = new Set(['mouse_left_click', 'mouse_right_click', 'mouse_double_click']);
-    let round = 0;
-    let prevScreenshot: string | undefined;
-    let systemInfo: SystemInfo | undefined;
-
-    while (round < config.maxRounds && !abortController.signal.aborted) {
-      console.error(`Round ${round + 1}/${config.maxRounds} — taking screenshot...`);
-
-      const {
-        base64: imageBase64,
-        width: screenW,
-        height: screenH,
-        physWidth,
-        physHeight,
-      } = await takeScreenshot(monitorId);
-
-      if (!systemInfo) {
-        systemInfo = await getSystemInfo(physWidth, physHeight);
-      }
-
-      if (prevScreenshot !== undefined && prevScreenshot === imageBase64) {
-        console.error('Warning: screen unchanged since last action.');
-      }
-      const screenChanged = prevScreenshot === undefined || prevScreenshot !== imageBase64;
-      prevScreenshot = imageBase64;
-
-      const prompt =
-        round === 0
-          ? `Instruction to complete: ${instruction}\n\nAnalyze the screenshot and determine the next action(s).`
-          : `Continuing instruction: ${instruction}\n\nAnalyze the updated screenshot and return the next action(s) or DONE.`;
-
-      console.error('Asking AI...');
-      const rawResponse = await getResponse(
-        config,
-        prompt,
-        buildControlSystemPrompt(screenW, screenH, systemInfo, history),
-        imageBase64,
-      );
-
-      if (abortController.signal.aborted) break;
-
-      const parsed = parseControlResponse(rawResponse);
-
-      if (!parsed) {
-        console.error('Error: could not parse AI response.');
-        console.error(`Raw response: ${rawResponse}`);
-        break;
-      }
-
-      if (parsed.type === 'done') {
-        console.error(`\nDone! ${getRandomKaomoji()}`);
-        console.error(`Reasoning: ${parsed.reasoning}`);
-        break;
-      }
-
-      let { actions } = parsed;
-
-      // Two-phase zoom: refine coordinates for a single position-based click
-      if (actions.length === 1 && ZOOM_ACTIONS.has(actions[0].action)) {
-        const a = actions[0] as ControlAction & { x: number; y: number };
-        try {
-          console.error('Refining coordinates (zoom)...');
-          const imgBuf = Buffer.from(imageBase64, 'base64');
-          const refined = await refineCoordinates(
-            imgBuf,
-            a.x,
-            a.y,
-            screenW,
-            screenH,
-            a,
-            (sys, img) => getResponse(config, sys, undefined, img),
-          );
-          if (refined) {
-            console.error(`Zoom: (${a.x}, ${a.y}) → (${refined.x}, ${refined.y})`);
-            a.x = refined.x;
-            a.y = refined.y;
-          }
-        } catch {
-          // zoom failed — use original coordinates
-        }
-      }
-
-      // Log planned actions
-      actions.forEach((a, i) => {
-        const label = actions.length > 1 ? `Action ${i + 1}/${actions.length}` : 'Action';
-        console.error(`\n${label}:    ${describeAction(a as ControlAction)}`);
-        console.error(`Reasoning: ${a.reasoning}`);
-      });
-
-      // Confirm
-      const confirmMsg =
-        actions.length === 1 ? 'Execute this action?' : `Execute these ${actions.length} actions?`;
-      const ok = await confirm(rl, confirmMsg, config.yes);
-      if (!ok || abortController.signal.aborted) {
-        console.error('Stopped.');
-        break;
-      }
-
-      // Resolve click_text actions to coordinates via a second LLM call
-      for (const a of actions) {
-        if ((a as ControlAction).action === 'click_text') {
-          const ct = a as { action: 'click_text'; text: string; reasoning: string };
-          try {
-            const resolvePrompt = `Find the EXACT pixel coordinates of the UI element whose visible text is "${ct.text}". Return ONLY valid JSON: {"x": number, "y": number}`;
-            const raw = await getResponse(config, resolvePrompt, undefined, imageBase64);
-            const m = raw.match(/\{[\s\S]*?\}/);
-            if (m) {
-              const coords = JSON.parse(m[0]);
-              if (typeof coords.x === 'number' && typeof coords.y === 'number') {
-                Object.assign(a, { action: 'mouse_left_click', x: coords.x, y: coords.y });
-                console.error(`Resolved "${ct.text}" → (${coords.x}, ${coords.y})`);
-              }
-            }
-          } catch {
-            console.error(`Warning: could not resolve text "${ct.text}" to coordinates`);
-          }
-        }
-      }
-
-      // Execute sequence
-      for (const a of actions) {
-        if (abortController.signal.aborted) break;
-        await executeControlAction(a as ControlAction, screenW, screenH, abortController.signal);
-        history.push({
-          round: round + 1,
-          description: describeAction(a as ControlAction),
-          reasoning: a.reasoning,
-          screenChanged,
-        });
-      }
-      console.error('Executed.\n');
-
-      round++;
-    }
-
-    if (round >= config.maxRounds && !abortController.signal.aborted) {
-      console.error(`Max rounds (${config.maxRounds}) reached.`);
-    }
-
+    const result = await runScreenAgent({
+      task: instruction,
+      maxRounds: config.maxRounds,
+      signal: abortController.signal,
+      autoConfirm: config.yes,
+      monitorId,
+      session: { history: [] },
+      refineClicks: true,
+      ask: cliVisionAsk(config),
+      confirm: ({ message }) => confirm(rl, message, false),
+      emit: printControlEvent,
+    });
     rl.close();
+    if (result.outcome === 'stopped') console.error('Stopped.');
+    if (result.outcome === 'parse-error') process.exit(1);
   } catch (error) {
     rl.close();
     console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -2109,8 +1675,7 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const abortController = new AbortController();
 
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const puppeteer = require('puppeteer-core') as typeof import('puppeteer-core');
+  const puppeteer = await import('puppeteer-core');
   let browser: import('puppeteer-core').Browser | undefined;
 
   // On a TTY readline holds stdin in raw mode, so Ctrl+C arrives as rl's
@@ -2121,11 +1686,12 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
     rl.close();
     void Promise.resolve(browser?.close())
       .catch(() => undefined)
-      .finally(() => process.exit(0));
+      .finally(() => process.exit(EXIT_INTERRUPTED));
   };
   process.once('SIGINT', stop);
   rl.on('SIGINT', stop);
 
+  let failed = false;
   try {
     console.error(`ASKII Control (Browser) starting... ${getRandomThinkingKaomoji()}`);
     console.error(`Task: ${task}`);
@@ -2144,98 +1710,37 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
     browser = await puppeteer.launch({
       headless: config.headless ? true : false,
       executablePath,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
+      args: browserLaunchArgs(),
     });
 
     const [page] = await browser.pages();
     await page.setViewport(null);
 
-    let round = 0;
-
-    while (round < config.maxRounds && !abortController.signal.aborted) {
-      console.error(`Round ${round + 1}/${config.maxRounds} — capturing screenshot...`);
-
-      const imageBase64 = await takePageScreenshot(page);
-      const currentUrl = page.url();
-
-      console.error(`Current URL: ${currentUrl}`);
-
-      const userPrompt =
-        round === 0
-          ? `Task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and determine the next action.`
-          : `Continuing task: ${task}\n\nCurrent URL: ${currentUrl}\n\nAnalyze the screenshot and return the next action or DONE.`;
-
-      console.error('Asking AI...');
-      const rawResponse = await getResponse(
-        config,
-        userPrompt,
-        buildBrowserSystemPrompt(),
-        imageBase64,
-      );
-
-      if (abortController.signal.aborted) break;
-
-      const parsed = parseBrowserResponse(rawResponse);
-
-      if (!parsed) {
-        console.error('Error: could not parse AI response.');
-        console.error(`Raw response: ${rawResponse}`);
-        break;
-      }
-
-      if (parsed.type === 'done') {
-        console.error(`\nDone! ${getRandomKaomoji()}`);
-        console.error(`Reasoning: ${parsed.reasoning}`);
-        break;
-      }
-
-      let stopped = false;
-      for (const action of parsed.actions) {
-        if (abortController.signal.aborted) {
-          stopped = true;
-          break;
-        }
-
-        console.error(`\nAction:    ${describeBrowserAction(action)}`);
-        console.error(`Reasoning: ${action.reasoning}`);
-
-        const ok = await confirm(rl, 'Execute this action?', config.yes);
-        if (!ok || abortController.signal.aborted) {
-          console.error('Stopped.');
-          stopped = true;
-          break;
-        }
-
-        try {
-          await executeBrowserAction(action, page);
-          console.error('Executed.\n');
-        } catch (execErr) {
-          console.error(
-            `Action failed: ${execErr instanceof Error ? execErr.message : 'Unknown error'}`,
-          );
-        }
-      }
-      if (stopped) break;
-
-      round++;
-    }
-
-    if (round >= config.maxRounds && !abortController.signal.aborted) {
-      console.error(`Max rounds (${config.maxRounds}) reached.`);
-    }
-
+    const result = await runBrowserAgent({
+      task,
+      maxRounds: config.maxRounds,
+      signal: abortController.signal,
+      autoConfirm: config.yes,
+      page,
+      ask: cliVisionAsk(config),
+      confirm: ({ message }) => confirm(rl, message, false),
+      emit: printControlEvent,
+    });
+    if (result.outcome === 'stopped') console.error('Stopped.');
+    failed = result.outcome === 'parse-error';
     rl.close();
   } catch (error) {
     rl.close();
     console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    process.exit(1);
+    failed = true;
   }
 
-  // The launched browser keeps the event loop alive. Headless: close it so the
-  // CLI exits. Headed: leave it for inspection — Puppeteer kills it when Node
-  // exits, so wait until the user closes the window (or presses Ctrl+C).
+  // The launched browser keeps the event loop alive. Headless (or failed):
+  // close it so the CLI exits. Headed: leave it for inspection — Puppeteer
+  // kills it when Node exits, so wait until the user closes the window (or
+  // presses Ctrl+C).
   if (browser?.connected) {
-    if (config.headless) {
+    if (config.headless || failed) {
       await browser.close();
     } else {
       console.error('Browser left open — close it (or press Ctrl+C) to exit.');
@@ -2243,6 +1748,7 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
       await new Promise<void>((resolve) => openBrowser.once('disconnected', () => resolve()));
     }
   }
+  if (failed) process.exit(1);
 }
 
 /**
@@ -2253,84 +1759,21 @@ async function runBrowserControl(task: string, config: Config): Promise<void> {
  * workDir is not a git repository or the LLM call fails.
  */
 async function generateCliCommitMessage(workDir: string, config: Config): Promise<string | null> {
-  const { execSync } = await import('child_process');
-
-  const MAX_DIFF_CHARS = 12_000;
-  // The repository's recent commit messages are sent to the model as style
-  // examples so generated messages match the user's existing habits.
-  const MAX_RECENT_COMMITS = 10;
-  // Cap each example message so huge commit bodies don't dominate the prompt.
-  const MAX_EXAMPLE_MESSAGE_CHARS = 500;
-
-  const COMMIT_SYSTEM_PROMPT = `You are an expert at writing Git commit messages.
-Given a list of changed files and a unified diff, write a single, well-formed Git commit message.
-Rules:
-- Use the Conventional Commits format when appropriate (type(scope): subject).
-- The first line is the subject: imperative mood, <= 72 characters, no trailing period.
-- Optionally follow with a blank line and a concise body explaining the "why" (not the "what").
-- Output ONLY the raw commit message text — no markdown fences, no quotes, no "Commit message:" label, no preamble.
-- If the diff is empty or trivial, output a single short subject line describing the change.`;
-
-  function cleanCommitMessage(raw: string): string {
-    let text = raw.trim();
-    const fenceMatch = text.match(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/);
-    if (fenceMatch) text = fenceMatch[1].trim();
-    text = text.replace(/^(commit\s*message|message)\s*[:\-]\s*/i, '');
-    if (
-      (text.startsWith('"') && text.endsWith('"')) ||
-      (text.startsWith("'") && text.endsWith("'"))
-    ) {
-      text = text.slice(1, -1).trim();
-    }
-    return text.trim();
-  }
+  const { execFileSync } = await import('child_process');
 
   function git(args: string[]): string {
     try {
       // Large buffer: a big staged diff (e.g. a lockfile) would otherwise
       // overflow the 1 MB default and silently come back empty.
-      return execSync('git ' + args.join(' '), {
+      return execFileSync('git', args, {
         cwd: workDir,
         encoding: 'utf-8',
         maxBuffer: 64 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'ignore'],
       });
     } catch {
       return '';
     }
-  }
-
-  /**
-   * Formats one example commit message: caps its length and indents wrapped
-   * lines so multi-line messages stay nested under their numbered bullet.
-   */
-  function formatExampleMessage(message: string): string {
-    const normalized = message.replace(/\r\n/g, '\n').trim();
-    const capped =
-      normalized.length > MAX_EXAMPLE_MESSAGE_CHARS
-        ? `${normalized.slice(0, MAX_EXAMPLE_MESSAGE_CHARS)}…`
-        : normalized;
-    return capped.replace(/\n/g, '\n   ');
-  }
-
-  // Recent commit messages give the model concrete style examples. Returns
-  // '' when the log is unavailable (no commits yet) so the prompt omits it.
-  function collectRecentCommitMessages(): string {
-    const raw = git(['log', '-n', String(MAX_RECENT_COMMITS), '-z', '--format=%B']);
-    if (!raw.trim()) {
-      return '';
-    }
-    const messages = raw
-      .split('\0')
-      .map((m) => m.trim())
-      .filter(Boolean)
-      .map(formatExampleMessage);
-    if (messages.length === 0) {
-      return '';
-    }
-    return (
-      'Recent commit messages (style examples from this repository):\n' +
-      messages.map((m, i) => `${i + 1}. ${m}`).join('\n')
-    );
   }
 
   // Confirm we are inside a git repo.
@@ -2339,44 +1782,36 @@ Rules:
   }
 
   // Prefer staged diff; fall back to working-tree diff.
-  let raw = git(['diff', '--cached']);
-  const hasStaged = raw.trim().length > 0;
+  let diff = git(['diff', '--cached']);
+  const hasStaged = diff.trim().length > 0;
   if (!hasStaged) {
-    raw = git(['diff']);
+    diff = git(['diff']);
   }
 
   // File list (staged or working-tree).
   const nameStatus = hasStaged
     ? git(['diff', '--cached', '--name-only'])
     : git(['status', '--porcelain', '--untracked-files=no']);
-  const changedFiles = nameStatus
+  const files = nameStatus
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => l.replace(/^\S+\s+/, '').replace(/^"|"$/g, ''))
+    .map((l) => (hasStaged ? l : l.replace(/^\S+\s+/, '')).replace(/^"|"$/g, ''))
     .map((f) => path.basename(f));
 
-  if (!raw.trim() && changedFiles.length === 0) {
+  if (!diff.trim() && files.length === 0) {
     return null;
   }
 
-  const diff =
-    raw.length > MAX_DIFF_CHARS ? `${raw.slice(0, MAX_DIFF_CHARS)}\n…[diff truncated]` : raw;
-
-  const scope = hasStaged ? 'staged' : 'working-tree';
-  const fileSummary =
-    changedFiles.length > 0 ? changedFiles.join('\n') : '(no file list available)';
-  const examples = collectRecentCommitMessages();
-  const userPrompt =
-    `Changed files (${scope}):\n${fileSummary}\n\n` +
-    `Unified diff (${scope}):\n${diff || '(empty)'}\n\n` +
-    (examples ? `${examples}\n\n` : '') +
-    (examples
-      ? 'Write the commit message now, matching the style of the example messages above.'
-      : 'Write the commit message now.');
+  // Recent commit messages give the model concrete style examples
+  const examples = formatCommitExamples(
+    git(['log', '-n', String(MAX_RECENT_COMMITS), '-z', '--format=%B']).split('\0'),
+  );
+  const userPrompt = buildCommitUserPrompt({ files, diff, staged: hasStaged, examples });
+  const system = buildCommitMessageSystemPrompt(config.commitStyle, '');
 
   console.error(`ASKII is generating a commit message... ${getRandomThinkingKaomoji()}`);
-  const response = await getResponse(config, userPrompt, COMMIT_SYSTEM_PROMPT);
+  const response = await getResponse(config, userPrompt, system);
   return cleanCommitMessage(response);
 }
 
@@ -2386,9 +1821,19 @@ async function main() {
   const positional = getPositionals(argv);
   const command = positional[0] ?? '';
 
+  if (hasFlag(flags, '-v', '--version') || command === 'version') {
+    console.log(getAskiiVersion());
+    process.exit(0);
+  }
+
   if (hasFlag(flags, '-h', '--help') || command === 'help') {
     printHelp();
     process.exit(0);
+  }
+
+  const unknownFlags = getUnknownFlags(flags);
+  if (unknownFlags.length > 0) {
+    console.error(`Warning: ignoring unknown option(s): ${unknownFlags.join(', ')} (see askii --help)`);
   }
 
   const config = getConfig(flags);
@@ -2581,267 +2026,28 @@ async function main() {
     }
 
     const workDir = path.resolve(getFlagValue(flags, '--dir') || process.cwd());
-
-    deleteAllBackups(workDir);
-
-    console.error(`ASKII is working... ${getRandomThinkingKaomoji()}`);
-    console.error('Press Ctrl+C to stop at any time.\n');
-
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
     const abortController = new AbortController();
 
     // On a TTY readline holds stdin in raw mode, so Ctrl+C arrives as rl's
-    // 'SIGINT' event rather than a process signal — listen for both.
+    // 'SIGINT' event rather than a process signal — listen for both. The
+    // first Ctrl+C stops the agent (and the in-flight request) and still
+    // offers the undo prompt; a second one exits immediately.
     const stop = () => {
+      if (abortController.signal.aborted) {
+        rl.close();
+        process.exit(EXIT_INTERRUPTED);
+      }
       abortController.abort();
-      console.error('\n\nStopped by user (Ctrl+C).');
-      rl.close();
-      process.exit(0);
+      console.error('\n\nStopping (Ctrl+C) — press Ctrl+C again to exit immediately.');
     };
-    process.once('SIGINT', stop);
+    process.on('SIGINT', stop);
     rl.on('SIGINT', stop);
 
-    try {
-      const workspaceStructure = getWorkspaceStructure(workDir);
-      console.error(`\nWorkspace: ${workDir}\n\`\`\`\n${workspaceStructure}\`\`\`\n`);
-
-      const wikiAvailableDo = !!(config.wikiPath && hasWikiIndex(config.wikiPath));
-      const codeWikiAvailableDo = config.useCodeWiki && hasCodeWikiIndex(workDir);
-      const systemPrompt = buildDoSystemPrompt(
-        workspaceStructure,
-        wikiAvailableDo,
-        codeWikiAvailableDo,
-      );
-      const messages: ChatMessage[] = [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: task },
-      ];
-
-      let completedActions = 0;
-      let roundCount = 0;
-
-      while (roundCount < config.maxRounds && !abortController.signal.aborted) {
-        console.error(`\n[Round ${roundCount + 1}/${config.maxRounds}]`);
-
-        process.stderr.write('AI: ');
-        const responseText = await retryLLMCall(
-          () => getChatResponseStreaming(config, messages, (chunk) => process.stderr.write(chunk)),
-          2,
-          (attempt, err) =>
-            console.error(`\nLLM call failed (attempt ${attempt}): ${err.message}. Retrying...`),
-        );
-        process.stderr.write('\n');
-
-        if (abortController.signal.aborted) break;
-        messages.push({ role: 'assistant', content: responseText });
-
-        const actions = parseWorkspaceActions(responseText);
-        if (actions === null) {
-          console.error('  ✗ Response was not a valid JSON action array — asking again.');
-          messages.push({ role: 'user', content: INVALID_ACTIONS_FEEDBACK });
-          roundCount++;
-          continue;
-        }
-        if (actions.length === 0) {
-          console.error('No actions returned. Done.');
-          break;
-        }
-
-        const readActions = actions.filter(
-          (a) =>
-            a.type === 'view' ||
-            a.type === 'list' ||
-            a.type === 'search' ||
-            a.type === 'wiki_search' ||
-            a.type === 'code_search',
-        );
-        const writeActions = actions.filter(
-          (a) =>
-            a.type !== 'view' &&
-            a.type !== 'list' &&
-            a.type !== 'search' &&
-            a.type !== 'wiki_search' &&
-            a.type !== 'code_search',
-        );
-
-        const feedbackParts: string[] = [];
-
-        // ── Read actions ──────────────────────────────────────────────────────
-        const viewResults: Record<string, string> = {};
-        for (const action of readActions) {
-          try {
-            if (action.type === 'wiki_search') {
-              const q = action.query ?? '';
-              console.error(`  → Wiki search: "${q}"`);
-              viewResults[`wiki_search:${q}`] =
-                config.wikiPath && hasWikiIndex(config.wikiPath)
-                  ? (await searchWiki(config.wikiPath, q)) || 'No wiki results found'
-                  : 'Wiki not available — run: askii wiki-reload --wiki-path <path>';
-            } else if (action.type === 'code_search') {
-              const q = action.query ?? '';
-              console.error(`  → Code search: "${q}"`);
-              viewResults[`code_search:${q}`] = codeWikiAvailableDo
-                ? (await searchCodeWiki(workDir, q)) || 'No code wiki results found'
-                : 'Code wiki not available — run: askii wiki-reload (with --use-code-wiki)';
-            } else if (action.type === 'search') {
-              console.error(`  → Search: "${action.pattern}"`);
-              viewResults[`search:${action.pattern}`] = executeSearchAction(action, workDir);
-            } else if (action.type === 'view' && action.paths) {
-              for (const p of action.paths) {
-                console.error(`  → Viewing: ${p}`);
-                try {
-                  viewResults[p] = executeViewAction(
-                    { ...action, path: p, paths: undefined },
-                    workDir,
-                  );
-                } catch (e) {
-                  viewResults[p] = `Error: ${e instanceof Error ? e.message : 'Cannot read'}`;
-                }
-              }
-            } else {
-              console.error(
-                `  → ${action.type === 'list' ? 'Listing' : 'Viewing'}: ${action.path}`,
-              );
-              viewResults[action.path!] = executeViewAction(action, workDir);
-            }
-          } catch (e) {
-            viewResults[action.path ?? 'unknown'] =
-              `Error: ${e instanceof Error ? e.message : 'Cannot read path'}`;
-          }
-        }
-
-        if (Object.keys(viewResults).length > 0) {
-          feedbackParts.push(`File/search results:\n${JSON.stringify(viewResults, null, 2)}`);
-        }
-
-        // ── Write actions ─────────────────────────────────────────────────────
-        const actionResults: ActionResult[] = [];
-
-        for (const action of writeActions) {
-          if (action.type === 'run') {
-            // run has no path, so it skips the sandbox check below.
-            // run ALWAYS requires explicit confirmation — ignores -y/--yes
-            console.error(`  → Run: ${action.command}`);
-            const ok = await confirm(
-              rl,
-              `Run command: "${action.command}"? (executes shell code)`,
-              false,
-            );
-            if (!ok) {
-              actionResults.push({ action: `run:${action.command}`, status: 'skipped' });
-              continue;
-            }
-            try {
-              const { execSync } = await import('child_process');
-              const output = execSync(action.command!, {
-                cwd: workDir,
-                encoding: 'utf-8',
-                timeout: 30000,
-              });
-              console.error(`  ✓ Run output:\n${output}`);
-              actionResults.push({
-                action: `run:${action.command}`,
-                status: 'ok',
-                detail: output.substring(0, 500),
-              });
-            } catch (e: unknown) {
-              const err = e as { stdout?: string; stderr?: string; message?: string };
-              const detail =
-                `${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message || 'Unknown error';
-              console.error(`  ✗ Run failed:\n${detail}`);
-              actionResults.push({
-                action: `run:${action.command}`,
-                status: 'error',
-                detail: detail.substring(0, 500),
-              });
-            }
-            continue;
-          }
-
-          // Sandbox validation
-          let filePath: string;
-          try {
-            if (!action.path) throw new Error(`${action.type} requires path`);
-            filePath = sandboxPath(workDir, action.path);
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : 'Path error';
-            console.error(`  ✗ BLOCKED: ${msg}`);
-            actionResults.push({
-              action: `${action.type}:${action.path}`,
-              status: 'error',
-              detail: msg,
-            });
-            continue;
-          }
-
-          const promptMsg = buildCliConfirmMessage(action);
-          const ok = await confirm(rl, promptMsg, config.yes);
-          if (!ok) {
-            actionResults.push({ action: `${action.type}:${action.path}`, status: 'skipped' });
-            continue;
-          }
-
-          try {
-            const result = executeCliWriteAction(action, filePath, workDir);
-            if (result === 'ok') completedActions++;
-            actionResults.push({
-              action: `${action.type}:${action.path}`,
-              status: result === 'ok' ? 'ok' : 'error',
-              detail: result === 'ok' ? undefined : result,
-            });
-          } catch (e) {
-            const detail = e instanceof Error ? e.message : 'Unknown error';
-            console.error(`  ✗ Failed: ${detail}`);
-            actionResults.push({
-              action: `${action.type}:${action.path}`,
-              status: 'error',
-              detail,
-            });
-          }
-        }
-
-        if (actionResults.length > 0) {
-          feedbackParts.push(`Action results: ${JSON.stringify(actionResults)}`);
-        }
-
-        if (feedbackParts.length === 0) break;
-
-        messages.push({
-          role: 'user',
-          content:
-            feedbackParts.join('\n\n') +
-            '\n\nWhat would you like to do next? Respond with only a JSON array of actions or [] if done.',
-        });
-
-        roundCount++;
-      }
-
-      if (roundCount >= config.maxRounds) {
-        console.error(`\nMax rounds (${config.maxRounds}) reached.`);
-      }
-      console.error(`\nCompleted ${completedActions} actions! ${getRandomKaomoji()}`);
-
-      if (hasBackups(workDir)) {
-        const doUndo = await confirm(
-          rl,
-          'Undo all changes? (y = restore backups, n = keep changes and delete backups)',
-          false,
-        );
-        if (doUndo) {
-          const { restored, deleted } = restoreAllBackups(workDir);
-          deleteAllBackups(workDir);
-          console.error(
-            `Undone — restored ${restored.length} file(s), deleted ${deleted.length} created file(s).`,
-          );
-        } else {
-          deleteAllBackups(workDir);
-        }
-      }
-      rl.close();
-    } catch (error) {
-      rl.close();
-      console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      process.exit(1);
+    await runCliDo(task, config, rl, workDir, abortController.signal);
+    rl.close();
+    if (abortController.signal.aborted) {
+      process.exit(EXIT_INTERRUPTED);
     }
   } else if (command === 'control' || command === 'browse') {
     // ASKII Control — screen (default) or browser, picked via --target /
@@ -2884,4 +2090,11 @@ async function main() {
   }
 }
 
-main();
+main().catch((error: unknown) => {
+  if (error instanceof UsageError) {
+    console.error(`Error: ${error.message}`);
+    process.exit(EXIT_USAGE);
+  }
+  console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+});

@@ -1,186 +1,161 @@
 import * as vscode from 'vscode';
 import {
-  getOllamaResponse,
-  getOllamaChat,
-  getOllamaChatStreaming,
-  getLMStudioResponse,
-  getLMStudioChat,
-  getLMStudioChatStreaming,
-  getOpenAIResponse,
-  getOpenAIChat,
-  getOpenAIChatStreaming,
-  getAnthropicResponse,
-  getAnthropicChat,
-  getAnthropicChatStreaming,
-  getOpenCodeGoResponse,
-  getOpenCodeGoChat,
-  getOpenCodeGoChatStreaming,
-  OPENCODE_GO_URL,
-  getAskiiCloudResponse,
-  getAskiiCloudChat,
-  getAskiiCloudChatStreaming,
-  ASKII_CLOUD_URL,
+  DEFAULT_LMSTUDIO_URL,
+  DEFAULT_OLLAMA_URL,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  complete,
+  isPlatformId,
   type ChatMessage,
+  type ChatReply,
+  type CompletionRequest,
+  type ProviderConnection,
 } from '@common/providers';
 import { hasWikiIndex, searchWikiRaw } from '@common/wiki';
 import { hasCodeWikiIndex, searchCodeWikiRaw } from '@common/codewiki';
 import { getProviderApiKey, isProviderStructurallyConfigured } from './providerSecrets';
 import { getProviderDefinition, isProviderId } from './setupCore';
+import { log } from './log';
+
+/** Which settings pair (platform + model) a feature uses. */
+export type FeatureRole = 'general' | 'inline' | 'vision';
+
+const ROLE_SETTINGS: Record<FeatureRole, { platform: string; model: string; fallback: string }> = {
+  general: { platform: 'llmPlatform', model: 'llmModel', fallback: 'askii-smart' },
+  inline: { platform: 'llmInlinePlatform', model: 'llmInlineModel', fallback: 'askii-fast' },
+  vision: { platform: 'llmVisionPlatform', model: 'llmVisionModel', fallback: 'askii-smart' },
+};
 
 /**
- * Resolves the model id to use, honouring an optional per-feature model
- * override. When the override is unset, empty, or "default", the global
- * `askii.llmModel` setting is used.
- *
- * @returns The resolved model id (never "default").
+ * Resolves the model id for a feature role. An empty per-role model falls
+ * back to the general `askii.llmModel` only when both roles use the same
+ * platform — a model id from another provider would just fail.
  */
-export function resolveModel(
-  config: vscode.WorkspaceConfiguration,
-  _platform: string,
-  modelOverride?: string,
-): string {
-  if (modelOverride && modelOverride.trim() !== '' && modelOverride !== 'default') {
-    return modelOverride;
+export function resolveModel(config: vscode.WorkspaceConfiguration, role: FeatureRole): string {
+  const settings = ROLE_SETTINGS[role];
+  const model = config.get<string>(settings.model)?.trim();
+  if (model && model !== 'default') {
+    return model;
   }
-  return config.get<string>('llmModel') || 'askii-smart';
+  const platform = config.get<string>(settings.platform) || 'askiicloud';
+  const generalPlatform = config.get<string>(ROLE_SETTINGS.general.platform) || 'askiicloud';
+  const generalModel = config.get<string>(ROLE_SETTINGS.general.model)?.trim();
+  if (role !== 'general' && platform === generalPlatform && generalModel) {
+    return generalModel;
+  }
+  return settings.fallback;
 }
 
-export async function getExtensionResponseWithImage(
-  prompt: string,
-  imageBase64: string,
-): Promise<string> {
+/** Builds the provider connection (platform, model, key, URL) for a feature role. */
+export async function getConnection(role: FeatureRole): Promise<ProviderConnection> {
   const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('llmVisionPlatform') || 'askiicloud';
-  const model = config.get<string>('llmVisionModel') || 'askii-smart';
-
-  if (platform === 'lmstudio') {
-    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
-    return getLMStudioResponse(prompt, url, model, undefined, imageBase64);
-  } else if (platform === 'openai') {
-    const apiKey = await getProviderApiKey('openai');
-    const baseURL = config.get<string>('openaiUrl') || undefined;
-    return getOpenAIResponse(prompt, apiKey, model, baseURL, undefined, imageBase64);
-  } else if (platform === 'anthropic') {
-    const apiKey = await getProviderApiKey('anthropic');
-    return getAnthropicResponse(prompt, apiKey, model, undefined, imageBase64);
-  } else if (platform === 'opencodego') {
-    const apiKey = await getProviderApiKey('opencodego');
-    return getOpenCodeGoResponse(prompt, apiKey, model, OPENCODE_GO_URL, undefined, imageBase64);
-  } else if (platform === 'askiicloud') {
-    const apiKey = await getProviderApiKey('askiicloud');
-    return getAskiiCloudResponse(prompt, apiKey, model, ASKII_CLOUD_URL, undefined, imageBase64);
-  } else {
-    const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
-    return getOllamaResponse(prompt, url, model, undefined, [imageBase64]);
+  const platform = config.get<string>(ROLE_SETTINGS[role].platform) || 'askiicloud';
+  if (!isPlatformId(platform)) {
+    throw new Error(`Unknown LLM platform "${platform}" — run ASKII: Open Setup.`);
+  }
+  const model = resolveModel(config, role);
+  switch (platform) {
+    case 'ollama':
+      return { platform, model, baseURL: config.get<string>('ollamaUrl') || DEFAULT_OLLAMA_URL };
+    case 'lmstudio':
+      return { platform, model, baseURL: config.get<string>('lmStudioUrl') || DEFAULT_LMSTUDIO_URL };
+    case 'openai':
+      return {
+        platform,
+        model,
+        apiKey: await getProviderApiKey('openai'),
+        baseURL: config.get<string>('openaiUrl') || undefined,
+      };
+    default:
+      return { platform, model, apiKey: await getProviderApiKey(platform) };
   }
 }
 
+function requestDefaults(): Pick<CompletionRequest, 'timeoutMs' | 'maxTokens'> {
+  const config = vscode.workspace.getConfiguration('askii');
+  const timeoutSeconds = config.get<number>('requestTimeoutSeconds');
+  const maxTokens = config.get<number>('maxOutputTokens') ?? 0;
+  return {
+    timeoutMs:
+      typeof timeoutSeconds === 'number' && timeoutSeconds >= 0
+        ? timeoutSeconds * 1000
+        : DEFAULT_REQUEST_TIMEOUT_MS,
+    maxTokens: maxTokens > 0 ? maxTokens : undefined,
+  };
+}
+
+/**
+ * Sends a request with the platform/model configured for `role`. Abort,
+ * timeout and retries are handled by @common/providers complete().
+ */
+export async function extensionComplete(
+  role: FeatureRole,
+  request: CompletionRequest,
+): Promise<ChatReply> {
+  const connection = await getConnection(role);
+  return complete(connection, {
+    ...requestDefaults(),
+    onRetry: (attempt, error, delayMs) =>
+      log.warn(
+        `${connection.platform} request failed (${error.message}) — retry ${attempt} in ${delayMs / 1000}s`,
+      ),
+    ...request,
+  });
+}
+
+/** One prompt → reply text, with the given role's platform and model. */
+export async function getExtensionResponse(
+  prompt: string,
+  system?: string,
+  role: FeatureRole = 'general',
+  signal?: AbortSignal,
+): Promise<string> {
+  const messages: ChatMessage[] = system
+    ? [
+        { role: 'system', content: system },
+        { role: 'user', content: prompt },
+      ]
+    : [{ role: 'user', content: prompt }];
+  return (await extensionComplete(role, { messages, signal })).text;
+}
+
+/** Streams a reply to one prompt (general role). */
 export async function getExtensionResponseStreaming(
   prompt: string,
   onChunk: (chunk: string) => void,
   system?: string,
-): Promise<string> {
-  // Delegate to the chat APIs — unlike the plain completion endpoints, they stream on
-  // every provider (LM Studio is the one exception and delivers a single chunk).
-  const messages: ChatMessage[] = [];
-  if (system) {
-    messages.push({ role: 'system', content: system });
-  }
-  messages.push({ role: 'user', content: prompt });
-  return getExtensionChatStreaming(messages, onChunk);
-}
-
-export async function getExtensionResponse(
-  prompt: string,
-  system?: string,
-  platformOverride?: string,
-  modelOverride?: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const config = vscode.workspace.getConfiguration('askii');
-  const platform =
-    platformOverride && platformOverride !== 'default'
-      ? platformOverride
-      : config.get<string>('llmPlatform') || 'askiicloud';
-  const model = resolveModel(config, platform, modelOverride);
-
-  if (platform === 'lmstudio') {
-    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
-    return getLMStudioResponse(prompt, url, model, system, undefined, signal);
-  } else if (platform === 'openai') {
-    const apiKey = await getProviderApiKey('openai');
-    const baseURL = config.get<string>('openaiUrl') || undefined;
-    return getOpenAIResponse(prompt, apiKey, model, baseURL, system, undefined, signal);
-  } else if (platform === 'anthropic') {
-    const apiKey = await getProviderApiKey('anthropic');
-    return getAnthropicResponse(prompt, apiKey, model, system, undefined, undefined, signal);
-  } else if (platform === 'opencodego') {
-    const apiKey = await getProviderApiKey('opencodego');
-    return getOpenCodeGoResponse(prompt, apiKey, model, OPENCODE_GO_URL, system, undefined, signal);
-  } else if (platform === 'askiicloud') {
-    const apiKey = await getProviderApiKey('askiicloud');
-    return getAskiiCloudResponse(prompt, apiKey, model, ASKII_CLOUD_URL, system, undefined, signal);
-  } else {
-    const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
-    return getOllamaResponse(prompt, url, model, system, undefined, signal);
-  }
+  const messages: ChatMessage[] = system
+    ? [
+        { role: 'system', content: system },
+        { role: 'user', content: prompt },
+      ]
+    : [{ role: 'user', content: prompt }];
+  return (await extensionComplete('general', { messages, onChunk, signal })).text;
 }
 
-export async function getExtensionChat(messages: ChatMessage[]): Promise<string> {
-  const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('llmPlatform') || 'askiicloud';
-  const mdl = config.get<string>('llmModel') || 'askii-smart';
-
-  if (platform === 'lmstudio') {
-    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
-    return getLMStudioChat(messages, url, mdl);
-  } else if (platform === 'openai') {
-    const apiKey = await getProviderApiKey('openai');
-    const baseURL = config.get<string>('openaiUrl') || undefined;
-    return getOpenAIChat(messages, apiKey, mdl, baseURL);
-  } else if (platform === 'anthropic') {
-    const apiKey = await getProviderApiKey('anthropic');
-    return getAnthropicChat(messages, apiKey, mdl);
-  } else if (platform === 'opencodego') {
-    const apiKey = await getProviderApiKey('opencodego');
-    return getOpenCodeGoChat(messages, apiKey, mdl, OPENCODE_GO_URL);
-  } else if (platform === 'askiicloud') {
-    const apiKey = await getProviderApiKey('askiicloud');
-    return getAskiiCloudChat(messages, apiKey, mdl, ASKII_CLOUD_URL);
-  } else {
-    const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
-    return getOllamaChat(messages, url, mdl);
-  }
-}
-
+/** Streams a chat reply (general role), reporting whether it was cut off. */
 export async function getExtensionChatStreaming(
   messages: ChatMessage[],
   onChunk: (chunk: string) => void,
-): Promise<string> {
-  const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('llmPlatform') || 'askiicloud';
-  const mdl = config.get<string>('llmModel') || 'askii-smart';
+  signal?: AbortSignal,
+): Promise<ChatReply> {
+  return extensionComplete('general', { messages, onChunk, signal });
+}
 
-  if (platform === 'lmstudio') {
-    const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
-    return getLMStudioChatStreaming(messages, url, mdl, onChunk);
-  } else if (platform === 'openai') {
-    const apiKey = await getProviderApiKey('openai');
-    const baseURL = config.get<string>('openaiUrl') || undefined;
-    return getOpenAIChatStreaming(messages, apiKey, mdl, onChunk, baseURL);
-  } else if (platform === 'anthropic') {
-    const apiKey = await getProviderApiKey('anthropic');
-    return getAnthropicChatStreaming(messages, apiKey, mdl, onChunk);
-  } else if (platform === 'opencodego') {
-    const apiKey = await getProviderApiKey('opencodego');
-    return getOpenCodeGoChatStreaming(messages, apiKey, mdl, onChunk, OPENCODE_GO_URL);
-  } else if (platform === 'askiicloud') {
-    const apiKey = await getProviderApiKey('askiicloud');
-    return getAskiiCloudChatStreaming(messages, apiKey, mdl, onChunk, ASKII_CLOUD_URL);
-  } else {
-    const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
-    return getOllamaChatStreaming(messages, url, mdl, onChunk);
-  }
+/** Vision request: a prompt plus a base64 PNG screenshot (vision role). */
+export async function getExtensionResponseWithImage(
+  prompt: string,
+  imageBase64: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return (
+    await extensionComplete('vision', {
+      messages: [{ role: 'user', content: prompt }],
+      image: imageBase64,
+      signal,
+    })
+  ).text;
 }
 
 /**
@@ -222,7 +197,7 @@ export async function validateProviderConfig(): Promise<string | null> {
  */
 export async function getEnabledWikiContext(query: string, topK = 2): Promise<string> {
   const q = query.trim();
-  if (!q) return '';
+  if (!q) {return '';}
   const config = vscode.workspace.getConfiguration('askii');
   const sections: string[] = [];
 
@@ -239,7 +214,7 @@ export async function getEnabledWikiContext(query: string, topK = 2): Promise<st
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Search failed';
-        console.error(`[askii wiki] ${message}`);
+        log.warn(`[wiki] ${message}`);
       }
     }
   }
@@ -256,7 +231,7 @@ export async function getEnabledWikiContext(query: string, topK = 2): Promise<st
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Search failed';
-        console.error(`[askii code wiki] ${message}`);
+        log.warn(`[code wiki] ${message}`);
       }
     }
   }
@@ -264,14 +239,16 @@ export async function getEnabledWikiContext(query: string, topK = 2): Promise<st
   return sections.join('\n\n---\n\n');
 }
 
+/**
+ * Inline explanation for one line of code. Returns '' when the helper is off.
+ * Throws on provider errors (and on abort) so callers don't cache a failure.
+ */
 export async function getLLMExplanation(
   lineText: string,
   abortSignal?: AbortSignal,
 ): Promise<string> {
   const config = vscode.workspace.getConfiguration('askii');
-  const platform = config.get<string>('llmInlinePlatform') || 'askiicloud';
-  const model = resolveModel(config, platform, config.get<string>('llmInlineModel'));
-  const mode = config.get<string>('inlineHelperMode') || 'funny';
+  const mode = config.get<string>('inlineHelperMode') || 'off';
 
   if (mode === 'off') {return '';}
 
@@ -300,62 +277,6 @@ export async function getLLMExplanation(
     ? `${wikiSection}Explain this code in one sentence: ${lineText}`
     : `Make a funny comment about this code in one sentence: ${lineText}`;
 
-  try {
-    if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-
-    if (platform === 'lmstudio') {
-      const url = config.get<string>('lmStudioUrl') || 'ws://localhost:1234';
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      const result = await getLMStudioResponse(userPrompt, url, model, systemPrompt);
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      return result || 'No explanation available.';
-    } else if (platform === 'openai') {
-      const apiKey = await getProviderApiKey('openai');
-      const baseURL = config.get<string>('openaiUrl') || undefined;
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      const result = await getOpenAIResponse(userPrompt, apiKey, model, baseURL, systemPrompt);
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      return result || 'No explanation available.';
-    } else if (platform === 'anthropic') {
-      const apiKey = await getProviderApiKey('anthropic');
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      const result = await getAnthropicResponse(userPrompt, apiKey, model, systemPrompt);
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      return result || 'No explanation available.';
-    } else if (platform === 'opencodego') {
-      const apiKey = await getProviderApiKey('opencodego');
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      const result = await getOpenCodeGoResponse(
-        userPrompt,
-        apiKey,
-        model,
-        OPENCODE_GO_URL,
-        systemPrompt,
-      );
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      return result || 'No explanation available.';
-    } else if (platform === 'askiicloud') {
-      const apiKey = await getProviderApiKey('askiicloud');
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      const result = await getAskiiCloudResponse(
-        userPrompt,
-        apiKey,
-        model,
-        ASKII_CLOUD_URL,
-        systemPrompt,
-      );
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      return result || 'No explanation available.';
-    } else {
-      const url = config.get<string>('ollamaUrl') || 'http://localhost:11434';
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      const result = await getOllamaResponse(userPrompt, url, model, systemPrompt);
-      if (abortSignal?.aborted) {throw new Error('Request cancelled');}
-      return result || 'No explanation available.';
-    }
-  } catch (error) {
-    if (abortSignal?.aborted) {throw error;}
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return `Error: ${errorMessage}`;
-  }
+  const result = await getExtensionResponse(userPrompt, systemPrompt, 'inline', abortSignal);
+  return result.trim() || 'No explanation available.';
 }

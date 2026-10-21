@@ -8,14 +8,26 @@ import { LMStudioClient } from '@lmstudio/sdk';
 import { ASKII_CLOUD_URL, OPENCODE_GO_URL, getOpenCodeGoHeaders } from '../common/providers';
 import {
   PROVIDERS,
+  ProviderConnectionError,
+  type InspectedStringSetting,
   type ProviderId,
+  getLegacyCredentialValue,
   getProviderDefinition,
   isAuthenticationError,
   isUnsupportedModelListError,
+  migrateLegacyCredential,
   normalizeModelIds,
+  withDiscoveryTimeout,
 } from './setupCore';
 
-const DISCOVERY_TIMEOUT_MS = 10_000;
+// Re-exported so existing imports of these helpers keep working; they live in
+// setupCore.ts so plain-Node unit tests can load them without `vscode`.
+export {
+  ProviderConnectionError,
+  getLegacyCredentialValue,
+  migrateLegacyCredential,
+  withDiscoveryTimeout,
+} from './setupCore';
 
 const SECRET_KEYS: Readonly<Partial<Record<ProviderId, string>>> = {
   askiicloud: 'askii.credentials.askiicloud.apiKey',
@@ -35,27 +47,6 @@ export interface ProviderConnection {
 export type ModelDiscoveryResult =
   | { mode: 'models'; models: string[] }
   | { mode: 'manual'; models: []; warning: string };
-
-export class ProviderConnectionError extends Error {
-  constructor(
-    message: string,
-    readonly kind: 'missing' | 'authentication' | 'connection' | 'timeout',
-  ) {
-    super(message);
-    this.name = 'ProviderConnectionError';
-  }
-}
-
-interface InspectedStringSetting {
-  globalValue?: string;
-  workspaceValue?: string;
-  workspaceFolderValue?: string;
-}
-
-interface SecretStore {
-  get(key: string): Thenable<string | undefined>;
-  store(key: string, value: string): Thenable<void>;
-}
 
 export function initializeProviderSecrets(secrets: vscode.SecretStorage): void {
   providerSecrets = secrets;
@@ -81,32 +72,41 @@ export async function storeProviderApiKey(provider: ProviderId, apiKey: string):
   await providerSecrets.store(key, apiKey.trim());
 }
 
+export async function deleteProviderApiKey(provider: ProviderId): Promise<void> {
+  const key = SECRET_KEYS[provider];
+  if (!key || !providerSecrets) {
+    return;
+  }
+  await providerSecrets.delete(key);
+}
+
+/** Lets the user pick a provider with a stored key and removes it from secret storage. */
+export async function clearApiKeyCommand(): Promise<void> {
+  const status = await getSavedCredentialStatus();
+  const items = PROVIDERS.filter((p) => status[p.id]).map((p) => ({
+    label: p.label,
+    description: 'API key stored in VS Code secret storage',
+    id: p.id,
+  }));
+  if (items.length === 0) {
+    vscode.window.showInformationMessage('ASKII: No API keys are stored.');
+    return;
+  }
+  const pick = await vscode.window.showQuickPick(items, {
+    placeHolder: 'Remove which stored API key?',
+  });
+  if (!pick) {
+    return;
+  }
+  await deleteProviderApiKey(pick.id);
+  vscode.window.showInformationMessage(`ASKII: ${pick.label} API key removed.`);
+}
+
 export async function getSavedCredentialStatus(): Promise<Record<ProviderId, boolean>> {
   const entries = await Promise.all(
     PROVIDERS.map(async ({ id }) => [id, Boolean(await getProviderApiKey(id))] as const),
   );
   return Object.fromEntries(entries) as Record<ProviderId, boolean>;
-}
-
-export function getLegacyCredentialValue(inspected: InspectedStringSetting | undefined): string {
-  if (!inspected) {
-    return '';
-  }
-  const values = [inspected.workspaceFolderValue, inspected.workspaceValue, inspected.globalValue];
-  return values.find((value) => typeof value === 'string' && value.trim())?.trim() ?? '';
-}
-
-export async function migrateLegacyCredential(
-  secretKey: string,
-  legacyValue: string,
-  secrets: SecretStore,
-  clearLegacyValue: () => Promise<void>,
-): Promise<void> {
-  const existing = await secrets.get(secretKey);
-  if (!existing?.trim()) {
-    await secrets.store(secretKey, legacyValue);
-  }
-  await clearLegacyValue();
 }
 
 async function clearLegacySetting(
@@ -183,27 +183,6 @@ export async function isCurrentConfigurationComplete(): Promise<boolean> {
   const uniqueProviders = Array.from(new Set(platforms)) as ProviderId[];
   const configured = await Promise.all(uniqueProviders.map(isProviderStructurallyConfigured));
   return configured.every(Boolean);
-}
-
-export function withDiscoveryTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs = DISCOVERY_TIMEOUT_MS,
-): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () =>
-        reject(
-          new ProviderConnectionError('The provider did not respond within 10 seconds.', 'timeout'),
-        ),
-      timeoutMs,
-    );
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  });
 }
 
 async function listOpenAIModels(

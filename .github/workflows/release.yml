@@ -10,7 +10,13 @@ permissions:
   id-token: write # OIDC token for npm trusted publishing + provenance
 
 jobs:
+  # Same gates as every push/PR: type-check, lint, unit + integration tests,
+  # CLI build and VSIX size budget. Nothing is published unless they pass.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: ci
     runs-on: ubuntu-latest
 
     steps:
@@ -26,6 +32,9 @@ jobs:
       - name: Extract version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#askii_}" >> $GITHUB_OUTPUT
+
+      - name: Check tag matches package versions
+        run: node scripts/check-versions.js "${GITHUB_REF_NAME}"
 
       # ── VS Code extension ─────────────────────────────────────────────────
 
@@ -62,18 +71,25 @@ jobs:
       # Provenance attestations are generated automatically.
 
       - name: Update npm (trusted publishing requires npm >= 11.5.1)
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
+      # Every publish step skips a version that is already out, so a failed
+      # release can simply be re-run without failing on the steps that worked.
       - name: Publish CLI to npm
         working-directory: ./cli
-        run: npm publish --access public
+        run: |
+          if npm view "askii-cli@${{ steps.version.outputs.VERSION }}" version > /dev/null 2>&1; then
+            echo "askii-cli@${{ steps.version.outputs.VERSION }} is already published — skipping"
+          else
+            npm publish --access public
+          fi
 
       # ── VS Code Marketplace ───────────────────────────────────────────────
       # Requires a MARKETPLACE_PAT secret: a Personal Access Token from
       # https://dev.azure.com with the "Marketplace (Publish)" scope.
 
       - name: Publish VS Code extension
-        run: npx @vscode/vsce publish --packagePath askii-${{ steps.version.outputs.VERSION }}.vsix --pat ${{ secrets.MARKETPLACE_PAT }}
+        run: npx @vscode/vsce publish --skip-duplicate --packagePath askii-${{ steps.version.outputs.VERSION }}.vsix --pat ${{ secrets.MARKETPLACE_PAT }}
 
       # ── Open VSX (open-vsx.org) ───────────────────────────────────────────
       # Requires an OPEN_VSX_PAT secret: log in at https://open-vsx.org with
@@ -81,4 +97,4 @@ jobs:
       # access token under User Settings → Access Tokens.
 
       - name: Publish VS Code extension to Open VSX
-        run: npx ovsx publish askii-${{ steps.version.outputs.VERSION }}.vsix --pat ${{ secrets.OPEN_VSX_PAT }}
+        run: npx ovsx publish --skip-duplicate askii-${{ steps.version.outputs.VERSION }}.vsix --pat ${{ secrets.OPEN_VSX_PAT }}

@@ -1,8 +1,22 @@
 import * as vscode from 'vscode';
 import { getRandomKaomoji, getRandomThinkingKaomoji } from '@common/kaomoji';
 import { getLLMExplanation } from './providers';
+import { isExcludedFromInline } from './privacy';
+import { log } from './log';
 
 export const explanationCache = new Map<string, { kaomoji: string; explanation: string }>();
+const MAX_EXPLANATION_CACHE_ENTRIES = 500;
+
+function cacheExplanation(key: string, value: { kaomoji: string; explanation: string }): void {
+  // Re-insert so the Map's insertion order doubles as LRU order
+  explanationCache.delete(key);
+  explanationCache.set(key, value);
+  while (explanationCache.size > MAX_EXPLANATION_CACHE_ENTRIES) {
+    const oldest = explanationCache.keys().next().value;
+    if (oldest === undefined) {break;}
+    explanationCache.delete(oldest);
+  }
+}
 
 let decorationType: vscode.TextEditorDecorationType;
 let debounceTimer: NodeJS.Timeout | undefined;
@@ -29,8 +43,8 @@ export function showDecoration(
   const maxLength = 100;
   const isTruncated = text.length > maxLength;
   const displayText = isTruncated ? text.substring(0, maxLength) + '...' : text;
-  const isThinking = text === 'thinking...';
 
+  // Long explanations are shown in full by AskiiHoverProvider
   const decoration: vscode.DecorationOptions = {
     range,
     renderOptions: {
@@ -41,10 +55,6 @@ export function showDecoration(
       },
     },
   };
-
-  if (isTruncated && !isThinking) {
-    decoration.hoverMessage = new vscode.MarkdownString(`${kaomoji} **ASKII Says:**\n\n${text}`);
-  }
 
   editor.setDecorations(decorationType, [decoration]);
 }
@@ -68,8 +78,8 @@ export async function updateDecorations(editor: vscode.TextEditor | undefined) {
   }
 
   const mode =
-    vscode.workspace.getConfiguration('askii').get<string>('inlineHelperMode') || 'funny';
-  if (mode === 'off') {
+    vscode.workspace.getConfiguration('askii').get<string>('inlineHelperMode') || 'off';
+  if (mode === 'off' || isExcludedFromInline(editor.document)) {
     editor.setDecorations(decorationType, []);
     return;
   }
@@ -105,13 +115,16 @@ export async function updateDecorations(editor: vscode.TextEditor | undefined) {
       const kaomoji = getRandomKaomoji();
       const explanation = await getLLMExplanation(lineText, abortController.signal);
 
-      if (!abortController.signal.aborted) {
-        explanationCache.set(cacheKey, { kaomoji, explanation });
+      if (!abortController.signal.aborted && explanation) {
+        cacheExplanation(cacheKey, { kaomoji, explanation });
         showDecoration(editor, position.line, kaomoji, explanation);
       }
     } catch (error) {
-      if (error instanceof Error && error.message !== 'Request cancelled') {
-        console.error('Error getting explanation:', error);
+      // Errors are not cached — the next visit to the line retries
+      if (!abortController.signal.aborted) {
+        clearTimeout(thinkingTimer);
+        editor.setDecorations(decorationType, []);
+        log.warn(`Inline explanation failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }, 1000);
@@ -139,7 +152,6 @@ export class AskiiHoverProvider implements vscode.HoverProvider {
         const markdown = new vscode.MarkdownString();
         markdown.appendMarkdown(`${cached.kaomoji} **ASKII Says:**\n\n`);
         markdown.appendText(cached.explanation);
-        markdown.isTrusted = true;
 
         return new vscode.Hover(markdown);
       }

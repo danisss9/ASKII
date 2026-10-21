@@ -2,6 +2,7 @@ import { execSync, execFileSync } from 'child_process';
 import { platform } from 'os';
 import screenshot from 'screenshot-desktop';
 import Jimp from 'jimp';
+import { parseJsonFromModel } from './utils';
 
 // === TYPES ===
 
@@ -119,76 +120,124 @@ Return {"action": "DONE", "reasoning": "..."} (not in an array) only when the in
 
 // === PARSE ===
 
-export function parseControlAction(response: string): ControlAction | null {
-  try {
-    const clean = response
-      .trim()
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/i, '');
-    const parsed = JSON.parse(clean);
-    if (parsed && typeof parsed.action === 'string') return parsed as ControlAction;
-  } catch {
-    const match = response.match(/\{[\s\S]*?\}/);
-    if (match) {
-      try {
-        const parsed = JSON.parse(match[0]);
-        if (parsed && typeof parsed.action === 'string') return parsed as ControlAction;
-      } catch {
-        // ignore
-      }
-    }
-  }
-  return null;
+type ControlStep = Exclude<ControlAction, { action: 'DONE' }>;
+
+const SCROLL_DIRECTIONS = ['up', 'down', 'left', 'right'] as const;
+
+function asFiniteNumber(value: unknown): number | undefined {
+  const n =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim()
+        ? Number(value)
+        : NaN;
+  return Number.isFinite(n) ? n : undefined;
 }
 
-export function parseControlResponse(response: string): ControlResponse | null {
-  const clean = response
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '');
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(clean);
-  } catch {
-    // Try array first, then object
-    const arrMatch = clean.match(/\[[\s\S]*\]/);
-    if (arrMatch) {
-      try {
-        parsed = JSON.parse(arrMatch[0]);
-      } catch {
-        /* ignore */
-      }
-    }
-    if (!parsed) {
-      const objMatch = clean.match(/\{[\s\S]*?\}/);
-      if (objMatch) {
-        try {
-          parsed = JSON.parse(objMatch[0]);
-        } catch {
-          /* ignore */
-        }
-      }
-    }
+/**
+ * Validates one model-proposed action and coerces numeric strings. Returns
+ * null when a required field is missing or malformed (non-numeric
+ * coordinates, an unknown scroll direction, ...) so it is never executed.
+ */
+export function normalizeControlAction(raw: unknown): ControlStep | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
   }
+  const a = raw as Record<string, unknown>;
+  const reasoning = typeof a.reasoning === 'string' ? a.reasoning : '';
+  switch (a.action) {
+    case 'mouse_move':
+    case 'mouse_left_click':
+    case 'mouse_right_click':
+    case 'mouse_double_click': {
+      const x = asFiniteNumber(a.x);
+      const y = asFiniteNumber(a.y);
+      return x === undefined || y === undefined ? null : { action: a.action, x, y, reasoning };
+    }
+    case 'mouse_drag': {
+      const fromX = asFiniteNumber(a.fromX);
+      const fromY = asFiniteNumber(a.fromY);
+      const toX = asFiniteNumber(a.toX);
+      const toY = asFiniteNumber(a.toY);
+      if (fromX === undefined || fromY === undefined || toX === undefined || toY === undefined) {
+        return null;
+      }
+      return { action: 'mouse_drag', fromX, fromY, toX, toY, reasoning };
+    }
+    case 'mouse_scroll': {
+      const x = asFiniteNumber(a.x);
+      const y = asFiniteNumber(a.y);
+      const direction = typeof a.direction === 'string' ? a.direction.toLowerCase() : '';
+      if (
+        x === undefined ||
+        y === undefined ||
+        !(SCROLL_DIRECTIONS as readonly string[]).includes(direction)
+      ) {
+        return null;
+      }
+      const amount = Math.min(10, Math.max(1, Math.round(asFiniteNumber(a.amount) ?? 3)));
+      return {
+        action: 'mouse_scroll',
+        x,
+        y,
+        direction: direction as (typeof SCROLL_DIRECTIONS)[number],
+        amount,
+        reasoning,
+      };
+    }
+    case 'keyboard_input':
+      return typeof a.text === 'string' ? { action: 'keyboard_input', text: a.text, reasoning } : null;
+    case 'key_press': {
+      const key = asNonEmptyString(a.key);
+      return key ? { action: 'key_press', key, reasoning } : null;
+    }
+    case 'click_text': {
+      const text = asNonEmptyString(a.text);
+      return text ? { action: 'click_text', text, reasoning } : null;
+    }
+    default:
+      return null;
+  }
+}
 
-  if (!parsed) return null;
+function isActionLike(value: unknown): boolean {
+  return (
+    Array.isArray(value) ||
+    (!!value && typeof value === 'object' && typeof (value as { action?: unknown }).action === 'string')
+  );
+}
+
+/**
+ * Parses the model's reply into DONE or a list of validated actions. A
+ * sequence with any malformed action is rejected as a whole — running the
+ * rest of it (e.g. typing without the click that focused the field) could act
+ * on the wrong target.
+ */
+export function parseControlResponse(response: string): ControlResponse | null {
+  const parsed = parseJsonFromModel(response, isActionLike);
+  if (parsed === undefined) {
+    return null;
+  }
 
   if (Array.isArray(parsed)) {
-    const actions = (parsed as unknown[]).filter(
-      (a): a is Exclude<ControlAction, { action: 'DONE' }> =>
-        !!a && typeof (a as any).action === 'string' && (a as any).action !== 'DONE',
-    );
-    return actions.length > 0 ? { type: 'actions', actions } : null;
+    const steps = parsed.filter((a) => (a as { action?: unknown } | null)?.action !== 'DONE');
+    const actions = steps.map(normalizeControlAction);
+    if (actions.length === 0 || actions.some((a) => a === null)) {
+      return null;
+    }
+    return { type: 'actions', actions: actions as ControlStep[] };
   }
 
-  if (parsed && typeof (parsed as any).action === 'string') {
-    const obj = parsed as ControlAction;
-    if (obj.action === 'DONE') return { type: 'done', reasoning: obj.reasoning };
-    return { type: 'actions', actions: [obj as Exclude<ControlAction, { action: 'DONE' }>] };
+  const obj = parsed as { action: string; reasoning?: unknown };
+  if (obj.action === 'DONE') {
+    return { type: 'done', reasoning: typeof obj.reasoning === 'string' ? obj.reasoning : '' };
   }
-
-  return null;
+  const action = normalizeControlAction(parsed);
+  return action ? { type: 'actions', actions: [action] } : null;
 }
 
 // === ZOOM / CROP ===
@@ -248,8 +297,9 @@ export function parseZoomResponse(response: string): { x: number; y: number } | 
   const tryParse = (s: string) => {
     try {
       const p = JSON.parse(s);
-      if (typeof p?.x === 'number' && typeof p?.y === 'number')
+      if (typeof p?.x === 'number' && typeof p?.y === 'number') {
         return { x: p.x as number, y: p.y as number };
+      }
     } catch {
       /* ignore */
     }
@@ -387,11 +437,12 @@ $sb.ToString()`,
         )
           .toString()
           .trim();
-        if (allWin)
+        if (allWin) {
           openWindows = allWin
             .split(', ')
             .map((s) => s.trim())
             .filter(Boolean);
+        }
       } catch {
         /* ignore */
       }
@@ -470,9 +521,13 @@ export async function getMonitors(): Promise<Monitor[]> {
   try {
     // Warm up the native tool by taking a screenshot first
     await screenshot({ format: 'png' });
-    const displays = await (screenshot as any).listDisplays();
+    const displays = await (
+      screenshot as unknown as {
+        listDisplays(): Promise<Array<{ id?: string | number; name?: string }>>;
+      }
+    ).listDisplays();
     if (displays && displays.length > 1) {
-      return displays.map((d: any, i: number) => ({
+      return displays.map((d, i) => ({
         id: d.id,
         name: d.name || `Display ${i + 1}`,
       }));

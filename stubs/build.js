@@ -30,7 +30,13 @@ async function buildOnnxRuntimeShim(outDir, production) {
   });
   const ortDist = path.dirname(require.resolve('onnxruntime-web', { paths: [__dirname] }));
   for (const file of ORT_WASM_FILES) {
-    fs.copyFileSync(path.join(ortDist, file), path.join(shimDir, file));
+    const source = path.join(ortDist, file);
+    if (!fs.existsSync(source)) {
+      // onnxruntime-web is pinned to the exact build Transformers.js depends on;
+      // a version bump that renames its WASM artifacts must update this list.
+      throw new Error(`onnxruntime-web no longer ships ${file} (looked in ${ortDist}) — update ORT_WASM_FILES in stubs/build.js`);
+    }
+    fs.copyFileSync(source, path.join(shimDir, file));
   }
 }
 

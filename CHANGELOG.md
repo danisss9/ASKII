@@ -1,10 +1,66 @@
 # Change Log
 
-All notable changes to the "askii" extension will be documented in this file.
-
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+All notable changes to ASKII — the VS Code extension and the `askii-cli` npm package — are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/), and both packages share one version number.
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-10-21
+
+First stable release: safe by default, cancellable everywhere, no silent data loss, documented, and gated by CI.
+
+### Security
+
+- **ASKII Do sandbox follows symlinks**: a symlink (or dangling link) inside the workspace that leads outside it is now blocked for every read and write, search no longer follows symlinks, and Undo only restores files inside the workspace
+- **Protected paths**: Do never writes inside `.git/` (hooks would run on the next commit) or `.askii/` (its own backups); files that can make VS Code or git run code — `.vscode/`, `.husky/`, `.githooks/`, `.devcontainer/` — are always confirmed, even with `askii.doAutoConfirm` / `--yes`
+- **Machine-scoped settings**: `askii.ollamaUrl`, `askii.lmStudioUrl`, `askii.openaiUrl`, `askii.chromePath` and `askii.doAutoConfirm` can only be set in user settings, so a repository's `.vscode/settings.json` can no longer redirect your API key to another server or turn off confirmations
+- **Restricted Mode support**: in untrusted workspaces ASKII Do is disabled, wikis are not auto-rebuilt, and workspace values of sensitive settings are ignored
+- **Control**: new `askii.controlAutoConfirm` — Control no longer inherits `askii.doAutoConfirm`; `click_text` targets are located before you confirm; the browser only opens `http(s)` pages, keeps Chromium's sandbox (except as root on Linux) and masks text typed into password fields in logs
+- **Inline privacy**: new `askii.inlineExcludeGlobs` keeps `.env` files, keys and credentials out of inline completion and explanations
+- `askii.commitMessageInstructions` only reads `.md` / `.txt` files; the notes panel can only open ASKII's own screenshots; all webviews use nonce-only style policies
+- Legacy `askii.*ApiKey` settings are declared (deprecated) so the move to secret storage can actually clear them; new **ASKII: Clear Stored API Key** command
+- New `SECURITY.md` with a threat model and private reporting instructions
+
+### Added
+
+- **Ask: Stop button**, and closing the panel stops the answer
+- **Request timeouts** (`askii.requestTimeoutSeconds`, default 600 s; CLI `--timeout`) and **`askii.maxOutputTokens`**
+- **Output → ASKII** log channel for diagnostics
+- **CLI**: `--version`, `--timeout`, `--askiicloud-url` / `ASKII_CLOUD_URL`; warnings for unknown options; exit codes `2` (invalid usage) and `130` (Ctrl+C)
+- README sections on **Privacy & data**, **Security**, remote development and every setting; `CONTRIBUTING.md`, issue and PR templates
+
+### Changed
+
+- **One provider layer** (`common/providers.ts`): every provider and feature can be cancelled mid-request (the request is torn down, not ignored), times out, and is retried with exponential backoff only on network errors, 408/409/429 and 5xx — never on authentication errors, after a cancel, or once output has streamed. LM Studio now streams. Anthropic's default output limit is 8192 tokens
+- **Shared Control, note and commit-message code**: the screen/browser Control loops (`common/controlAgent.ts`), note classification (`common/noteClassify.ts`) and commit-message prompting (`common/commitMessage.ts`) now run the same code in the extension and the CLI. The CLI gains `--commit-style` / `ASKII_COMMIT_STYLE`, locates `click_text` targets before asking (like the extension), and the "screen did not change" hint the model sees now refers to the action that was just run
+- **Webview scripts and styles** moved from inline strings to `media/*.js` / `media/*.css`, loaded with `asWebviewUri` and linted
+- **One Do agent** (`common/doAgent.ts`) shared by the extension and the CLI: replies cut off at the token limit are never applied (the model is asked for smaller steps), unknown action types are reported back to the model, and Keep / Undo all is also offered after a stop or an error
+- **Command palette**: titles no longer repeat the category (`ASKII: Ask` instead of `ASKII: Ask ASKII`); Generate Commit Message and Code Review appear when a Git repository is open; Edit only with an editor open
+- Marketplace metadata: categories (AI, Chat, Machine Learning, SCM Providers), keywords, license, homepage and issue links
+- Per-feature models fall back to `askii.llmModel` only when they use the same platform
+- `askii.llmVisionPlatform` / `llmVisionModel` descriptions no longer claim Note uses them
+- Setup warns when a workspace setting overrides what it saved
+
+### Fixed
+
+- **Do**: starting a second Do while the first one's Keep / Undo choice was open deleted the first run's backups; `run` now kills the whole process tree on Stop or timeout and reports stderr
+- **Wiki indexes**: rebuilds commit atomically (a crash can no longer pair old metadata with new data), a corrupt index is rebuilt instead of failing every rebuild, the extension and the CLI no longer rebuild the same index at once, and an index rebuilt by the other one is reloaded instead of returning wrong text; an unreadable docs subfolder no longer aborts indexing; two reloads can't run at once
+- **Embedding model**: a truncated download is detected and re-fetched instead of counting as cached forever; a corrupt cached `config.json` is re-fetched
+- **CLI notes**: an unreadable `~/.askii/notes.json` is kept (with a backup copy) instead of being overwritten with an empty list; writes are atomic
+- **Control** parsed nested JSON wrongly and ran actions with missing or non-numeric fields
+- **Edit**: Undo no longer reverts your own typing when the file changed after the edit; an empty model reply is not applied
+- **Ask** threw "Webview is disposed" when the panel was closed mid-answer
+- **Notes**: reminders fired once per open window; the reminder sound never played; deleting a note left its screenshot on disk
+- **Inline explanations**: provider errors were cached until Clear Cache; the hover showed twice; the cache grew without limit. Inline completions were wiped from the cache on every keystroke
+- **Commit message** generation overwrote a message already typed in the Source Control box (it now asks)
+- `decodeIfDoubleEscaped` corrupted single-line files (minified JS, JSON) containing `\n` inside strings
+- One output channel per agent is reused instead of a new one per run
+- CLI: `--max-rounds abc` silently ran zero rounds; an unknown `--platform` fell through to Ollama; unexpected errors surfaced as unhandled rejections
+
+### Build
+
+- CI on every push and pull request (type-check of extension and CLI, lint, unit tests in plain Node, VS Code integration tests, CLI smoke test, VSIX size budget); releases run CI first, verify the tag matches both package versions, and can be re-run safely
+- Tests: one framework (mocha), new suites for the Do agent, sandbox, providers, Control parsing and index recovery; lint covers tests and the CLI and fails on errors
+- `onnxruntime-web` pinned to the exact build Transformers.js requires; dependabot
 
 ## [0.6.2] - 2026-10-14
 
