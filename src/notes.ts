@@ -17,7 +17,6 @@ import {
 } from '@common/notes';
 import { getExtensionResponse } from './providers';
 import { log } from './log';
-import { takeScreenshot } from '@common/control';
 
 // ── Storage (global, tagged by workspace) ─────────────────────────────────────
 
@@ -133,6 +132,8 @@ export async function captureScreenshot(
   try {
     const dir = getScreenshotDir(context);
     if (!fs.existsSync(dir)) {fs.mkdirSync(dir, { recursive: true });}
+    // Loaded on first use — keeps jimp / screenshot-desktop out of activation
+    const { takeScreenshot } = await import('../common/control.js');
     const { base64 } = await takeScreenshot();
     const id = genId();
     const file = path.join(dir, `${id}.png`);

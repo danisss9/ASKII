@@ -196,6 +196,59 @@
         "category": "ASKII"
       }
     ],
+    "walkthroughs": [
+      {
+        "id": "askii.gettingStarted",
+        "title": "Get started with ASKII",
+        "description": "Pick an LLM, ask your first question, run an agent task and see what is sent where.",
+        "steps": [
+          {
+            "id": "setup",
+            "title": "Choose your LLM",
+            "description": "Pick a provider and models — local or cloud. API keys go to VS Code secret storage.\n[Open Setup](command:askii.openSetup)",
+            "media": {
+              "markdown": "media/walkthrough/setup.md"
+            },
+            "completionEvents": [
+              "onCommand:askii.openSetup"
+            ]
+          },
+          {
+            "id": "ask",
+            "title": "Ask about your code",
+            "description": "Select some code and ask a question — answers stream in with clickable file references.\n[Ask ASKII](command:askii.askQuestion)",
+            "media": {
+              "markdown": "media/walkthrough/ask.md"
+            },
+            "completionEvents": [
+              "onCommand:askii.askQuestion"
+            ]
+          },
+          {
+            "id": "do",
+            "title": "Let ASKII do a task",
+            "description": "The workspace agent explores and edits files — every write and command is confirmed, and you can undo the whole run.\n[Run ASKII Do](command:askii.doTask)",
+            "media": {
+              "markdown": "media/walkthrough/do.md"
+            },
+            "completionEvents": [
+              "onCommand:askii.doTask"
+            ]
+          },
+          {
+            "id": "privacy",
+            "title": "Know what is sent where",
+            "description": "See which data each feature sends to your provider, and how to keep secrets out of inline features.\n[Review inline exclusions](command:workbench.action.openSettings?%22askii.inlineExcludeGlobs%22)",
+            "media": {
+              "markdown": "media/walkthrough/privacy.md"
+            },
+            "completionEvents": [
+              "onStepSelected"
+            ]
+          }
+        ]
+      }
+    ],
     "menus": {
       "scm/title": [
         {

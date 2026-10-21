@@ -6,15 +6,12 @@ import {
   AskiiHoverProvider,
   explanationCache,
 } from './decorations';
-import {
-  askAskiiCommand,
-  askiiEditCommand,
-  askiiDoCommand,
-  askiiControlCommand,
-  askiiReloadWikiCommand,
-  askiiDiffProvider,
-  disposeAgentChannels,
-} from './commands';
+import { askAskiiCommand } from './ask';
+import { askiiEditCommand } from './edit';
+import { askiiDoCommand } from './do';
+import { askiiReloadWikiCommand } from './wikiReload';
+import { askiiDiffProvider } from './diffProvider';
+import { disposeAgentChannels } from './commandUtils';
 import { validateProviderConfig } from './providers';
 import {
   AskiiInlineCompletionProvider,
@@ -104,7 +101,10 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(vscode.commands.registerCommand('askii.editCode', askiiEditCommand));
   context.subscriptions.push(vscode.commands.registerCommand('askii.doTask', askiiDoCommand));
   context.subscriptions.push(
-    vscode.commands.registerCommand('askii.controlTask', askiiControlCommand),
+    // Loaded on first use: Control pulls in jimp, screenshot-desktop and Puppeteer
+    vscode.commands.registerCommand('askii.controlTask', async () =>
+      (await import('./control.js')).askiiControlCommand(),
+    ),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('askii.reloadWiki', askiiReloadWikiCommand),
