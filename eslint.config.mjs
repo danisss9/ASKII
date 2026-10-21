@@ -28,4 +28,23 @@ export default tseslint.config(
             semi: "error",
         },
     },
+    {
+        // Webview scripts: plain browser JavaScript, loaded as classic scripts
+        files: ["media/**/*.js"],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: "script",
+        },
+        rules: {
+            "@typescript-eslint/no-unused-vars": ["error", {
+                argsIgnorePattern: "^_",
+                varsIgnorePattern: "^_",
+                caughtErrorsIgnorePattern: "^_",
+            }],
+            curly: ["error", "multi-line"],
+            eqeqeq: ["error", "smart"],
+            "no-throw-literal": "error",
+            semi: "error",
+        },
+    },
 );

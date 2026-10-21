@@ -31,6 +31,8 @@ First stable release: safe by default, cancellable everywhere, no silent data lo
 ### Changed
 
 - **One provider layer** (`common/providers.ts`): every provider and feature can be cancelled mid-request (the request is torn down, not ignored), times out, and is retried with exponential backoff only on network errors, 408/409/429 and 5xx — never on authentication errors, after a cancel, or once output has streamed. LM Studio now streams. Anthropic's default output limit is 8192 tokens
+- **Shared Control, note and commit-message code**: the screen/browser Control loops (`common/controlAgent.ts`), note classification (`common/noteClassify.ts`) and commit-message prompting (`common/commitMessage.ts`) now run the same code in the extension and the CLI. The CLI gains `--commit-style` / `ASKII_COMMIT_STYLE`, locates `click_text` targets before asking (like the extension), and the "screen did not change" hint the model sees now refers to the action that was just run
+- **Webview scripts and styles** moved from inline strings to `media/*.js` / `media/*.css`, loaded with `asWebviewUri` and linted
 - **One Do agent** (`common/doAgent.ts`) shared by the extension and the CLI: replies cut off at the token limit are never applied (the model is asked for smaller steps), unknown action types are reported back to the model, and Keep / Undo all is also offered after a stop or an error
 - **Command palette**: titles no longer repeat the category (`ASKII: Ask` instead of `ASKII: Ask ASKII`); Generate Commit Message and Code Review appear when a Git repository is open; Edit only with an editor open
 - Marketplace metadata: categories (AI, Chat, Machine Learning, SCM Providers), keywords, license, homepage and issue links

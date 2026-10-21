@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { mediaRoot } from './webviewAssets';
 import { randomBytes } from 'crypto';
 import { type NoteKind, searchNotes, describeRecurrence, describeEventTrigger } from '@common/notes';
 import {
@@ -55,7 +56,7 @@ export async function askiiNoteCommand(
     {
       enableScripts: true,
       retainContextWhenHidden: true,
-      localResourceRoots: [context.globalStorageUri],
+      localResourceRoots: [context.globalStorageUri, mediaRoot()],
     },
   );
   panel.iconPath = vscode.Uri.parse(

@@ -568,7 +568,7 @@
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile",
     "check-types": "tsc --noEmit && tsc --noEmit -p cli",
-    "lint": "eslint src common test cli/index.ts",
+    "lint": "eslint src common test cli/index.ts media",
     "test": "vscode-test",
     "test:unit": "npm run compile-tests && mocha --ui tdd \"out/test/**/*.test.js\"",
     "check-versions": "node scripts/check-versions.js",

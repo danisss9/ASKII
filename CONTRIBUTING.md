@@ -12,6 +12,7 @@ cd ASKII && npm install && (cd cli && npm install)
 - `src/` — VS Code extension host code
 - `common/` — pure Node code shared by the extension and the CLI (must never import `vscode`)
 - `cli/` — the `askii-cli` npm package
+- `media/` — webview scripts and styles (plain browser JavaScript/CSS, loaded via `asWebviewUri`; linted with the rest) and walkthrough pages
 - `test/` — mocha (`tdd` UI) suites; they run in plain Node *and* inside VS Code
 
 ## Before you open a pull request

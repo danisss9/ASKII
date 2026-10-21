@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { mediaRoot } from './webviewAssets';
 import { randomBytes } from 'crypto';
 import type { ReviewProblem } from '@common/codeReview';
 import { getCodeReviewPanelHtml } from './codeReviewPanelHtml';
@@ -62,7 +63,7 @@ function ensurePanel(): void {
     'askiiCodeReview',
     'ASKII Code Review',
     vscode.ViewColumn.Active,
-    { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
+    { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [mediaRoot()] },
   );
   currentPanel = panel;
   const nonce = randomBytes(16).toString('base64');

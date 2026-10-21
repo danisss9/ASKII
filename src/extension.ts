@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { initWebviewAssets } from './webviewAssets';
 import {
   initDecorationType,
   cleanupDecorations,
@@ -32,6 +33,7 @@ import { openSetupPanel, shouldOpenSetupAutomatically } from './setupPanel';
 
 export async function activate(context: vscode.ExtensionContext) {
   initLog(context);
+  initWebviewAssets(context);
   initializeProviderSecrets(context.secrets);
   const migrationProblems = await migrateLegacyApiKeys(context);
 

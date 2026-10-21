@@ -1,0 +1,83 @@
+body {
+  font-family: var(--vscode-font-family, Arial, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  padding: 20px 28px;
+  line-height: 1.7;
+  max-width: 860px;
+}
+h1,h2,h3,h4 { color: var(--vscode-foreground); margin-top: 1.2em; }
+code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  background: var(--vscode-textCodeBlock-background, #1e1e1e);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 0.92em;
+}
+pre {
+  background: var(--vscode-textCodeBlock-background, #1e1e1e);
+  border-radius: 5px;
+  padding: 12px 16px;
+  overflow-x: auto;
+}
+pre code { background: none; padding: 0; }
+blockquote {
+  border-left: 3px solid var(--vscode-activityBarBadge-background, #007acc);
+  margin: 0; padding-left: 12px; opacity: 0.85;
+}
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid var(--vscode-editorWidget-border, #555); padding: 6px 10px; }
+th { background: var(--vscode-textCodeBlock-background); }
+a { color: var(--vscode-textLink-foreground, #4daafc); }
+hr { border: none; border-top: 1px solid var(--vscode-editorWidget-border, #555); }
+.thinking { opacity: 0.6; font-style: italic; }
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.6em;
+}
+.header-row h2 { margin: 0; opacity: 0.85; font-size: 1em; font-weight: 600; }
+.btn-group { display: flex; gap: 2px; align-items: center; }
+.icon-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  color: var(--vscode-foreground);
+  opacity: 0.55;
+  border-radius: 4px;
+  transition: opacity 0.15s;
+}
+.icon-btn:hover { opacity: 1; }
+.icon-btn.active { opacity: 1; color: var(--vscode-textLink-foreground, #4daafc); }
+#copyBtn.copied { opacity: 1; color: var(--vscode-terminal-ansiGreen, #4ec9b0); }
+#copyBtn .icon-check { display: none; }
+#copyBtn.copied .icon-copy { display: none; }
+#copyBtn.copied .icon-check { display: inline-block; animation: check-pop 0.25s ease-out; }
+@keyframes check-pop {
+  from { transform: scale(0.4); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.history-entry { margin: 0 0 1.2em; }
+.history-entry:last-child { margin-bottom: 0; }
+.history-q {
+  font-weight: 600;
+  font-size: 0.92em;
+  background: var(--vscode-input-background, rgba(128,128,128,0.12));
+  border-left: 3px solid var(--vscode-activityBarBadge-background, #007acc);
+  border-radius: 3px;
+  padding: 4px 10px;
+  margin-bottom: 0.5em;
+  opacity: 0.9;
+}
+.stream-cursor {
+  display: inline-block;
+  opacity: 0.7;
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
