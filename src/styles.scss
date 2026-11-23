@@ -239,3 +239,149 @@ select {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Shared ASKII pet micro-animations & particle motion */
+@keyframes voice-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes particle-rise {
+  0% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--px, 0px)), 4px) scale(0.7);
+  }
+  20% {
+    opacity: 1;
+    transform: translate(calc(-50% + var(--px, 0px)), -5px) scale(1.05);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--px, 0px)), -24px) scale(0.92);
+  }
+}
+
+@keyframes pet-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.018, 0.985);
+  }
+}
+
+@keyframes pet-squish {
+  0% {
+    transform: scale(1, 1);
+  }
+  30% {
+    transform: scale(1.09, 0.88);
+  }
+  65% {
+    transform: scale(0.96, 1.05);
+  }
+  100% {
+    transform: scale(1, 1);
+  }
+}
+
+@keyframes pet-bounce {
+  from {
+    transform: translateY(0) scale(1);
+  }
+  to {
+    transform: translateY(-3px) scale(1.03);
+  }
+}
+
+@keyframes pet-peek {
+  0% {
+    transform: scale(0.95);
+  }
+  45% {
+    transform: scale(1.08) translateY(-2px);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes pet-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2.5px);
+  }
+}
+
+@keyframes pet-wiggle {
+  from {
+    transform: rotate(-2.5deg) scale(1.02);
+  }
+  to {
+    transform: rotate(2.5deg) scale(1.02);
+  }
+}
+
+@keyframes pet-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  50% {
+    transform: translateX(3px);
+  }
+  75% {
+    transform: translateX(-2px);
+  }
+}
+
+@keyframes pet-shiver {
+  0%,
+  85%,
+  100% {
+    transform: translateY(0);
+  }
+  90% {
+    transform: translateY(1px) rotate(-1deg);
+  }
+  95% {
+    transform: translateY(1px) rotate(1deg);
+  }
+}
+
+@keyframes pet-flip {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  40% {
+    transform: rotate(-8deg) translateY(-4px) scale(1.06);
+  }
+  75% {
+    transform: rotate(6deg) translateY(-2px) scale(1.03);
+  }
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+}
+
+@keyframes pet-sway {
+  0%,
+  100% {
+    transform: rotate(-1.5deg);
+  }
+  50% {
+    transform: rotate(1.5deg);
+  }
+}

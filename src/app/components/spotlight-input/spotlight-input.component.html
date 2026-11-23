@@ -33,16 +33,118 @@
   }
 
   <div class="pill-bar" data-tauri-drag-region>
-    <button
-      type="button"
-      class="askii-face"
-      [class.thinking]="state.isThinking()"
-      [class.printing]="state.isPrinting()"
-      [title]="'ASKII (' + state.config().shortcut + ' · ' + state.config().actionShortcut + ' selection) — click to say hi'"
-      (click)="state.pokeAskii()"
-    >
-      {{ state.kaomoji() }}
-    </button>
+    <div #petAnchor class="askii-pet-anchor">
+      <div class="pet-particles" aria-hidden="true">
+        @for (p of state.petParticles(); track p.id) {
+          <span
+            [class]="'pet-particle variant-' + p.variant"
+            [style.--px.px]="p.offsetX"
+          >
+            {{ p.glyph }}
+          </span>
+        }
+      </div>
+
+      <button
+        type="button"
+        class="askii-face"
+        [attr.data-aura]="state.petVisual().aura"
+        [attr.data-motion]="state.petVisual().motion"
+        [class.thinking]="state.isThinking()"
+        [class.printing]="state.isPrinting()"
+        [class.menu-open]="state.petMenuOpen()"
+        [title]="state.petVisual().label + ' — Left-click to pet · Right-click to interact'"
+        (click)="onPetClick($event)"
+        (contextmenu)="onPetContextMenu($event)"
+        (mouseenter)="state.setPetHover(true)"
+        (mouseleave)="state.setPetHover(false)"
+      >
+        {{ state.kaomoji() }}
+      </button>
+
+      @if (state.petMenuOpen()) {
+        <div
+          class="pet-menu"
+          role="menu"
+          aria-label="Interact with ASKII"
+          (click)="$event.stopPropagation()"
+          (contextmenu)="$event.preventDefault(); $event.stopPropagation()"
+        >
+          <div class="pet-menu-header">
+            <div class="pet-mood-row">
+              <span class="pet-mood-label">{{ state.petVisual().label }}</span>
+              <span class="pet-mood-face">{{ state.kaomoji() }}</span>
+            </div>
+            <div class="pet-mood-reason">{{ state.petVisual().reason }}</div>
+            <div class="pet-vitals">
+              <span class="vital-group" [title]="'Affection: ' + state.petAffection() + '%'">
+                <span class="vital-name">♥</span>
+                <span class="vital-pips">
+                  @for (slot of pipSlots; track slot) {
+                    <span class="pip heart" [class.filled]="slot <= affectionLevel"></span>
+                  }
+                </span>
+              </span>
+              <span class="vital-group" [title]="'Energy: ' + state.petEnergy() + '%'">
+                <span class="vital-name">⚡</span>
+                <span class="vital-pips">
+                  @for (slot of pipSlots; track slot) {
+                    <span class="pip energy" [class.filled]="slot <= energyLevel"></span>
+                  }
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <div class="pet-menu-actions">
+            <button type="button" class="pet-action-item" role="menuitem" (click)="state.petAskii()">
+              <span class="pet-action-icon">♡</span>
+              <span class="pet-action-text">Pet ASKII</span>
+              <span class="pet-action-hint">Left-click</span>
+            </button>
+            <button type="button" class="pet-action-item" role="menuitem" (click)="state.feedAskii()">
+              <span class="pet-action-icon">✧</span>
+              <span class="pet-action-text">Feed Snack</span>
+              <span class="pet-action-hint">+Energy</span>
+            </button>
+            <button
+              type="button"
+              class="pet-action-item"
+              role="menuitem"
+              (click)="state.playWithAskii()"
+            >
+              <span class="pet-action-icon">♪</span>
+              <span class="pet-action-text">Play / Trick</span>
+              <span class="pet-action-hint">+Mood</span>
+            </button>
+            <button
+              type="button"
+              class="pet-action-item"
+              role="menuitem"
+              (click)="state.toggleAskiiShades()"
+            >
+              <span class="pet-action-icon">■</span>
+              <span class="pet-action-text">
+                {{ state.petShadesOn() ? 'Take off Shades' : 'Put on Shades' }}
+              </span>
+              <span class="pet-action-hint">Style</span>
+            </button>
+            <button
+              type="button"
+              class="pet-action-item"
+              role="menuitem"
+              (click)="state.toggleAskiiNap()"
+            >
+              <span class="pet-action-icon">zZ</span>
+              <span class="pet-action-text">
+                {{ state.isPetSleeping() ? 'Wake Up' : 'Tuck in for Nap' }}
+              </span>
+              <span class="pet-action-hint">{{ state.isPetSleeping() ? 'Wake' : 'Rest' }}</span>
+            </button>
+          </div>
+        </div>
+      }
+    </div>
 
     <div class="input-stack">
       <div class="ghost-mirror" aria-hidden="true">
@@ -76,31 +178,17 @@
           Stop
         </button>
       } @else {
-        <button
-          type="button"
-          class="icon-btn"
-          [class.recording]="state.isRecordingVoice()"
-          title="Voice-to-Ask (click to start/stop dictation)"
-          (click)="state.toggleVoiceRecording()"
-        >
-          {{ state.isRecordingVoice() ? '●' : '🎙' }}
-        </button>
-        <button
-          type="button"
-          class="icon-btn"
-          title="Attach clipboard (@clip)"
-          (click)="state.attachClipboard()"
-        >
-          📋
-        </button>
-        <button
-          type="button"
-          class="icon-btn"
-          title="Capture screen (@screen)"
-          (click)="state.attachScreen('full')"
-        >
-          📷
-        </button>
+        @if (state.isRecordingVoice()) {
+          <button
+            type="button"
+            class="voice-pill"
+            title="Listening — click to stop and transcribe"
+            (click)="state.toggleVoiceRecording()"
+          >
+            <span class="voice-dot"></span>
+            Listening
+          </button>
+        }
         @if (state.isAutoDo()) {
           <button
             type="button"

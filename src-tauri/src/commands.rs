@@ -54,6 +54,10 @@ pub struct AskRequest {
     pub messages: Vec<ChatMessage>,
     pub system_prompt_override: Option<String>,
     pub model_override: Option<String>,
+    #[serde(default)]
+    pub enable_screen_control: bool,
+    #[serde(default)]
+    pub enable_browser_control: bool,
 }
 
 fn build_state_dto(config: &AppConfig) -> AppStateDto {
@@ -318,6 +322,27 @@ pub async fn ask_stream(
         base_system.push_str(&mem_block);
     }
 
+    if req.enable_screen_control {
+        base_system.push_str(
+            "\n\n[Screen Control Mode (/screen) Active]\n\
+            The user explicitly enabled Windows mouse, keyboard, and screen control tools (`screen_capture`, `screen_mouse_move`, `screen_mouse_click`, `screen_mouse_drag`, `screen_mouse_scroll`, `screen_keyboard_type`, `screen_keyboard_hotkey`, `screen_wait`). \
+            Start by calling `screen_capture` to inspect the desktop before clicking. Coordinates default to the latest screenshot's `imageSize` space and ASKII automatically maps them to exact physical screen pixels. Verify important UI actions with `screen_wait` and `screen_capture`.",
+        );
+    }
+
+    if req.enable_browser_control {
+        base_system.push_str(
+            "\n\n[Chrome Puppeteer Mode (/browser) Active]\n\
+            The user explicitly enabled Puppeteer Chrome automation tools (`browser_launch`, `browser_navigate`, `browser_snapshot`, `browser_screenshot`, `browser_click`, `browser_type`, `browser_press_key`, `browser_scroll`, `browser_evaluate`, `browser_tabs`, `browser_wait`, `browser_close`). \
+            Use `browser_navigate` (or `browser_launch`) to open pages, `browser_snapshot` to inspect interactive selectors and text cheaply, and `browser_screenshot` when you need visual inspection. Keep the browser open unless the user asks to close it.",
+        );
+    }
+
+    let caps = agent::AgentRunCapabilities {
+        allow_screen_control: req.enable_screen_control,
+        allow_browser_control: req.enable_browser_control,
+    };
+
     let mut full_messages = Vec::with_capacity(req.messages.len() + 1);
     full_messages.push(ChatMessage {
         role: "system".to_string(),
@@ -334,6 +359,7 @@ pub async fn ask_stream(
         &state.agent_runtime,
         &conn,
         &agent_settings,
+        caps,
         full_messages,
         token.clone(),
         &on_event,
@@ -611,6 +637,8 @@ pub fn hide_window(app: AppHandle) {
 }
 
 #[tauri::command]
-pub fn quit_app(app: AppHandle) {
+pub async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    state.agent_runtime.browser_controller.shutdown().await;
     app.exit(0);
+    Ok(())
 }

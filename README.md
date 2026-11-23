@@ -62,6 +62,8 @@ Sub-50ms local results right inside the spotlight input — no LLM round-trip re
 
 | Command | Action |
 | --- | --- |
+| `/screen <task>` | Opt-in Windows mouse, keyboard & desktop vision control (`screen_capture`, `screen_mouse_*`, `screen_keyboard_*`) — disabled on normal prompts |
+| `/browser <task>` | Opt-in Chrome browser automation via Puppeteer (`browser_launch`, `browser_navigate`, `browser_snapshot`, `browser_screenshot`, `browser_click`, `browser_type`, `browser_evaluate`, `browser_tabs`) — disabled on normal prompts |
 | `/model [filter]` | Hot-switch between recently used providers & models without opening Setup |
 | `/autodo` | Toggle **Auto Do** autonomous OS action mode on or off |
 | `/agent` | Configure ASKII Do permissions, Auto Do mode, destructive guardrails, and MCP servers |

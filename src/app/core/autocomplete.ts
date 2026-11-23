@@ -8,6 +8,18 @@ import {
 
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   {
+    command: '/screen',
+    label: '/screen',
+    description: 'Control mouse, keyboard & desktop screen visually (e.g. /screen open Notepad and type hi)',
+    kaomoji: '(☞ﾟヮﾟ)☞🖱',
+  },
+  {
+    command: '/browser',
+    label: '/browser',
+    description: 'Control Chrome browser via Puppeteer (e.g. /browser open github.com and search tauri)',
+    kaomoji: '(⌐■_■)🌐',
+  },
+  {
     command: '/model',
     label: '/model',
     description: 'Hot-switch between recently used providers & models without opening Setup',
@@ -30,6 +42,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     label: '/snip',
     description: 'Capture your screen as a vision attachment (add "window" for active window)',
     kaomoji: '(◉_◉)📷',
+  },
+  {
+    command: '/voice',
+    label: '/voice',
+    description: 'Start or stop Voice-to-Ask microphone dictation',
+    kaomoji: '(◉_◉)♪',
   },
   {
     command: '/setup',
@@ -130,6 +148,42 @@ export const CONTEXT_MENTIONS: readonly {
     badge: 'WIN📷',
   },
 ];
+
+export interface ParsedControlCommand {
+  enableScreenControl: boolean;
+  enableBrowserControl: boolean;
+  task: string;
+}
+
+export function parseControlCommands(raw: string): ParsedControlCommand | null {
+  let rest = raw.trim();
+  let enableScreenControl = false;
+  let enableBrowserControl = false;
+
+  while (true) {
+    const match = /^\/(screen|browser)(?:\s+|$)/i.exec(rest);
+    if (!match) {
+      break;
+    }
+    const token = match[1].toLowerCase();
+    if (token === 'screen') {
+      enableScreenControl = true;
+    } else if (token === 'browser') {
+      enableBrowserControl = true;
+    }
+    rest = rest.slice(match[0].length).trim();
+  }
+
+  if (!enableScreenControl && !enableBrowserControl) {
+    return null;
+  }
+
+  return {
+    enableScreenControl,
+    enableBrowserControl,
+    task: rest,
+  };
+}
 
 export interface AutocompleteResult {
   ghostSuffix: string;

@@ -1,10 +1,12 @@
 pub mod backup;
+pub mod browser;
 pub mod mcp;
+pub mod screen;
 pub mod tools;
 
 use crate::config::{AgentMode, AgentSettings};
 use crate::llm::providers::ProviderConnection;
-use crate::llm::{ChatMessage, StreamEvent, stream_chat_with_tools};
+use crate::llm::{ChatMessage, StreamEvent, ToolDefinition, stream_chat_with_tools};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -12,6 +14,12 @@ use tauri::AppHandle;
 use tauri::ipc::Channel;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AgentRunCapabilities {
+    pub allow_screen_control: bool,
+    pub allow_browser_control: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +33,8 @@ pub enum ApprovalDecision {
 pub struct AgentRuntime {
     pub pending_approvals: Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>,
     pub session_allowed_tools: Mutex<HashSet<String>>,
+    pub screen_state: screen::ScreenControlState,
+    pub browser_controller: browser::BrowserController,
 }
 
 impl AgentRuntime {
@@ -44,6 +54,28 @@ impl AgentRuntime {
             let _ = tx.send(ApprovalDecision::Deny);
         }
     }
+}
+
+pub fn resolve_tools_for_run(
+    settings: &AgentSettings,
+    caps: AgentRunCapabilities,
+    mcp_defs: Vec<ToolDefinition>,
+) -> Vec<ToolDefinition> {
+    let mut defs = if settings.enabled {
+        let mut base = tools::builtin_tool_definitions();
+        base.extend(mcp_defs);
+        base
+    } else {
+        Vec::new()
+    };
+
+    if caps.allow_screen_control {
+        defs.extend(screen::screen_tool_definitions());
+    }
+    if caps.allow_browser_control {
+        defs.extend(browser::browser_tool_definitions());
+    }
+    defs
 }
 
 pub fn should_auto_approve(
@@ -74,24 +106,33 @@ pub async fn run_agent_chat(
     runtime: &AgentRuntime,
     conn: &ProviderConnection,
     settings: &AgentSettings,
+    caps: AgentRunCapabilities,
     initial_messages: Vec<ChatMessage>,
     cancel: CancellationToken,
     on_event: &Channel<StreamEvent>,
 ) -> Result<bool, String> {
-    let mut all_tools = if settings.enabled {
-        let mut defs = tools::builtin_tool_definitions();
-        if !settings.mcp_servers.is_empty() {
-            let mcp_defs = mcp::discover_mcp_tools(&settings.mcp_servers).await;
-            defs.extend(mcp_defs);
-        }
-        defs
+    let mcp_defs = if settings.enabled && !settings.mcp_servers.is_empty() {
+        mcp::discover_mcp_tools(&settings.mcp_servers).await
     } else {
         Vec::new()
     };
+    let mut all_tools = resolve_tools_for_run(settings, caps, mcp_defs);
 
     let mut messages = initial_messages;
-    let max_steps = settings.max_steps.clamp(1, 20) as usize;
+    let max_steps = if caps.allow_screen_control || caps.allow_browser_control {
+        settings.max_steps.max(15).clamp(1, 25) as usize
+    } else {
+        settings.max_steps.clamp(1, 20) as usize
+    };
     let mut last_truncated = false;
+    let mut overlay_hidden_for_screen = false;
+
+    let restore_overlay_if_hidden = |hidden: &mut bool| {
+        if *hidden {
+            crate::window::show_askii_with_context(app, false, None, None);
+            *hidden = false;
+        }
+    };
 
     for step in 0..max_steps {
         let tools_slice = if all_tools.is_empty() {
@@ -118,17 +159,28 @@ pub async fn run_agent_chat(
             Err(err) if step == 0 && !all_tools.is_empty() && err.contains("HTTP 400") => {
                 all_tools.clear();
                 let ch_retry = on_event.clone();
-                stream_chat_with_tools(conn, &messages, None, cancel.clone(), move |chunk| {
+                match stream_chat_with_tools(conn, &messages, None, cancel.clone(), move |chunk| {
                     let _ = ch_retry.send(StreamEvent::Chunk { text: chunk });
                 })
-                .await?
+                .await
+                {
+                    Ok(o) => o,
+                    Err(e) => {
+                        restore_overlay_if_hidden(&mut overlay_hidden_for_screen);
+                        return Err(e);
+                    }
+                }
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                restore_overlay_if_hidden(&mut overlay_hidden_for_screen);
+                return Err(err);
+            }
         };
 
         last_truncated = outcome.truncated;
 
         if outcome.tool_calls.is_empty() {
+            restore_overlay_if_hidden(&mut overlay_hidden_for_screen);
             return Ok(last_truncated);
         }
 
@@ -144,6 +196,7 @@ pub async fn run_agent_chat(
 
         for call in outcome.tool_calls {
             if cancel.is_cancelled() {
+                restore_overlay_if_hidden(&mut overlay_hidden_for_screen);
                 return Err("__CANCELLED__".to_string());
             }
 
@@ -161,6 +214,10 @@ pub async fn run_agent_chat(
                     &allowed_set,
                 )
             };
+
+            if !auto_ok {
+                restore_overlay_if_hidden(&mut overlay_hidden_for_screen);
+            }
 
             let _ = on_event.send(StreamEvent::ToolProposed {
                 call_id: call.id.clone(),
@@ -183,6 +240,7 @@ pub async fn run_agent_chat(
                 let decision = tokio::select! {
                     _ = cancel.cancelled() => {
                         runtime.pending_approvals.lock().unwrap().remove(&call.id);
+                        restore_overlay_if_hidden(&mut overlay_hidden_for_screen);
                         return Err("__CANCELLED__".to_string());
                     }
                     res = rx => res.unwrap_or(ApprovalDecision::Deny),
@@ -221,20 +279,40 @@ pub async fn run_agent_chat(
                 name: call.name.clone(),
             });
 
-            let exec = if call.name.starts_with("mcp__") {
+            let exec = if screen::is_screen_tool(&call.name) {
+                if !caps.allow_screen_control {
+                    tools::ToolExecutionOutput::err(
+                        "Screen mouse/keyboard control is disabled unless the user uses the /screen command.",
+                    )
+                } else {
+                    screen::execute_screen_tool(
+                        app,
+                        &runtime.screen_state,
+                        &call.name,
+                        &call.arguments,
+                        &mut overlay_hidden_for_screen,
+                    )
+                    .await
+                }
+            } else if browser::is_browser_tool(&call.name) {
+                if !caps.allow_browser_control {
+                    tools::ToolExecutionOutput::err(
+                        "Chrome Puppeteer control is disabled unless the user uses the /browser command.",
+                    )
+                } else {
+                    browser::execute_browser_tool(
+                        &runtime.browser_controller,
+                        &call.name,
+                        &call.arguments,
+                    )
+                    .await
+                }
+            } else if call.name.starts_with("mcp__") {
                 match mcp::invoke_mcp_tool(&settings.mcp_servers, &call.name, call.arguments.clone())
                     .await
                 {
-                    Ok(output) => tools::ToolExecutionOutput {
-                        success: true,
-                        output,
-                        backup_id: None,
-                    },
-                    Err(e) => tools::ToolExecutionOutput {
-                        success: false,
-                        output: e,
-                        backup_id: None,
-                    },
+                    Ok(output) => tools::ToolExecutionOutput::ok(output),
+                    Err(e) => tools::ToolExecutionOutput::err(e),
                 }
             } else {
                 tools::execute_builtin_tool(app, &call.name, &call.arguments).await
@@ -251,7 +329,7 @@ pub async fn run_agent_chat(
             messages.push(ChatMessage {
                 role: "tool".to_string(),
                 content: exec.output,
-                images: Vec::new(),
+                images: exec.images,
                 tool_calls: Vec::new(),
                 tool_call_id: Some(call.id),
                 name: Some(call.name),
@@ -259,6 +337,7 @@ pub async fn run_agent_chat(
         }
     }
 
+    restore_overlay_if_hidden(&mut overlay_hidden_for_screen);
     Ok(last_truncated)
 }
 
@@ -303,5 +382,40 @@ mod tests {
             Some("Recursive delete"),
             &empty
         ));
+    }
+
+    #[test]
+    fn gates_screen_and_browser_tools_behind_explicit_capabilities() {
+        let settings = AgentSettings::default();
+
+        let default_tools =
+            resolve_tools_for_run(&settings, AgentRunCapabilities::default(), Vec::new());
+        assert!(!default_tools.iter().any(|t| screen::is_screen_tool(&t.name)));
+        assert!(!default_tools.iter().any(|t| browser::is_browser_tool(&t.name)));
+
+        let screen_only = resolve_tools_for_run(
+            &settings,
+            AgentRunCapabilities {
+                allow_screen_control: true,
+                allow_browser_control: false,
+            },
+            Vec::new(),
+        );
+        assert!(screen_only.iter().any(|t| t.name == "screen_capture"));
+        assert!(screen_only.iter().any(|t| t.name == "screen_mouse_click"));
+        assert!(screen_only.iter().any(|t| t.name == "screen_keyboard_type"));
+        assert!(!screen_only.iter().any(|t| browser::is_browser_tool(&t.name)));
+
+        let browser_only = resolve_tools_for_run(
+            &settings,
+            AgentRunCapabilities {
+                allow_screen_control: false,
+                allow_browser_control: true,
+            },
+            Vec::new(),
+        );
+        assert!(browser_only.iter().any(|t| t.name == "browser_navigate"));
+        assert!(browser_only.iter().any(|t| t.name == "browser_click"));
+        assert!(!browser_only.iter().any(|t| screen::is_screen_tool(&t.name)));
     }
 }

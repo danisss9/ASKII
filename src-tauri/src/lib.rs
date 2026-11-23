@@ -226,6 +226,7 @@ pub fn run() {
 
             tray::setup_tray(handle, &active_shortcut)?;
             clipboard_ring::spawn_clipboard_watcher(handle.clone());
+            context::spawn_activity_watcher(handle.clone());
 
             if let Some(main_win) = app.get_webview_window("main") {
                 #[cfg(target_os = "windows")]

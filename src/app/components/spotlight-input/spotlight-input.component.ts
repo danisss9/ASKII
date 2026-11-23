@@ -1,4 +1,4 @@
-import { Component, ElementRef, effect, inject, viewChild } from '@angular/core';
+import { Component, ElementRef, HostListener, effect, inject, viewChild } from '@angular/core';
 import { AskiiStateService } from '../../core/askii-state.service';
 import { AutocompleteSuggestion } from '../../core/models';
 
@@ -10,7 +10,9 @@ import { AutocompleteSuggestion } from '../../core/models';
 })
 export class SpotlightInputComponent {
   readonly state = inject(AskiiStateService);
+  readonly pipSlots = [1, 2, 3, 4, 5] as const;
   private readonly inputEl = viewChild<ElementRef<HTMLInputElement>>('promptInput');
+  private readonly petAnchorEl = viewChild<ElementRef<HTMLElement>>('petAnchor');
 
   constructor() {
     effect(() => {
@@ -22,6 +24,47 @@ export class SpotlightInputComponent {
         });
       }
     });
+  }
+
+  @HostListener('document:click', ['$event'])
+  onDocumentClick(event: MouseEvent): void {
+    if (!this.state.petMenuOpen()) {
+      return;
+    }
+    const anchor = this.petAnchorEl()?.nativeElement;
+    if (anchor && event.target instanceof Node && !anchor.contains(event.target)) {
+      this.state.closePetMenu();
+    }
+  }
+
+  @HostListener('document:contextmenu', ['$event'])
+  onDocumentContextMenu(event: MouseEvent): void {
+    if (!this.state.petMenuOpen()) {
+      return;
+    }
+    const anchor = this.petAnchorEl()?.nativeElement;
+    if (anchor && event.target instanceof Node && !anchor.contains(event.target)) {
+      this.state.closePetMenu();
+    }
+  }
+
+  onPetClick(event: MouseEvent): void {
+    event.stopPropagation();
+    this.state.petAskii();
+  }
+
+  onPetContextMenu(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.state.togglePetMenu();
+  }
+
+  get affectionLevel(): number {
+    return Math.max(0, Math.min(5, Math.round(this.state.petAffection() / 20)));
+  }
+
+  get energyLevel(): number {
+    return Math.max(0, Math.min(5, Math.round(this.state.petEnergy() / 20)));
   }
 
   onInput(event: Event): void {
@@ -68,7 +111,13 @@ export class SpotlightInputComponent {
         if (chosen.kind === 'mention') {
           void this.state.applyMentionToken(chosen.value);
         } else {
-          this.state.setInput(chosen.kind === 'recipe' ? `${chosen.value} ` : chosen.value);
+          const needsTrailingSpace =
+            chosen.kind === 'recipe' ||
+            chosen.value === '/screen' ||
+            chosen.value === '/browser' ||
+            chosen.value === '/remember' ||
+            chosen.value === '/model';
+          this.state.setInput(needsTrailingSpace ? `${chosen.value} ` : chosen.value);
         }
         return;
       }

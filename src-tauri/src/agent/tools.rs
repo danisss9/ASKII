@@ -1,5 +1,5 @@
-use crate::agent::backup;
-use crate::llm::ToolDefinition;
+use crate::agent::{backup, browser, screen};
+use crate::llm::{ImageAttachment, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -16,6 +16,28 @@ pub struct ToolExecutionOutput {
     pub success: bool,
     pub output: String,
     pub backup_id: Option<String>,
+    #[serde(default)]
+    pub images: Vec<ImageAttachment>,
+}
+
+impl ToolExecutionOutput {
+    pub fn ok(output: impl Into<String>) -> Self {
+        Self {
+            success: true,
+            output: output.into(),
+            backup_id: None,
+            images: Vec::new(),
+        }
+    }
+
+    pub fn err(output: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            output: output.into(),
+            backup_id: None,
+            images: Vec::new(),
+        }
+    }
 }
 
 pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
@@ -176,6 +198,12 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
 }
 
 pub fn tool_tier(name: &str) -> u8 {
+    if screen::is_screen_tool(name) {
+        return screen::screen_tool_tier(name);
+    }
+    if browser::is_browser_tool(name) {
+        return browser::browser_tool_tier(name);
+    }
     match name {
         "get_system_info"
         | "list_open_windows"
@@ -189,6 +217,12 @@ pub fn tool_tier(name: &str) -> u8 {
 }
 
 pub fn summarize_tool_call(name: &str, args: &Value) -> String {
+    if screen::is_screen_tool(name) {
+        return screen::summarize_screen_tool(name, args);
+    }
+    if browser::is_browser_tool(name) {
+        return browser::summarize_browser_tool(name, args);
+    }
     match name {
         "run_powershell" => {
             let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
@@ -325,6 +359,7 @@ pub async fn execute_builtin_tool(
             success: false,
             output: format!("Unknown built-in tool \"{name}\""),
             backup_id: None,
+            images: Vec::new(),
         },
     }
 }
@@ -363,6 +398,7 @@ fn run_system_info() -> ToolExecutionOutput {
         success: true,
         output: out,
         backup_id: None,
+        images: Vec::new(),
     }
 }
 
@@ -378,6 +414,7 @@ fn run_search_files(args: &Value) -> ToolExecutionOutput {
             success: false,
             output: "Missing required `query` parameter.".to_string(),
             backup_id: None,
+            images: Vec::new(),
         };
     }
     let root = args
@@ -429,6 +466,7 @@ fn run_search_files(args: &Value) -> ToolExecutionOutput {
         success: true,
         output,
         backup_id: None,
+        images: Vec::new(),
     }
 }
 
@@ -439,6 +477,7 @@ fn run_read_file(args: &Value) -> ToolExecutionOutput {
             success: false,
             output: "Missing `path`.".to_string(),
             backup_id: None,
+            images: Vec::new(),
         };
     }
     if is_sensitive_read_path(path) {
@@ -446,6 +485,7 @@ fn run_read_file(args: &Value) -> ToolExecutionOutput {
             success: false,
             output: "Blocked reading sensitive credential/key path.".to_string(),
             backup_id: None,
+            images: Vec::new(),
         };
     }
     match std::fs::read(path) {
@@ -461,12 +501,14 @@ fn run_read_file(args: &Value) -> ToolExecutionOutput {
                     text
                 },
                 backup_id: None,
+            images: Vec::new(),
             }
         }
         Err(e) => ToolExecutionOutput {
             success: false,
             output: format!("Failed to read `{path}`: {e}"),
             backup_id: None,
+            images: Vec::new(),
         },
     }
 }
@@ -499,12 +541,14 @@ fn run_list_directory(args: &Value) -> ToolExecutionOutput {
                     items.join("\n")
                 },
                 backup_id: None,
+            images: Vec::new(),
             }
         }
         Err(e) => ToolExecutionOutput {
             success: false,
             output: format!("Failed to list `{}`: {e}", target.display()),
             backup_id: None,
+            images: Vec::new(),
         },
     }
 }
@@ -516,6 +560,7 @@ async fn run_fetch_url(args: &Value) -> ToolExecutionOutput {
             success: false,
             output: "URL must start with http:// or https://".to_string(),
             backup_id: None,
+            images: Vec::new(),
         };
     }
     let client = match reqwest::Client::builder()
@@ -529,6 +574,7 @@ async fn run_fetch_url(args: &Value) -> ToolExecutionOutput {
                 success: false,
                 output: format!("HTTP client error: {e}"),
                 backup_id: None,
+            images: Vec::new(),
             };
         }
     };
@@ -542,12 +588,14 @@ async fn run_fetch_url(args: &Value) -> ToolExecutionOutput {
                 success: status.is_success(),
                 output: format!("HTTP {}\n\n{}", status.as_u16(), out),
                 backup_id: None,
+            images: Vec::new(),
             }
         }
         Err(e) => ToolExecutionOutput {
             success: false,
             output: format!("Fetch failed: {e}"),
             backup_id: None,
+            images: Vec::new(),
         },
     }
 }
@@ -594,6 +642,7 @@ fn run_open_app_or_url(args: &Value) -> ToolExecutionOutput {
             success: false,
             output: "Missing `target`.".to_string(),
             backup_id: None,
+            images: Vec::new(),
         };
     }
 
@@ -610,11 +659,13 @@ fn run_open_app_or_url(args: &Value) -> ToolExecutionOutput {
                 success: true,
                 output: format!("Opened `{target}`"),
                 backup_id: None,
+            images: Vec::new(),
             },
             Err(e) => ToolExecutionOutput {
                 success: false,
                 output: format!("Failed to open `{target}`: {e}"),
                 backup_id: None,
+            images: Vec::new(),
             },
         }
     }
@@ -624,6 +675,7 @@ fn run_open_app_or_url(args: &Value) -> ToolExecutionOutput {
             success: false,
             output: "Windows-only tool.".to_string(),
             backup_id: None,
+            images: Vec::new(),
         }
     }
 }
@@ -657,6 +709,7 @@ fn run_set_timer_reminder(app: &AppHandle, args: &Value) -> ToolExecutionOutput 
         success: true,
         output: format!("Reminder scheduled in {secs}s: \"{msg}\""),
         backup_id: None,
+        images: Vec::new(),
     }
 }
 
@@ -671,6 +724,7 @@ async fn run_powershell(args: &Value) -> ToolExecutionOutput {
             success: false,
             output: "Missing `command`.".to_string(),
             backup_id: None,
+            images: Vec::new(),
         };
     }
 
@@ -696,17 +750,20 @@ async fn run_powershell(args: &Value) -> ToolExecutionOutput {
                 success: out.status.success(),
                 output: truncate_chars(&combined, 12_000),
                 backup_id: None,
+            images: Vec::new(),
             }
         }
         Ok(Err(e)) => ToolExecutionOutput {
             success: false,
             output: format!("Failed to start PowerShell: {e}"),
             backup_id: None,
+            images: Vec::new(),
         },
         Err(_) => ToolExecutionOutput {
             success: false,
             output: "PowerShell command timed out after 30 seconds.".to_string(),
             backup_id: None,
+            images: Vec::new(),
         },
     }
 }
@@ -719,6 +776,7 @@ fn run_write_file(args: &Value) -> ToolExecutionOutput {
             success: false,
             output: "Missing `path`.".to_string(),
             backup_id: None,
+            images: Vec::new(),
         };
     }
     let path = Path::new(path_str);
@@ -729,6 +787,7 @@ fn run_write_file(args: &Value) -> ToolExecutionOutput {
                 success: false,
                 output: format!("Backup failed before write: {e}"),
                 backup_id: None,
+            images: Vec::new(),
             };
         }
     };
@@ -738,6 +797,7 @@ fn run_write_file(args: &Value) -> ToolExecutionOutput {
                 success: false,
                 output: format!("Failed to create parent directory: {e}"),
                 backup_id,
+            images: Vec::new(),
             };
         }
     }
@@ -746,11 +806,13 @@ fn run_write_file(args: &Value) -> ToolExecutionOutput {
             success: true,
             output: format!("Wrote {} bytes to `{path_str}` (backup saved).", content.len()),
             backup_id,
+            images: Vec::new(),
         },
         Err(e) => ToolExecutionOutput {
             success: false,
             output: format!("Write failed: {e}"),
             backup_id,
+            images: Vec::new(),
         },
     }
 }
@@ -763,6 +825,7 @@ fn run_move_or_rename(args: &Value) -> ToolExecutionOutput {
             success: false,
             output: "Both `from` and `to` paths are required.".to_string(),
             backup_id: None,
+            images: Vec::new(),
         };
     }
     let from_p = Path::new(from);
@@ -774,6 +837,7 @@ fn run_move_or_rename(args: &Value) -> ToolExecutionOutput {
                 success: false,
                 output: format!("Backup failed before move: {e}"),
                 backup_id: None,
+            images: Vec::new(),
             };
         }
     };
@@ -785,11 +849,13 @@ fn run_move_or_rename(args: &Value) -> ToolExecutionOutput {
             success: true,
             output: format!("Moved `{from}` → `{to}` (backup saved)."),
             backup_id,
+            images: Vec::new(),
         },
         Err(e) => ToolExecutionOutput {
             success: false,
             output: format!("Move failed: {e}"),
             backup_id,
+            images: Vec::new(),
         },
     }
 }
@@ -851,6 +917,7 @@ fn run_list_open_windows() -> ToolExecutionOutput {
             success: true,
             output: "No visible desktop windows found.".to_string(),
             backup_id: None,
+            images: Vec::new(),
         };
     }
     let lines: Vec<String> = wins
@@ -862,6 +929,7 @@ fn run_list_open_windows() -> ToolExecutionOutput {
         success: true,
         output: lines.join("\n"),
         backup_id: None,
+        images: Vec::new(),
     }
 }
 
@@ -917,6 +985,7 @@ fn run_control_window(args: &Value) -> ToolExecutionOutput {
             success: false,
             output: format!("No open window matching \"{needle}\" was found."),
             backup_id: None,
+            images: Vec::new(),
         };
     };
 
@@ -957,6 +1026,7 @@ fn run_control_window(args: &Value) -> ToolExecutionOutput {
         success: true,
         output: format!("Applied `{action}` to window \"{}\"", target.title),
         backup_id: None,
+        images: Vec::new(),
     }
 }
 
@@ -966,6 +1036,7 @@ fn run_control_window(_args: &Value) -> ToolExecutionOutput {
         success: false,
         output: "Windows-only tool.".to_string(),
         backup_id: None,
+        images: Vec::new(),
     }
 }
 
@@ -991,6 +1062,7 @@ fn run_media_control(args: &Value) -> ToolExecutionOutput {
                 success: false,
                 output: format!("Unsupported media action \"{action}\""),
                 backup_id: None,
+            images: Vec::new(),
             };
         }
     };
@@ -1020,6 +1092,7 @@ fn run_media_control(args: &Value) -> ToolExecutionOutput {
         success: true,
         output: format!("Sent Windows media command `{action}`."),
         backup_id: None,
+        images: Vec::new(),
     }
 }
 
@@ -1029,6 +1102,7 @@ fn run_media_control(_args: &Value) -> ToolExecutionOutput {
         success: false,
         output: "Windows-only tool.".to_string(),
         backup_id: None,
+        images: Vec::new(),
     }
 }
 

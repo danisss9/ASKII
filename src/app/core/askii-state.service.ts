@@ -1,6 +1,18 @@
 import { Injectable, computed, effect, inject, signal } from '@angular/core';
-import { computeAutocomplete } from './autocomplete';
-import { KaomojiMood, pickKaomoji } from './kaomoji';
+import { computeAutocomplete, parseControlCommands } from './autocomplete';
+import { KaomojiMood } from './kaomoji';
+import {
+  PET_VISUALS,
+  PetEmotion,
+  PetParticle,
+  PetParticleGlyph,
+  PetVisualState,
+  analyzeLiveTypingTone,
+  analyzeUserSentiment,
+  classifyDesktopActivity,
+  getParticleVariant,
+  getTalkingFrames,
+} from './pet-engine';
 import {
   AgentSettings,
   AppConfig,
@@ -88,15 +100,45 @@ export class AskiiStateService {
   readonly errorBanner = signal<string | null>(null);
   readonly focusTick = signal(0);
 
-  private readonly kaomojiFrame = signal(0);
-  private readonly reactionOverride = signal<string | null>(null);
+  readonly petAffection = signal(68);
+  readonly petEnergy = signal(86);
+  readonly petShadesOn = signal(true);
+  readonly petManualNap = signal(false);
+  readonly petMenuOpen = signal(false);
+  readonly petHovering = signal(false);
+  readonly petParticles = signal<PetParticle[]>([]);
+
+  private readonly petReaction = signal<{
+    emotion: PetEmotion;
+    face?: string;
+    reason: string;
+  } | null>(null);
+  private readonly conversationalEmotion = signal<{
+    emotion: PetEmotion;
+    reason: string;
+  } | null>(null);
+  private readonly idleStage = signal<'active' | 'sleepy' | 'napping'>('active');
+  private readonly isBlinking = signal(false);
+  private readonly activeAnimFrame = signal(0);
+  private readonly talkPulse = signal(0);
+
   private turnSeq = 0;
   private attachSeq = 0;
   private instantQuerySeq = 0;
+  private particleSeq = 0;
+  private petCombo = 0;
+  private lastInteractionAt = Date.now();
+  private lastTalkPulseAt = 0;
+  private lastActivityProcess = '';
+  private ambientTickCount = 0;
   private mediaRecorder: MediaRecorder | null = null;
   private recordedChunks: Blob[] = [];
   private toastTimer?: ReturnType<typeof setTimeout>;
-  private reactionTimer?: ReturnType<typeof setTimeout>;
+  private petComboTimer?: ReturnType<typeof setTimeout>;
+  private petReactionTimers: ReturnType<typeof setTimeout>[] = [];
+  private convEmotionTimer?: ReturnType<typeof setTimeout>;
+  private blinkTimer?: ReturnType<typeof setTimeout>;
+  private blinkEndTimer?: ReturnType<typeof setTimeout>;
 
   readonly activeProviderDef = computed(() => {
     const id = this.config().provider;
@@ -148,9 +190,12 @@ export class AskiiStateService {
     if (mode === 'setup' || mode === 'paper' || mode === 'history' || mode === 'memory') {
       return 680;
     }
+    const attachOffset = this.attachments().length > 0 ? 44 : 0;
+    if (this.petMenuOpen()) {
+      return 396 + attachOffset;
+    }
     if (this.showAutocompleteDropdown()) {
       const rows = Math.min(this.visibleSuggestions().length, 7);
-      const attachOffset = this.attachments().length > 0 ? 44 : 0;
       return Math.min(620, 148 + attachOffset + rows * 56);
     }
     if (this.attachments().length > 0 || this.errorBanner() || this.toastMessage()) {
@@ -158,6 +203,163 @@ export class AskiiStateService {
     }
     return 124;
   });
+
+  readonly desktopActivity = computed(() => classifyDesktopActivity(this.previousWindow()));
+
+  readonly isPetSleeping = computed(
+    () => this.petManualNap() || this.idleStage() === 'napping',
+  );
+
+  readonly petVisual = computed<PetVisualState>(() => {
+    const blinking = this.isBlinking();
+    const frame = this.activeAnimFrame();
+    const shades = this.petShadesOn();
+
+    const makeState = (
+      emotion: PetEmotion,
+      reason: string,
+      opts?: { face?: string; animated?: boolean; aura?: PetVisualState['aura']; motion?: PetVisualState['motion'] },
+    ): PetVisualState => {
+      const spec = PET_VISUALS[emotion];
+      let face = opts?.face;
+      if (!face) {
+        if (opts?.animated && spec.frames.length > 1) {
+          face = spec.frames[Math.abs(frame) % spec.frames.length];
+        } else if (blinking && spec.blinkFrame) {
+          face = spec.blinkFrame;
+        } else {
+          face = spec.frames[0];
+        }
+      }
+      return {
+        emotion,
+        face,
+        label: spec.label,
+        reason,
+        aura: opts?.aura ?? spec.aura,
+        motion: opts?.motion ?? spec.motion,
+      };
+    };
+
+    const reaction = this.petReaction();
+    if (reaction) {
+      return makeState(reaction.emotion, reaction.reason, { face: reaction.face });
+    }
+
+    if (this.errorBanner()) {
+      return makeState('error', 'Hit a snag');
+    }
+
+    if (this.mode() === 'setup') {
+      return makeState('setup', 'Getting set up');
+    }
+
+    if (this.isTranscribingVoice()) {
+      return makeState('listening', 'Transcribing your voice…', { face: '(・ω・)?' });
+    }
+    if (this.isRecordingVoice()) {
+      return makeState('listening', 'Listening closely…', { animated: true });
+    }
+
+    if (this.hasPendingApproval()) {
+      return makeState('approval', 'Waiting for your okay', { animated: true });
+    }
+
+    if (this.hasRunningTool()) {
+      return makeState('working', 'Working on it!', { animated: true });
+    }
+
+    if (this.isThinking()) {
+      return makeState('thinking', 'Thinking it through…', { animated: true });
+    }
+
+    if (this.isPrinting()) {
+      const conv = this.conversationalEmotion();
+      const talkFrames = getTalkingFrames(conv?.emotion ?? null, shades);
+      const face = talkFrames[this.talkPulse() % talkFrames.length];
+      const aura = conv ? PET_VISUALS[conv.emotion].aura : 'mint';
+      return makeState('talking', conv?.reason || 'Replying to you', { face, aura });
+    }
+
+    if (this.isDragOver()) {
+      return makeState('inspecting', 'Drop it here!');
+    }
+
+    if (this.petManualNap()) {
+      return makeState('napping', 'Cozy nap', { animated: true });
+    }
+
+    const input = this.inputText();
+    if (input.trim().length > 0) {
+      const tone = analyzeLiveTypingTone(input) ?? 'attentive';
+      const reason =
+        tone === 'command'
+          ? 'Ready for a command'
+          : tone === 'curious'
+            ? 'Curious what you’ll ask'
+            : 'Listening to you';
+      return makeState(tone, reason);
+    }
+
+    if (this.attachments().length > 0) {
+      return makeState('curious', 'Holding your context', {
+        face: blinking ? '(◠‿◠)✎' : '(◕‿◕)✎',
+      });
+    }
+
+    const conv = this.conversationalEmotion();
+    if (conv) {
+      return makeState(conv.emotion, conv.reason);
+    }
+
+    const idle = this.idleStage();
+    const activity = this.desktopActivity();
+    if (idle === 'active') {
+      if (activity.kind === 'coding') {
+        const codingFace = shades
+          ? blinking
+            ? '(⌐–_–)'
+            : '(⌐■_■)'
+          : blinking
+            ? '(–̀_–́)و'
+            : '(•̀_•́)و';
+        return makeState('coding', `Coding · ${activity.appName}`, { face: codingFace });
+      }
+      if (activity.kind === 'vibing') {
+        return makeState('vibing', `Vibing · ${activity.appName}`, { animated: true });
+      }
+    }
+
+    if (idle === 'napping') {
+      return makeState('napping', 'Dozed off', { animated: true });
+    }
+
+    if (idle === 'sleepy') {
+      return makeState('sleepy', 'Getting sleepy');
+    }
+
+    if (this.petHovering()) {
+      return makeState('happy', 'Ready for pets!', {
+        face: blinking ? '(◠‿◠)' : '(◕‿◕)',
+        aura: 'warm',
+        motion: 'bounce',
+      });
+    }
+
+    if (shades) {
+      return makeState('cool', 'Chilling');
+    }
+    if (this.petAffection() >= 78) {
+      return makeState('happy', 'Feeling loved', {
+        face: blinking ? '(◠‿◠)' : '(◕‿◕)',
+        aura: 'warm',
+        motion: 'breathe',
+      });
+    }
+    return makeState('content', 'Hanging out');
+  });
+
+  readonly petEmotion = computed<PetEmotion>(() => this.petVisual().emotion);
 
   readonly isAutoDo = computed(
     () => this.config().agent.enabled && this.config().agent.mode === 'autoDo',
@@ -205,34 +407,61 @@ export class AskiiStateService {
     return 'idle';
   });
 
-  readonly kaomoji = computed(() => {
-    const override = this.reactionOverride();
-    if (override) {
-      return override;
-    }
-    return pickKaomoji(this.currentMood(), this.kaomojiFrame());
-  });
+  readonly kaomoji = computed(() => this.petVisual().face);
 
   constructor() {
     if (typeof window !== 'undefined') {
       setInterval(() => {
-        const mood = this.currentMood();
+        const emotion = this.petEmotion();
         if (
-          mood === 'thinking' ||
-          mood === 'printing' ||
-          mood === 'working' ||
-          mood === 'approval' ||
-          mood === 'listening'
+          emotion === 'thinking' ||
+          emotion === 'working' ||
+          emotion === 'approval' ||
+          emotion === 'listening' ||
+          emotion === 'napping' ||
+          emotion === 'vibing'
         ) {
-          this.kaomojiFrame.update((n) => n + 1);
+          this.activeAnimFrame.update((n) => n + 1);
         }
-      }, 520);
+      }, 560);
 
       setInterval(() => {
-        if (this.currentMood() === 'idle') {
-          this.kaomojiFrame.update((n) => n + 1);
+        this.ambientTickCount++;
+        const busy =
+          this.isThinking() ||
+          this.isPrinting() ||
+          this.isRecordingVoice() ||
+          this.isTranscribingVoice() ||
+          this.hasPendingApproval() ||
+          this.hasRunningTool() ||
+          this.inputText().trim().length > 0 ||
+          this.petMenuOpen() ||
+          this.mode() === 'setup';
+
+        if (!busy) {
+          const elapsed = Date.now() - this.lastInteractionAt;
+          if (elapsed >= 90_000) {
+            this.idleStage.set('napping');
+          } else if (elapsed >= 45_000) {
+            this.idleStage.set('sleepy');
+          } else {
+            this.idleStage.set('active');
+          }
         }
-      }, 4800);
+
+        if (this.isPetSleeping()) {
+          this.adjustEnergy(2);
+          if (this.ambientTickCount % 3 === 0) {
+            this.spawnParticle('zZ');
+          }
+        } else if (this.petEmotion() === 'coding' && this.ambientTickCount % 7 === 0) {
+          this.spawnParticle('</>');
+        } else if (this.petEmotion() === 'vibing' && this.ambientTickCount % 5 === 0) {
+          this.spawnParticle('♪');
+        }
+      }, 2000);
+
+      this.scheduleNextBlink();
     }
 
     effect(() => {
@@ -267,8 +496,10 @@ export class AskiiStateService {
 
     await this.bridge.onWindowShown(({ openSetup, previousWindow, selectionText }) => {
       void this.refreshClipboardHistory();
+      this.noteInteraction();
+      this.petMenuOpen.set(false);
       if (previousWindow) {
-        this.previousWindow.set(previousWindow);
+        this.applyDesktopWindow(previousWindow, false);
       }
       if (selectionText && selectionText.trim()) {
         this.addOrReplaceAttachment({
@@ -278,6 +509,7 @@ export class AskiiStateService {
           detail: previousWindow?.processName,
           text: selectionText.trim(),
         });
+        this.reactToContextAttach('Captured your selection');
         this.showToast(
           `Captured selection${previousWindow ? ` from ${previousWindow.processName}` : ''}`,
         );
@@ -291,6 +523,10 @@ export class AskiiStateService {
         }
         this.triggerFocus();
       }
+    });
+
+    await this.bridge.onActivityChanged((win) => {
+      this.applyDesktopWindow(win, true);
     });
 
     await this.bridge.onFileDrop(
@@ -315,14 +551,341 @@ export class AskiiStateService {
     this.focusTick.update((n) => n + 1);
   }
 
+  private scheduleNextBlink(): void {
+    clearTimeout(this.blinkTimer);
+    const delay = 3400 + Math.floor(Math.random() * 3200);
+    this.blinkTimer = setTimeout(() => {
+      if (!this.petReaction()) {
+        this.isBlinking.set(true);
+        clearTimeout(this.blinkEndTimer);
+        this.blinkEndTimer = setTimeout(() => {
+          this.isBlinking.set(false);
+          this.scheduleNextBlink();
+        }, 150);
+      } else {
+        this.scheduleNextBlink();
+      }
+    }, delay);
+  }
+
+  private clampStat(value: number): number {
+    return Math.max(0, Math.min(100, Math.round(value)));
+  }
+
+  private adjustAffection(delta: number): void {
+    this.petAffection.update((v) => this.clampStat(v + delta));
+  }
+
+  private adjustEnergy(delta: number): void {
+    this.petEnergy.update((v) => this.clampStat(v + delta));
+  }
+
+  private noteInteraction(wakeManualNap = false): void {
+    this.lastInteractionAt = Date.now();
+    if (this.idleStage() !== 'active') {
+      this.idleStage.set('active');
+    }
+    if (wakeManualNap && this.petManualNap()) {
+      this.petManualNap.set(false);
+    }
+  }
+
+  private clearReactionTimers(): void {
+    for (const t of this.petReactionTimers) {
+      clearTimeout(t);
+    }
+    this.petReactionTimers = [];
+  }
+
+  private playReactionSequence(
+    steps: {
+      emotion: PetEmotion;
+      face?: string;
+      reason: string;
+      durationMs: number;
+      particle?: PetParticleGlyph;
+      particleCount?: number;
+    }[],
+  ): void {
+    this.clearReactionTimers();
+    let offset = 0;
+    for (const step of steps) {
+      const applyStep = () => {
+        this.petReaction.set({
+          emotion: step.emotion,
+          face: step.face,
+          reason: step.reason,
+        });
+        if (step.particle) {
+          const count = step.particleCount ?? 1;
+          for (let i = 0; i < count; i++) {
+            this.spawnParticle(step.particle);
+          }
+        }
+      };
+      if (offset === 0) {
+        applyStep();
+      } else {
+        this.petReactionTimers.push(setTimeout(applyStep, offset));
+      }
+      offset += step.durationMs;
+    }
+    this.petReactionTimers.push(
+      setTimeout(() => {
+        this.petReaction.set(null);
+      }, offset),
+    );
+  }
+
+  spawnParticle(glyph: PetParticleGlyph): void {
+    const id = ++this.particleSeq;
+    const offsetX = Math.round((Math.random() - 0.5) * 56);
+    const particle: PetParticle = {
+      id,
+      glyph,
+      offsetX,
+      variant: getParticleVariant(glyph),
+    };
+    this.petParticles.update((list) => [...list.slice(-5), particle]);
+    setTimeout(() => {
+      this.petParticles.update((list) => list.filter((p) => p.id !== id));
+    }, 1050);
+  }
+
+  setPetHover(hovering: boolean): void {
+    this.petHovering.set(hovering);
+    if (hovering) {
+      this.lastInteractionAt = Date.now();
+    }
+  }
+
+  togglePetMenu(): void {
+    const next = !this.petMenuOpen();
+    this.petMenuOpen.set(next);
+    if (next) {
+      this.dropdownDismissed.set(true);
+      this.noteInteraction(false);
+    }
+  }
+
+  closePetMenu(): void {
+    this.petMenuOpen.set(false);
+  }
+
+  petAskii(): void {
+    this.petMenuOpen.set(false);
+    const wasSleeping = this.isPetSleeping() || this.idleStage() === 'sleepy';
+    this.noteInteraction(true);
+
+    if (wasSleeping) {
+      this.petCombo = 0;
+      this.adjustAffection(5);
+      this.playReactionSequence([
+        { emotion: 'waking', face: '(つ﹏⊂)', reason: 'Waking up…', durationMs: 520, particle: '✧' },
+        { emotion: 'happy', face: '(•‿•)', reason: 'Morning!', durationMs: 700 },
+      ]);
+      return;
+    }
+
+    this.petCombo++;
+    clearTimeout(this.petComboTimer);
+    this.petComboTimer = setTimeout(() => {
+      this.petCombo = 0;
+    }, 3600);
+
+    const wasHurt = this.conversationalEmotion()?.emotion === 'hurt';
+    if (wasHurt) {
+      this.conversationalEmotion.set(null);
+    }
+    this.adjustAffection(wasHurt ? 16 : 9);
+    this.adjustEnergy(2);
+
+    if (this.petCombo === 1) {
+      this.playReactionSequence([
+        { emotion: 'petted', face: '(｡◕‿◕｡)', reason: 'Loves the pets', durationMs: 650, particle: '♡' },
+        { emotion: 'petted', face: '(◡‿◡✿)', reason: 'Feeling cozy', durationMs: 900 },
+      ]);
+    } else if (this.petCombo <= 3) {
+      this.playReactionSequence([
+        {
+          emotion: 'loved',
+          face: '(≧◡≦)♡',
+          reason: 'Purring happily',
+          durationMs: 700,
+          particle: '♡',
+          particleCount: 2,
+        },
+        { emotion: 'loved', face: '(｡♥‿♥｡)', reason: 'So happy!', durationMs: 950 },
+      ]);
+    } else if (this.petCombo <= 5) {
+      this.playReactionSequence([
+        {
+          emotion: 'ecstatic',
+          face: '(ﾉ´ヮ`)ﾉ♡',
+          reason: 'Overjoyed!',
+          durationMs: 680,
+          particle: '✧',
+          particleCount: 2,
+        },
+        { emotion: 'ecstatic', face: '╰(*°▽°*)╯', reason: 'Best pets ever!', durationMs: 980, particle: '♡' },
+      ]);
+    } else {
+      this.playReactionSequence([
+        { emotion: 'ticklish', face: '(⁄ ⁄•⁄ω⁄•⁄ ⁄)', reason: 'Hehe, ticklish!', durationMs: 720, particle: '♪' },
+        { emotion: 'ticklish', face: '(＠_＠;)', reason: 'Whoa, too fast!', durationMs: 920 },
+      ]);
+    }
+  }
+
+  feedAskii(): void {
+    this.petMenuOpen.set(false);
+    this.noteInteraction(true);
+    this.adjustEnergy(22);
+    this.adjustAffection(7);
+    if (this.conversationalEmotion()?.emotion === 'hurt') {
+      this.conversationalEmotion.set(null);
+    }
+    this.playReactionSequence([
+      { emotion: 'eating', face: '(•o•)', reason: 'Ooh, a snack!', durationMs: 420, particle: '✧' },
+      { emotion: 'eating', face: '(っ˘ڡ˘ς)', reason: 'Munching bytes…', durationMs: 780, particle: '♪' },
+      { emotion: 'eating', face: '(´～`)', reason: 'Yum!', durationMs: 620 },
+      { emotion: 'happy', face: '(◕‿◕)✧', reason: 'Full & energized!', durationMs: 800, particle: '✧' },
+    ]);
+  }
+
+  playWithAskii(): void {
+    this.petMenuOpen.set(false);
+    this.noteInteraction(true);
+    this.adjustAffection(10);
+    this.adjustEnergy(-6);
+    if (this.conversationalEmotion()?.emotion === 'hurt') {
+      this.conversationalEmotion.set(null);
+    }
+    this.playReactionSequence([
+      { emotion: 'playful', face: '( •_•)>⌐■-■', reason: 'Watch this!', durationMs: 560, particle: '✧' },
+      { emotion: 'playful', face: '(⌐■_■)✧', reason: 'Smooth!', durationMs: 680, particle: '♪' },
+      { emotion: 'playful', face: '╰(*°▽°*)╯', reason: 'Ta-da!', durationMs: 860, particle: '✧' },
+    ]);
+  }
+
+  toggleAskiiShades(): void {
+    this.petMenuOpen.set(false);
+    this.noteInteraction(true);
+    const next = !this.petShadesOn();
+    this.petShadesOn.set(next);
+    if (next) {
+      this.playReactionSequence([
+        { emotion: 'cool', face: '( •_•)>⌐■-■', reason: 'Shades on', durationMs: 480, particle: '✧' },
+        { emotion: 'cool', face: '(⌐■_■)', reason: 'Looking sharp', durationMs: 750 },
+      ]);
+    } else {
+      this.playReactionSequence([
+        { emotion: 'happy', face: '( •_•)>⌐■-■', reason: 'Shades off', durationMs: 460 },
+        { emotion: 'happy', face: '(◕‿◕)', reason: 'Fresh eyes!', durationMs: 720, particle: '✧' },
+      ]);
+    }
+  }
+
+  toggleAskiiNap(): void {
+    this.petMenuOpen.set(false);
+    if (this.isPetSleeping()) {
+      this.petManualNap.set(false);
+      this.noteInteraction(true);
+      this.playReactionSequence([
+        { emotion: 'waking', face: '(つ﹏⊂)', reason: 'Stretching awake…', durationMs: 550, particle: '✧' },
+        { emotion: 'happy', face: '(•‿•)', reason: 'Ready to help!', durationMs: 750 },
+      ]);
+    } else {
+      this.clearReactionTimers();
+      this.petReaction.set(null);
+      this.petManualNap.set(true);
+      this.spawnParticle('zZ');
+    }
+  }
+
   pokeAskii(): void {
-    const face = pickKaomoji('happy', Math.floor(Math.random() * 10));
-    this.reactionOverride.set(face);
-    clearTimeout(this.reactionTimer);
-    this.reactionTimer = setTimeout(() => this.reactionOverride.set(null), 1300);
+    this.petAskii();
+  }
+
+  private reactToScreenAttach(): void {
+    this.noteInteraction(true);
+    this.playReactionSequence([
+      { emotion: 'peeking', face: '(◎_◎)', reason: 'Taking a peek!', durationMs: 620, particle: '✧' },
+      { emotion: 'peeking', face: '(◉_◉)✧', reason: 'Got your screen!', durationMs: 1200 },
+    ]);
+  }
+
+  private reactToContextAttach(reason: string): void {
+    this.noteInteraction(true);
+    this.playReactionSequence([
+      { emotion: 'inspecting', face: '(◉_◉)', reason, durationMs: 550, particle: '✧' },
+      { emotion: 'curious', face: '(◕‿◕)✎', reason, durationMs: 950 },
+    ]);
+  }
+
+  private reactToOpening(label?: string): void {
+    this.noteInteraction(true);
+    const reason = label ? `Opening ${label}!` : 'Opening it up!';
+    this.playReactionSequence([
+      { emotion: 'opening', face: '(☞ﾟヮﾟ)☞', reason, durationMs: 520, particle: '✧' },
+      { emotion: 'opening', face: '╰(°▽°)╯', reason, durationMs: 1050 },
+    ]);
+  }
+
+  private setLingeringEmotion(emotion: PetEmotion, reason: string, durationMs = 28_000): void {
+    this.conversationalEmotion.set({ emotion, reason });
+    clearTimeout(this.convEmotionTimer);
+    this.convEmotionTimer = setTimeout(() => {
+      this.conversationalEmotion.set(null);
+    }, durationMs);
+  }
+
+  private applyDesktopWindow(win: PreviousWindowInfo, isLiveSwitch: boolean): void {
+    const prevProc = this.lastActivityProcess;
+    const nextProc = win.processName.trim().toLowerCase();
+    this.previousWindow.set(win);
+    this.lastActivityProcess = nextProc;
+
+    if (!isLiveSwitch || !nextProc || nextProc === prevProc) {
+      return;
+    }
+
+    const busy =
+      this.isThinking() ||
+      this.isPrinting() ||
+      this.isRecordingVoice() ||
+      this.petManualNap() ||
+      this.mode() === 'setup';
+    if (busy) {
+      return;
+    }
+
+    const activity = classifyDesktopActivity(win);
+    if (activity.kind === 'coding') {
+      this.noteInteraction(false);
+      this.playReactionSequence([
+        {
+          emotion: 'coding',
+          face: this.petShadesOn() ? '( •_•)>⌐■-■' : '(•̀_•́)و',
+          reason: `Coding · ${activity.appName}`,
+          durationMs: 520,
+          particle: '</>',
+        },
+        {
+          emotion: 'coding',
+          face: this.petShadesOn() ? '(⌐■_■)' : '(•̀_•́)و',
+          reason: `Coding · ${activity.appName}`,
+          durationMs: 1100,
+        },
+      ]);
+    } else if (prevProc) {
+      this.reactToOpening(win.processName);
+    }
   }
 
   setInput(value: string): void {
+    this.noteInteraction(true);
+    this.petMenuOpen.set(false);
     this.inputText.set(value);
     this.selectedSuggestionIndex.set(0);
     this.dropdownDismissed.set(false);
@@ -354,6 +917,11 @@ export class AskiiStateService {
       this.inputText.set('');
       this.instantResults.set([]);
       this.dropdownDismissed.set(true);
+      if (item.kind === 'app' || item.kind === 'window') {
+        this.reactToOpening(item.label);
+      } else {
+        this.spawnParticle('✧');
+      }
       this.showToast(msg);
     } catch (err) {
       this.errorBanner.set(err instanceof Error ? err.message : String(err));
@@ -549,9 +1117,11 @@ export class AskiiStateService {
           this.triggerFocus();
         }
       };
+      this.noteInteraction(true);
       this.isRecordingVoice.set(true);
+      this.spawnParticle('♪');
       recorder.start();
-      this.showToast('Listening… click mic again to transcribe');
+      this.showToast('Listening… click Listening pill or /voice to transcribe');
     } catch (err) {
       this.isRecordingVoice.set(false);
       this.errorBanner.set(
@@ -608,6 +1178,7 @@ export class AskiiStateService {
           label: `Clipboard · ${trimmed.length}c`,
           text: trimmed,
         });
+        this.reactToContextAttach('Attached clipboard text');
         this.showToast('Attached Windows clipboard text');
         return true;
       }
@@ -618,6 +1189,7 @@ export class AskiiStateService {
           label: `Clipboard Image (${payload.width ?? '?'}×${payload.height ?? '?'})`,
           image: { mimeType: 'image/png', dataBase64: payload.base64Png },
         });
+        this.reactToScreenAttach();
         this.showToast('Attached clipboard image');
         return true;
       }
@@ -646,6 +1218,7 @@ export class AskiiStateService {
       detail: win.title,
       text: summary,
     });
+    this.reactToContextAttach(`Looking at ${win.processName}`);
     this.showToast(`Attached window context (${win.processName})`);
     return true;
   }
@@ -659,6 +1232,7 @@ export class AskiiStateService {
         label: cap.label,
         image: { mimeType: 'image/png', dataBase64: cap.base64Png },
       });
+      this.reactToScreenAttach();
       this.showToast(`Captured ${cap.label}`);
       this.triggerFocus();
       return true;
@@ -669,6 +1243,7 @@ export class AskiiStateService {
   }
 
   async attachFilePaths(paths: string[]): Promise<void> {
+    let attachedAny = false;
     for (const path of paths.slice(0, 4)) {
       try {
         const res = await this.bridge.readFileAttachment(path);
@@ -680,6 +1255,7 @@ export class AskiiStateService {
             detail: `${res.width ?? '?'}×${res.height ?? '?'}`,
             image: { mimeType: 'image/png', dataBase64: res.base64Png },
           });
+          attachedAny = true;
         } else if (res.text !== undefined && res.text !== null) {
           this.addOrReplaceAttachment({
             id: `att-${++this.attachSeq}`,
@@ -688,10 +1264,14 @@ export class AskiiStateService {
             detail: res.truncated ? 'truncated 128KB' : `${res.text.length}c`,
             text: `File: ${res.path}\n\n${res.text}`,
           });
+          attachedAny = true;
         }
       } catch (err) {
         this.errorBanner.set(err instanceof Error ? err.message : String(err));
       }
+    }
+    if (attachedAny) {
+      this.reactToContextAttach('Inspecting your file');
     }
     this.triggerFocus();
   }
@@ -713,6 +1293,7 @@ export class AskiiStateService {
         label: 'Pasted Image',
         image: { mimeType, dataBase64: base64 },
       });
+      this.reactToScreenAttach();
       this.showToast('Attached pasted image');
     } catch (err) {
       this.errorBanner.set(err instanceof Error ? err.message : String(err));
@@ -966,6 +1547,47 @@ export class AskiiStateService {
   }
 
   async executeSlashCommand(rawCommand: string): Promise<void> {
+    const ctrl = parseControlCommands(rawCommand);
+    if (ctrl) {
+      this.dropdownDismissed.set(true);
+      if (!ctrl.task && this.attachments().length === 0) {
+        const prefix =
+          ctrl.enableScreenControl && ctrl.enableBrowserControl
+            ? '/screen /browser '
+            : ctrl.enableScreenControl
+              ? '/screen '
+              : '/browser ';
+        this.inputText.set(prefix);
+        this.showToast(
+          ctrl.enableScreenControl && ctrl.enableBrowserControl
+            ? 'Screen & Chrome Puppeteer ready — type your task after the command'
+            : ctrl.enableScreenControl
+              ? 'Screen control ready — type what you want ASKII to click or type'
+              : 'Chrome Puppeteer ready — type what you want ASKII to do in Chrome',
+        );
+        this.triggerFocus();
+        return;
+      }
+      if (this.needsSetup()) {
+        this.openSetup('provider');
+        return;
+      }
+      const extraContextLabels: string[] = [];
+      if (ctrl.enableScreenControl) {
+        extraContextLabels.push('Screen Control');
+      }
+      if (ctrl.enableBrowserControl) {
+        extraContextLabels.push('Chrome Puppeteer');
+      }
+      await this.askQuestion(rawCommand.trim(), {
+        llmUserContent: ctrl.task || 'Inspect the current state and report what you see.',
+        enableScreenControl: ctrl.enableScreenControl,
+        enableBrowserControl: ctrl.enableBrowserControl,
+        extraContextLabels,
+      });
+      return;
+    }
+
     const parts = rawCommand.trim().split(/\s+/);
     const cmd = parts[0].toLowerCase();
     const arg = parts.slice(1).join(' ').toLowerCase();
@@ -989,6 +1611,9 @@ export class AskiiStateService {
         break;
       case '/snip':
         await this.attachScreen(arg.includes('win') ? 'active_window' : 'full');
+        break;
+      case '/voice':
+        await this.toggleVoiceRecording();
         break;
       case '/setup':
       case '/provider':
@@ -1052,6 +1677,9 @@ export class AskiiStateService {
       llmUserContent?: string;
       systemPromptOverride?: string;
       modelOverride?: string;
+      enableScreenControl?: boolean;
+      enableBrowserControl?: boolean;
+      extraContextLabels?: string[];
     },
   ): Promise<void> {
     const trimmed = question.trim();
@@ -1066,7 +1694,7 @@ export class AskiiStateService {
     const activeAttachments = this.attachments();
     const contextBlocks: string[] = [];
     const images: ImageAttachment[] = [];
-    const contextLabels: string[] = [];
+    const contextLabels: string[] = [...(options?.extraContextLabels ?? [])];
 
     for (const att of activeAttachments) {
       contextLabels.push(att.label);
@@ -1129,6 +1757,21 @@ export class AskiiStateService {
     this.showHistoryOnly.set(false);
     this.isTearing.set(false);
 
+    this.noteInteraction(true);
+    this.petMenuOpen.set(false);
+    this.clearReactionTimers();
+    this.petReaction.set(null);
+
+    const sentiment = analyzeUserSentiment(trimmed, this.conversationalEmotion()?.emotion ?? null);
+    if (sentiment) {
+      this.setLingeringEmotion(sentiment.emotion, sentiment.reason, 32_000);
+      this.adjustAffection(sentiment.affectionDelta);
+      this.adjustEnergy(sentiment.energyDelta);
+      if (sentiment.particle) {
+        this.spawnParticle(sentiment.particle);
+      }
+    }
+
     this.conversation.update((list) => [...list, turn]);
     this.mode.set('paper');
     this.isThinking.set(true);
@@ -1142,6 +1785,11 @@ export class AskiiStateService {
           if (ev.event === 'chunk') {
             this.isThinking.set(false);
             this.isPrinting.set(true);
+            const nowMs = Date.now();
+            if (nowMs - this.lastTalkPulseAt >= 110) {
+              this.lastTalkPulseAt = nowMs;
+              this.talkPulse.update((n) => n + 1);
+            }
             this.updateTurn(turnId, (t) => ({
               ...t,
               answer: t.answer + ev.data.text,
@@ -1162,6 +1810,9 @@ export class AskiiStateService {
               toolActions: [...(t.toolActions ?? []), entry],
             }));
           } else if (ev.event === 'toolRunning') {
+            if (ev.data.name === 'launch_app' || ev.data.name === 'open_url') {
+              this.reactToOpening();
+            }
             this.updateTurn(turnId, (t) => ({
               ...t,
               toolActions: (t.toolActions ?? []).map((a) =>
@@ -1194,6 +1845,7 @@ export class AskiiStateService {
           } else if (ev.event === 'done') {
             this.isThinking.set(false);
             this.isPrinting.set(false);
+            this.noteInteraction(false);
             this.updateTurn(turnId, (t) => ({
               ...t,
               streaming: false,
@@ -1221,6 +1873,8 @@ export class AskiiStateService {
         {
           systemPromptOverride: options?.systemPromptOverride,
           modelOverride: options?.modelOverride,
+          enableScreenControl: options?.enableScreenControl ?? false,
+          enableBrowserControl: options?.enableBrowserControl ?? false,
         },
       );
     } catch (err) {
@@ -1294,6 +1948,10 @@ export class AskiiStateService {
   }
 
   async handleEscape(): Promise<void> {
+    if (this.petMenuOpen()) {
+      this.petMenuOpen.set(false);
+      return;
+    }
     if (this.isThinking() || this.isPrinting()) {
       await this.stopGeneration();
       return;

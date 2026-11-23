@@ -289,6 +289,8 @@ export class TauriBridgeService {
     options?: {
       systemPromptOverride?: string;
       modelOverride?: string;
+      enableScreenControl?: boolean;
+      enableBrowserControl?: boolean;
     },
   ): Promise<void> {
     if (!this.isTauri) {
@@ -309,6 +311,8 @@ export class TauriBridgeService {
         messages,
         systemPromptOverride: options?.systemPromptOverride ?? null,
         modelOverride: options?.modelOverride ?? null,
+        enableScreenControl: options?.enableScreenControl ?? false,
+        enableBrowserControl: options?.enableBrowserControl ?? false,
       },
       onEvent: channel,
     });
@@ -532,6 +536,13 @@ export class TauriBridgeService {
       return () => undefined;
     }
     return listen<WindowShownPayload>('askii://shown', (ev) => handler(ev.payload));
+  }
+
+  async onActivityChanged(handler: (win: PreviousWindowInfo) => void): Promise<UnlistenFn> {
+    if (!this.isTauri) {
+      return () => undefined;
+    }
+    return listen<PreviousWindowInfo>('askii://activity', (ev) => handler(ev.payload));
   }
 
   async onFileDrop(

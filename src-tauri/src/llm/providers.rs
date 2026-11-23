@@ -109,70 +109,110 @@ pub struct ChatMessage {
 }
 
 pub fn serialize_openai_messages(messages: &[ChatMessage]) -> Vec<Value> {
-    messages
-        .iter()
-        .map(|m| {
-            if m.role == "tool" {
-                return json!({
-                    "role": "tool",
-                    "tool_call_id": m.tool_call_id.clone().unwrap_or_default(),
-                    "content": m.content,
-                });
+    let mut out: Vec<Value> = Vec::with_capacity(messages.len());
+    let mut pending_tool_images: Vec<(String, ImageAttachment)> = Vec::new();
+
+    let flush_tool_images =
+        |out: &mut Vec<Value>, pending: &mut Vec<(String, ImageAttachment)>| {
+            if pending.is_empty() {
+                return;
             }
-            if m.role == "assistant" && !m.tool_calls.is_empty() {
-                let tc: Vec<Value> = m
-                    .tool_calls
-                    .iter()
-                    .map(|c| {
-                        json!({
-                            "id": c.id,
-                            "type": "function",
-                            "function": {
-                                "name": c.name,
-                                "arguments": c.arguments.to_string(),
-                            }
-                        })
-                    })
-                    .collect();
-                let mut obj = json!({
-                    "role": "assistant",
-                    "tool_calls": tc,
-                });
-                if !m.content.is_empty() {
-                    obj["content"] = json!(m.content);
-                } else {
-                    obj["content"] = Value::Null;
-                }
-                return obj;
+            let labels: Vec<String> = pending.iter().map(|(n, _)| n.clone()).collect();
+            let mut parts: Vec<Value> = Vec::with_capacity(pending.len() + 1);
+            parts.push(json!({
+                "type": "text",
+                "text": format!("Visual screenshot(s) returned by tool(s): {}", labels.join(", ")),
+            }));
+            for (_, img) in pending.drain(..) {
+                parts.push(json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": format!("data:{};base64,{}", img.mime_type, img.data_base64),
+                    }
+                }));
             }
-            if m.images.is_empty() {
-                json!({
-                    "role": m.role,
-                    "content": m.content,
-                })
-            } else {
-                let mut parts: Vec<Value> = Vec::with_capacity(m.images.len() + 1);
-                if !m.content.is_empty() {
-                    parts.push(json!({
-                        "type": "text",
-                        "text": m.content,
-                    }));
-                }
+            out.push(json!({
+                "role": "user",
+                "content": parts,
+            }));
+        };
+
+    for m in messages {
+        if m.role == "tool" {
+            out.push(json!({
+                "role": "tool",
+                "tool_call_id": m.tool_call_id.clone().unwrap_or_default(),
+                "content": m.content,
+            }));
+            if !m.images.is_empty() {
+                let label = m.name.clone().unwrap_or_else(|| "tool".to_string());
                 for img in &m.images {
-                    parts.push(json!({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": format!("data:{};base64,{}", img.mime_type, img.data_base64),
-                        }
-                    }));
+                    pending_tool_images.push((label.clone(), img.clone()));
                 }
-                json!({
-                    "role": m.role,
-                    "content": parts,
-                })
             }
-        })
-        .collect()
+            continue;
+        }
+
+        flush_tool_images(&mut out, &mut pending_tool_images);
+
+        if m.role == "assistant" && !m.tool_calls.is_empty() {
+            let tc: Vec<Value> = m
+                .tool_calls
+                .iter()
+                .map(|c| {
+                    json!({
+                        "id": c.id,
+                        "type": "function",
+                        "function": {
+                            "name": c.name,
+                            "arguments": c.arguments.to_string(),
+                        }
+                    })
+                })
+                .collect();
+            let mut obj = json!({
+                "role": "assistant",
+                "tool_calls": tc,
+            });
+            if !m.content.is_empty() {
+                obj["content"] = json!(m.content);
+            } else {
+                obj["content"] = Value::Null;
+            }
+            out.push(obj);
+            continue;
+        }
+
+        if m.images.is_empty() {
+            out.push(json!({
+                "role": m.role,
+                "content": m.content,
+            }));
+        } else {
+            let mut parts: Vec<Value> = Vec::with_capacity(m.images.len() + 1);
+            if !m.content.is_empty() {
+                parts.push(json!({
+                    "type": "text",
+                    "text": m.content,
+                }));
+            }
+            for img in &m.images {
+                parts.push(json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": format!("data:{};base64,{}", img.mime_type, img.data_base64),
+                    }
+                }));
+            }
+            out.push(json!({
+                "role": m.role,
+                "content": parts,
+            }));
+        }
+    }
+
+    flush_tool_images(&mut out, &mut pending_tool_images);
+    out
 }
 
 pub fn serialize_anthropic_messages(messages: &[&ChatMessage]) -> Vec<Value> {
@@ -180,12 +220,31 @@ pub fn serialize_anthropic_messages(messages: &[&ChatMessage]) -> Vec<Value> {
         .iter()
         .map(|m| {
             if m.role == "tool" {
+                let tool_content = if m.images.is_empty() {
+                    json!(m.content)
+                } else {
+                    let mut blocks: Vec<Value> = Vec::with_capacity(m.images.len() + 1);
+                    if !m.content.is_empty() {
+                        blocks.push(json!({ "type": "text", "text": m.content }));
+                    }
+                    for img in &m.images {
+                        blocks.push(json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": img.mime_type,
+                                "data": img.data_base64,
+                            }
+                        }));
+                    }
+                    json!(blocks)
+                };
                 return json!({
                     "role": "user",
                     "content": [{
                         "type": "tool_result",
                         "tool_use_id": m.tool_call_id.clone().unwrap_or_default(),
-                        "content": m.content,
+                        "content": tool_content,
                     }]
                 });
             }
@@ -244,10 +303,19 @@ pub fn serialize_ollama_messages(messages: &[ChatMessage]) -> Vec<Value> {
         .iter()
         .map(|m| {
             if m.role == "tool" {
-                return json!({
-                    "role": "tool",
-                    "content": m.content,
-                });
+                if m.images.is_empty() {
+                    return json!({
+                        "role": "tool",
+                        "content": m.content,
+                    });
+                } else {
+                    let imgs: Vec<&str> = m.images.iter().map(|i| i.data_base64.as_str()).collect();
+                    return json!({
+                        "role": "tool",
+                        "content": m.content,
+                        "images": imgs,
+                    });
+                }
             }
             if m.role == "assistant" && !m.tool_calls.is_empty() {
                 let tc: Vec<Value> = m
@@ -1362,14 +1430,23 @@ pub fn serialize_gemini_contents(messages: &[&ChatMessage]) -> Vec<Value> {
         .map(|m| {
             if m.role == "tool" {
                 let name = m.name.clone().unwrap_or_else(|| "tool".to_string());
+                let mut parts = vec![json!({
+                    "functionResponse": {
+                        "name": name,
+                        "response": { "output": m.content }
+                    }
+                })];
+                for img in &m.images {
+                    parts.push(json!({
+                        "inlineData": {
+                            "mimeType": img.mime_type,
+                            "data": img.data_base64,
+                        }
+                    }));
+                }
                 return json!({
                     "role": "user",
-                    "parts": [{
-                        "functionResponse": {
-                            "name": name,
-                            "response": { "output": m.content }
-                        }
-                    }]
+                    "parts": parts,
                 });
             }
             let role = if m.role == "assistant" { "model" } else { "user" };
@@ -1757,5 +1834,46 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "get_system_info");
         assert!(!truncated);
+    }
+
+    #[test]
+    fn serializes_tool_result_images_for_all_providers() {
+        let tool_msg = ChatMessage {
+            role: "tool".to_string(),
+            content: "Captured screen 1600x900".to_string(),
+            images: vec![ImageAttachment {
+                mime_type: "image/png".to_string(),
+                data_base64: "BBBB".to_string(),
+            }],
+            tool_calls: Vec::new(),
+            tool_call_id: Some("call_1".to_string()),
+            name: Some("screen_capture".to_string()),
+        };
+
+        // OpenAI emits the tool message followed by a user image_url message
+        let oai = serialize_openai_messages(&[tool_msg.clone()]);
+        assert_eq!(oai.len(), 2);
+        assert_eq!(oai[0]["role"], "tool");
+        assert_eq!(oai[1]["role"], "user");
+        assert_eq!(
+            oai[1]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,BBBB"
+        );
+
+        // Anthropic embeds image block inside tool_result content
+        let ant = serialize_anthropic_messages(&[&tool_msg]);
+        assert_eq!(ant[0]["content"][0]["type"], "tool_result");
+        assert_eq!(ant[0]["content"][0]["content"][1]["type"], "image");
+        assert_eq!(ant[0]["content"][0]["content"][1]["source"]["data"], "BBBB");
+
+        // Gemini appends inlineData next to functionResponse
+        let gem = serialize_gemini_contents(&[&tool_msg]);
+        assert_eq!(gem[0]["parts"][0]["functionResponse"]["name"], "screen_capture");
+        assert_eq!(gem[0]["parts"][1]["inlineData"]["data"], "BBBB");
+
+        // Ollama attaches images array on the tool message
+        let oll = serialize_ollama_messages(&[tool_msg]);
+        assert_eq!(oll[0]["role"], "tool");
+        assert_eq!(oll[0]["images"][0], "BBBB");
     }
 }

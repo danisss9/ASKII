@@ -500,6 +500,45 @@ pub use win::{
     insert_into_previous_window,
 };
 
+#[cfg(target_os = "windows")]
+pub fn spawn_activity_watcher(app: tauri::AppHandle) {
+    use crate::AppState;
+    use tauri::{Emitter, Manager};
+
+    tauri::async_runtime::spawn(async move {
+        let mut last_seen: Option<(isize, String, String)> = None;
+        loop {
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            let visible = app
+                .get_webview_window("main")
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(false);
+            if !visible {
+                continue;
+            }
+
+            let Some(info) = capture_foreground_window() else {
+                continue;
+            };
+
+            let key = (info.hwnd, info.process_name.clone(), info.title.clone());
+            if last_seen.as_ref() == Some(&key) {
+                continue;
+            }
+            last_seen = Some(key);
+
+            {
+                let st = app.state::<AppState>();
+                *st.previous_window.lock().unwrap() = Some(info.clone());
+            }
+            let _ = app.emit("askii://activity", info);
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn spawn_activity_watcher(_app: tauri::AppHandle) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
