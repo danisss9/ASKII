@@ -1,7 +1,0 @@
-{
-  "name": "onnxruntime-node",
-  "version": "1.30.0",
-  "description": "ASKII stub for onnxruntime-node (see description field)",
-  "main": "index.js",
-  "license": "MIT"
-}

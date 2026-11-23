@@ -1,0 +1,412 @@
+<section class="setup-card" (keydown)="onShortcutKeyDown($event)">
+  <header class="setup-header" data-tauri-drag-region>
+    <div class="header-left">
+      <div class="setup-face" aria-hidden="true">{{ isLoading() ? '(๑•﹏•)' : '(⌐■_■)' }}</div>
+      <div class="header-copy">
+        <h1>{{ state.needsSetup() ? 'Welcome to ASKII' : 'ASKII Setup' }}</h1>
+        <p>Connect any of 8 LLM providers, hotkeys, Windows startup &amp; ASKII Do.</p>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div class="step-pills" aria-label="Setup steps">
+        <button
+          type="button"
+          class="step-pill"
+          [class.active]="step() === 'provider'"
+          (click)="step.set('provider')"
+        >
+          1 · Provider
+        </button>
+        <button
+          type="button"
+          class="step-pill"
+          [class.active]="step() === 'model'"
+          (click)="step.set('model')"
+        >
+          2 · Model
+        </button>
+        <button
+          type="button"
+          class="step-pill"
+          [class.active]="step() === 'agent'"
+          (click)="step.set('agent')"
+        >
+          3 · ASKII Do
+        </button>
+      </div>
+      @if (!state.needsSetup()) {
+        <button
+          type="button"
+          class="close-btn"
+          title="Return to ASKII (Esc)"
+          (click)="state.closeSetup()"
+        >
+          ✕
+        </button>
+      }
+    </div>
+  </header>
+
+  @if (step() === 'provider') {
+    <div class="setup-body">
+      <div class="provider-grid">
+        @for (p of state.providers(); track p.id) {
+          <button
+            type="button"
+            class="provider-tile"
+            [class.selected]="selectedProvider() === p.id"
+            (click)="chooseProvider(p.id)"
+          >
+            <div class="tile-top">
+              <span class="tile-name">{{ p.label }}</span>
+              <span class="tile-tag">
+                {{ p.connection === 'apiKey' ? 'Cloud' : 'Local' }}
+              </span>
+            </div>
+            <span class="tile-desc">{{ p.description }}</span>
+          </button>
+        }
+      </div>
+
+      <div class="connection-box">
+        @if (providerDef()?.connection === 'apiKey') {
+          <div class="field">
+            <label for="setupApiKey">
+              {{ providerDef()?.label }} API Key
+              @if (hasSavedKey()) {
+                <span class="saved-badge">✓ Saved in Windows Credential Manager</span>
+              }
+            </label>
+            <input
+              id="setupApiKey"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              [ngModel]="apiKey()"
+              (ngModelChange)="apiKey.set($event)"
+              [placeholder]="
+                hasSavedKey()
+                  ? 'Leave blank to keep saved key, or paste a new one'
+                  : 'Paste your API key — encrypted in Windows Credential Manager'
+              "
+              (keydown.enter)="validateAndDiscover()"
+            />
+          </div>
+
+          @if (providerDef()?.supportsCustomBaseUrl) {
+            <div class="field">
+              <label for="setupOpenaiUrl">
+                Custom Base URL <span class="label-muted">(Optional — blank uses api.openai.com)</span>
+              </label>
+              <input
+                id="setupOpenaiUrl"
+                type="url"
+                spellcheck="false"
+                [ngModel]="openaiUrl()"
+                (ngModelChange)="openaiUrl.set($event)"
+                placeholder="https://your-endpoint.example/v1"
+                (keydown.enter)="validateAndDiscover()"
+              />
+            </div>
+          }
+        } @else if (selectedProvider() === 'ollama') {
+          <div class="field">
+            <label for="setupOllamaUrl">Ollama Server URL</label>
+            <input
+              id="setupOllamaUrl"
+              type="url"
+              spellcheck="false"
+              [ngModel]="ollamaUrl()"
+              (ngModelChange)="ollamaUrl.set($event)"
+              placeholder="http://localhost:11434"
+              (keydown.enter)="validateAndDiscover()"
+            />
+          </div>
+        } @else {
+          <div class="field">
+            <label for="setupLmStudioUrl">
+              LM Studio Server URL <span class="label-muted">(http:// or ws:// accepted)</span>
+            </label>
+            <input
+              id="setupLmStudioUrl"
+              type="url"
+              spellcheck="false"
+              [ngModel]="lmstudioUrl()"
+              (ngModelChange)="lmstudioUrl.set($event)"
+              placeholder="http://localhost:1234"
+              (keydown.enter)="validateAndDiscover()"
+            />
+          </div>
+        }
+      </div>
+
+      @if (error()) {
+        <div class="alert error" role="alert">{{ error() }}</div>
+      }
+
+      <footer class="setup-footer">
+        <span class="footer-note">Zero telemetry · Secrets stay in Windows Credential Manager</span>
+        <button
+          type="button"
+          class="btn primary"
+          [disabled]="isLoading()"
+          (click)="validateAndDiscover()"
+        >
+          {{ isLoading() ? 'Connecting & loading models…' : 'Connect & Load Models →' }}
+        </button>
+      </footer>
+    </div>
+  } @else if (step() === 'model') {
+    <div class="setup-body">
+      @if (modelWarning()) {
+        <div class="alert warning">{{ modelWarning() }}</div>
+      }
+
+      <div class="field">
+        <div class="label-row">
+          <label for="setupModel">{{ providerDef()?.label }} Model</label>
+          @if (discoveredModels().length > 0) {
+            <button
+              type="button"
+              class="link-btn"
+              (click)="manualModelMode.set(!manualModelMode())"
+            >
+              {{ manualModelMode() ? 'Choose from discovered list' : 'Enter model ID manually' }}
+            </button>
+          }
+        </div>
+
+        @if (!manualModelMode() && discoveredModels().length > 0) {
+          <select
+            id="setupModel"
+            [ngModel]="selectedModel()"
+            (ngModelChange)="selectedModel.set($event)"
+          >
+            @for (m of discoveredModels(); track m) {
+              <option [value]="m">{{ m }}</option>
+            }
+          </select>
+        } @else {
+          <input
+            id="setupModel"
+            type="text"
+            spellcheck="false"
+            [ngModel]="selectedModel()"
+            (ngModelChange)="selectedModel.set($event)"
+            placeholder="e.g. askii-smart, gpt-5-mini, claude-sonnet-4-6, gemma4:e4b"
+            (keydown.enter)="finishSetup()"
+          />
+        }
+      </div>
+
+      <div class="field shortcut-field">
+        <label>Global Toggle Shortcut</label>
+        <div class="shortcut-row">
+          <button
+            type="button"
+            class="shortcut-recorder"
+            [class.recording]="recordingTarget() === 'toggle'"
+            (click)="startRecordingShortcut('toggle')"
+          >
+            <span class="kbd-badge">{{ recordingTarget() === 'toggle' ? 'Press shortcut…' : shortcut() }}</span>
+            <span class="recorder-hint">
+              {{ recordingTarget() === 'toggle' ? 'Esc to cancel' : 'Click to rebind' }}
+            </span>
+          </button>
+          <button type="button" class="btn ghost small" (click)="resetShortcut()">
+            Reset (Alt+Space)
+          </button>
+        </div>
+      </div>
+
+      <div class="field shortcut-field">
+        <label>Ask About Selection Shortcut <span class="label-muted">(Captures highlighted text)</span></label>
+        <div class="shortcut-row">
+          <button
+            type="button"
+            class="shortcut-recorder"
+            [class.recording]="recordingTarget() === 'action'"
+            (click)="startRecordingShortcut('action')"
+          >
+            <span class="kbd-badge">{{ recordingTarget() === 'action' ? 'Press shortcut…' : actionShortcut() }}</span>
+            <span class="recorder-hint">
+              {{ recordingTarget() === 'action' ? 'Esc to cancel' : 'Click to rebind' }}
+            </span>
+          </button>
+          <button type="button" class="btn ghost small" (click)="resetActionShortcut()">
+            Reset
+          </button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="setupWhisperUrl">
+          Voice Whisper Endpoint <span class="label-muted">(Optional — blank uses OpenAI / ASKII Cloud key)</span>
+        </label>
+        <input
+          id="setupWhisperUrl"
+          type="url"
+          spellcheck="false"
+          [ngModel]="whisperUrl()"
+          (ngModelChange)="whisperUrl.set($event)"
+          placeholder="http://localhost:8000/v1/audio/transcriptions"
+        />
+      </div>
+
+      <div class="toggle-list">
+        <label class="toggle-row">
+          <input
+            type="checkbox"
+            [ngModel]="state.config().startWithWindows"
+            (ngModelChange)="state.setAutostart($event)"
+          />
+          <span>Start ASKII automatically with Windows</span>
+        </label>
+        <label class="toggle-row">
+          <input
+            type="checkbox"
+            [ngModel]="state.config().clipboardHistoryEnabled"
+            (ngModelChange)="state.setClipboardHistoryEnabled($event)"
+          />
+          <span>Keep private in-memory clipboard history ring (@clip:1..15, skips password managers)</span>
+        </label>
+      </div>
+
+      @if (error()) {
+        <div class="alert error" role="alert">{{ error() }}</div>
+      }
+
+      <footer class="setup-footer">
+        <button type="button" class="btn ghost" (click)="step.set('provider')">← Back</button>
+        <button
+          type="button"
+          class="btn primary"
+          [disabled]="isSaving()"
+          (click)="finishSetup()"
+        >
+          {{ isSaving() ? 'Saving…' : 'Start Asking (⌐■_■)' }}
+        </button>
+      </footer>
+    </div>
+  } @else {
+    <div class="setup-body">
+      <div class="agent-mode-grid">
+        <button
+          type="button"
+          class="mode-card"
+          [class.selected]="agentMode() === 'confirm'"
+          (click)="agentMode.set('confirm')"
+        >
+          <div class="tile-top">
+            <span class="tile-name">Confirm on Receipt</span>
+            <span class="tile-tag">Recommended</span>
+          </div>
+          <span class="tile-desc">
+            Read-only tools run automatically; PowerShell &amp; file writes stamp an approval card on the slip.
+          </span>
+        </button>
+
+        <button
+          type="button"
+          class="mode-card autodo"
+          [class.selected]="agentMode() === 'autoDo'"
+          (click)="agentMode.set('autoDo')"
+        >
+          <div class="tile-top">
+            <span class="tile-name">Auto Do Mode</span>
+            <span class="tile-tag warn">Autonomous</span>
+          </div>
+          <span class="tile-desc">
+            Executes OS tools, shell commands &amp; backed-up file edits automatically with full receipt audit log.
+          </span>
+        </button>
+      </div>
+
+      <div class="toggle-list">
+        <label class="toggle-row">
+          <input
+            type="checkbox"
+            [ngModel]="agentEnabled()"
+            (ngModelChange)="agentEnabled.set($event)"
+          />
+          <span>Enable ASKII Do Windows OS tools (files, windows, media, timers, PowerShell)</span>
+        </label>
+        <label class="toggle-row">
+          <input
+            type="checkbox"
+            [ngModel]="autoApproveDesktop()"
+            (ngModelChange)="autoApproveDesktop.set($event)"
+          />
+          <span>Auto-approve desktop controls (open apps/URLs, snap windows, media keys, timers)</span>
+        </label>
+        <label class="toggle-row">
+          <input
+            type="checkbox"
+            [ngModel]="guardDestructive()"
+            (ngModelChange)="guardDestructive.set($event)"
+          />
+          <span>Destructive command guardrail (always pause on recursive deletes, disk/registry wipes, even in Auto Do)</span>
+        </label>
+      </div>
+
+      <div class="mcp-section">
+        <div class="label-row">
+          <label>External MCP Servers <span class="label-muted">(stdio or HTTP JSON-RPC)</span></label>
+        </div>
+
+        @if (mcpServers().length > 0) {
+          <div class="mcp-list">
+            @for (srv of mcpServers(); track srv.id) {
+              <div class="mcp-row">
+                <span class="mcp-tag">{{ srv.transport }}</span>
+                <span class="mcp-name">{{ srv.name }}</span>
+                <span class="mcp-endpoint">{{ srv.url || (srv.command + ' ' + srv.args.join(' ')) }}</span>
+                <button type="button" class="link-btn" (click)="removeMcpServer(srv.id)">Remove</button>
+              </div>
+            }
+          </div>
+        }
+
+        <div class="mcp-add-row">
+          <input
+            type="text"
+            placeholder="Name (e.g. GitHub)"
+            [ngModel]="newMcpName()"
+            (ngModelChange)="newMcpName.set($event)"
+          />
+          <select
+            [ngModel]="newMcpTransport()"
+            (ngModelChange)="newMcpTransport.set($event)"
+          >
+            <option value="stdio">stdio</option>
+            <option value="http">http</option>
+          </select>
+          <input
+            type="text"
+            [placeholder]="newMcpTransport() === 'http' ? 'http://localhost:3333/mcp' : 'npx -y @modelcontextprotocol/server-filesystem C:/Users'"
+            [ngModel]="newMcpEndpoint()"
+            (ngModelChange)="newMcpEndpoint.set($event)"
+          />
+          <button type="button" class="btn ghost small" (click)="addMcpServer()">+ Add</button>
+        </div>
+      </div>
+
+      @if (error()) {
+        <div class="alert error" role="alert">{{ error() }}</div>
+      }
+
+      <footer class="setup-footer">
+        <span class="footer-note">All file edits create automatic local backups with 1-click Undo</span>
+        <button
+          type="button"
+          class="btn primary"
+          [disabled]="isSaving()"
+          (click)="saveAgentTab()"
+        >
+          {{ isSaving() ? 'Saving…' : 'Save ASKII Do Settings' }}
+        </button>
+      </footer>
+    </div>
+  }
+</section>

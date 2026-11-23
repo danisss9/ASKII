@@ -1,42 +1,52 @@
 # Contributing to ASKII
 
-Thanks for helping! Bug reports, ideas and pull requests are all welcome.
+Thanks for helping! Bug reports, ideas, and pull requests are all welcome.
 
-## Setup
+## Project Structure (v2.0 Desktop)
 
-```bash
+ASKII 2.0 is a Windows desktop application built with **Angular 22** (frontend) and **Tauri v2 / Rust** (native OS backend):
+
+- `src/` — Angular 22 UI (spotlight input, receipt print paper, setup morph, history drawer, sticky slip window, state service, autocomplete, markdown renderer, Tauri IPC bridge)
+- `src-tauri/` — Tauri v2 Rust backend:
+  - `src-tauri/src/llm/` — Streaming LLM client & 8 provider connectors + model discovery
+  - `src-tauri/src/agent/` — ASKII Do tool loop, 13 native Windows tools, rollback backups, and `stdio`/`http` MCP client
+  - `src-tauri/src/commands.rs` — Tauri IPC command handlers
+  - `src-tauri/src/config.rs` — Config persistence (`config.json`) & Windows Credential Manager integration
+  - `src-tauri/src/storage.rs` — Local SQLite archive for slips and personal memory
+  - `src-tauri/src/launcher.rs` — Instant math/unit/dev evaluators, window switcher, and Start Menu indexer
+  - `src-tauri/src/clipboard_ring.rs`, `context.rs`, `tray.rs`, `voice.rs`, `window.rs` — Windows OS integrations
+- `public/` — Static assets
+
+## Setup (Windows)
+
+Install **Node.js 22+**, the **Rust toolchain** (`rustup` / `cargo`), and the [Tauri v2 Windows prerequisites](https://v2.tauri.app/start/prerequisites/#windows), then:
+
+```powershell
 git clone https://github.com/danisss9/ASKII.git
-cd ASKII && npm install && (cd cli && npm install)
+cd ASKII
+npm install
+npm run tauri:dev
 ```
-
-- `src/` — VS Code extension host code
-- `common/` — pure Node code shared by the extension and the CLI (must never import `vscode`)
-- `cli/` — the `askii-cli` npm package
-- `media/` — webview scripts and styles (plain browser JavaScript/CSS, loaded via `asWebviewUri`; linted with the rest) and walkthrough pages
-- `test/` — mocha (`tdd` UI) suites; they run in plain Node *and* inside VS Code
 
 ## Before you open a pull request
 
-```bash
-npm run check-types   # extension + CLI
-npm run lint          # src, common, test, cli — errors fail CI
-npm run test:unit     # fast, plain Node
-npm test              # the same suites inside VS Code (needs a display; CI uses xvfb)
+```powershell
+npm test                                          # Angular Vitest unit tests
+npm run build                                     # Production Angular build & TypeScript check
+cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 ```
 
-- Add or update tests for behavior changes — especially anything that touches files, runs
-  commands, or parses model output
-- Add an entry under `## [Unreleased]` in `CHANGELOG.md`
-- Keep `common/` free of `vscode` imports so the CLI and plain-Node tests can load it
-- New settings go in `package.json` (with a description, and `"scope": "machine"` if a workspace
-  must not be able to set them) and in the README's Configuration tables
+- Add or update unit tests for behavior changes — especially anything touching agent tools, destructive guardrails, backup/restore, LLM protocol parsing, SQLite storage, or autocomplete.
+- Add an entry under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
+- Keep any new slash commands, context mentions, providers, or security safeguards documented in [README.md](README.md) and [SECURITY.md](SECURITY.md).
 
 ## Releasing (maintainers)
 
-1. Bump `version` in **both** `package.json` and `cli/package.json` (they must match — CI checks)
-2. Move the `Unreleased` CHANGELOG entries under the new version
-3. Commit, then push a tag `askii_<version>` (e.g. `askii_1.0.0`)
+1. Bump the version in **all three** manifests (keep them identical — CI checks):
+   - `package.json` (and `package-lock.json`)
+   - `src-tauri/Cargo.toml` (and `src-tauri/Cargo.lock`)
+   - `src-tauri/tauri.conf.json`
+2. Move the `## [Unreleased]` entries in [CHANGELOG.md](CHANGELOG.md) under the new version heading.
+3. Commit, then push a tag `askii_<version>` (e.g. `askii_2.0.0`).
 
-The release workflow runs the full CI first, checks the tag against both versions, then publishes
-the GitHub release, the npm package, the VS Code Marketplace and Open VSX. Every publish step skips
-a version that is already out, so a release that failed half-way can simply be re-run.
+The release workflow runs CI checks, verifies the tag matches all manifest versions, builds the Windows NSIS installer via Tauri, and publishes a GitHub Release.

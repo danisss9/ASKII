@@ -6,18 +6,15 @@ on:
       - 'askii_*'
 
 permissions:
-  contents: write # create GitHub releases and upload assets
-  id-token: write # OIDC token for npm trusted publishing + provenance
+  contents: write
 
 jobs:
-  # Same gates as every push/PR: type-check, lint, unit + integration tests,
-  # CLI build and VSIX size budget. Nothing is published unless they pass.
   ci:
     uses: ./.github/workflows/ci.yml
 
   release:
     needs: ci
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -26,75 +23,36 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: '22'
+          cache: npm
 
-      - name: Extract version from tag
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify tag matches manifest versions
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#askii_}" >> $GITHUB_OUTPUT
+        shell: pwsh
+        run: |
+          $tagVer = "${{ github.ref_name }}" -replace '^askii_', ''
+          $pkg = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tauri = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargo = ((Get-Content src-tauri/Cargo.toml) | Where-Object { $_ -match '^version\s*=\s*"([^"]+)"' } | Select-Object -First 1) -replace '^version\s*=\s*"([^"]+)".*$', '$1'
+          if ($tagVer -ne $pkg -or $tagVer -ne $tauri -or $tagVer -ne $cargo) {
+            Write-Error "Tag ($tagVer) does not match manifest versions (package=$pkg, tauri=$tauri, cargo=$cargo)"
+            exit 1
+          }
+          "VERSION=$tagVer" >> $env:GITHUB_OUTPUT
 
-      - name: Check tag matches package versions
-        run: node scripts/check-versions.js "${GITHUB_REF_NAME}"
-
-      # ── VS Code extension ─────────────────────────────────────────────────
-
-      - name: Install extension dependencies
+      - name: Install frontend dependencies
         run: npm ci
 
-      - name: Package VS Code extension
-        run: npx @vscode/vsce package --no-dependencies -o askii-${{ steps.version.outputs.VERSION }}.vsix
-
-      # ── CLI ───────────────────────────────────────────────────────────────
-
-      - name: Install CLI dependencies
-        working-directory: ./cli
-        run: npm ci
-
-      - name: Build CLI (production)
-        working-directory: ./cli
-        run: npm run build:prod
-
-      # ── GitHub Release ────────────────────────────────────────────────────
+      - name: Build Windows installer (Tauri)
+        run: npm run tauri:build
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ASKII ${{ steps.version.outputs.VERSION }}
-          files: askii-${{ steps.version.outputs.VERSION }}.vsix
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
           generate_release_notes: true
-
-      # ── npm (askii-cli) ───────────────────────────────────────────────────
-
-      # Uses npm Trusted Publishing (OIDC) — no NPM_TOKEN needed. Configure the
-      # trusted publisher on npmjs.com: askii-cli → Settings → Trusted Publisher
-      # (GitHub Actions, repo danisss9/ASKII, workflow release.yml).
-      # Provenance attestations are generated automatically.
-
-      - name: Update npm (trusted publishing requires npm >= 11.5.1)
-        run: npm install -g npm@11
-
-      # Every publish step skips a version that is already out, so a failed
-      # release can simply be re-run without failing on the steps that worked.
-      - name: Publish CLI to npm
-        working-directory: ./cli
-        run: |
-          if npm view "askii-cli@${{ steps.version.outputs.VERSION }}" version > /dev/null 2>&1; then
-            echo "askii-cli@${{ steps.version.outputs.VERSION }} is already published — skipping"
-          else
-            npm publish --access public
-          fi
-
-      # ── VS Code Marketplace ───────────────────────────────────────────────
-      # Requires a MARKETPLACE_PAT secret: a Personal Access Token from
-      # https://dev.azure.com with the "Marketplace (Publish)" scope.
-
-      - name: Publish VS Code extension
-        run: npx @vscode/vsce publish --skip-duplicate --packagePath askii-${{ steps.version.outputs.VERSION }}.vsix --pat ${{ secrets.MARKETPLACE_PAT }}
-
-      # ── Open VSX (open-vsx.org) ───────────────────────────────────────────
-      # Requires an OPEN_VSX_PAT secret: log in at https://open-vsx.org with
-      # the GitHub account that owns the namespace (danisss9) and create an
-      # access token under User Settings → Access Tokens.
-
-      - name: Publish VS Code extension to Open VSX
-        run: npx ovsx publish --skip-duplicate askii-${{ steps.version.outputs.VERSION }}.vsix --pat ${{ secrets.OPEN_VSX_PAT }}

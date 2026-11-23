@@ -1,0 +1,241 @@
+:root {
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Cascadia Code', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+
+  --askii-accent: #1d4ed8;
+  --askii-accent-deep: #1e3a8a;
+  --askii-accent-soft: #3b82f6;
+  --askii-accent-glow: rgba(29, 78, 216, 0.38);
+
+  --glass-bg: rgba(11, 17, 30, 0.86);
+  --glass-bg-strong: rgba(9, 14, 25, 0.94);
+  --glass-surface: rgba(255, 255, 255, 0.055);
+  --glass-surface-hover: rgba(255, 255, 255, 0.095);
+  --glass-border: rgba(148, 184, 255, 0.16);
+  --glass-border-strong: rgba(59, 130, 246, 0.62);
+
+  --ink-light: #f1f5fc;
+  --ink-muted: rgba(220, 232, 252, 0.6);
+  --ink-subtle: rgba(220, 232, 252, 0.38);
+
+  --paper-bg: #faf6ee;
+  --paper-bg-tint: #f3ede0;
+  --paper-ink: #172033;
+  --paper-muted: #5c687f;
+  --paper-rule: rgba(23, 32, 51, 0.15);
+  --paper-code-bg: rgba(29, 78, 216, 0.075);
+
+  --danger: #ff6b81;
+  --success: #5ce0a8;
+  --warning: #f5b95b;
+
+  --spring-morph: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+app-root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent !important;
+  overflow: hidden;
+  font-family: var(--font-ui);
+  color: var(--ink-light);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+}
+
+/* Subtle scrollbars for paper & setup lists */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(96, 122, 168, 0.35);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(96, 122, 168, 0.55);
+}
+
+/* Rendered Markdown inside the warm receipt paper */
+.paper-markdown {
+  user-select: text;
+  color: var(--paper-ink);
+  font-size: 13.5px;
+  line-height: 1.62;
+  word-wrap: break-word;
+
+  > :first-child {
+    margin-top: 0;
+  }
+
+  > :last-child {
+    margin-bottom: 0;
+  }
+
+  p {
+    margin: 0 0 0.72em;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    margin: 1em 0 0.45em;
+    font-weight: 700;
+    line-height: 1.3;
+    color: #0f172a;
+  }
+
+  h1 {
+    font-size: 1.18em;
+  }
+
+  h2 {
+    font-size: 1.08em;
+  }
+
+  h3 {
+    font-size: 1em;
+  }
+
+  ul,
+  ol {
+    margin: 0 0 0.75em;
+    padding-left: 1.35em;
+  }
+
+  li {
+    margin: 0.2em 0;
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    background: var(--paper-code-bg);
+    color: #1e3a8a;
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  .code-block-wrap {
+    margin: 0.65em 0;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid rgba(23, 32, 51, 0.18);
+    background: #0f172a;
+  }
+
+  .code-block-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 10px;
+    background: #18233a;
+    border-bottom: 1px solid rgba(148, 184, 255, 0.12);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: #93c5fd;
+  }
+
+  .code-copy-btn {
+    border: 1px solid rgba(148, 184, 255, 0.25);
+    background: rgba(255, 255, 255, 0.06);
+    color: #dbeafe;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 5px;
+    cursor: pointer;
+
+    &:hover {
+      background: rgba(59, 130, 246, 0.32);
+      border-color: rgba(96, 165, 250, 0.65);
+    }
+  }
+
+  pre {
+    margin: 0;
+    padding: 10px 12px;
+    background: #0f172a;
+    color: #e6eefc;
+    overflow-x: auto;
+
+    code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      font-size: 12px;
+      line-height: 1.52;
+    }
+  }
+
+  blockquote {
+    margin: 0.6em 0;
+    padding: 2px 0 2px 11px;
+    border-left: 3px solid var(--askii-accent);
+    color: var(--paper-muted);
+    font-style: italic;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.65em 0;
+    font-size: 12.5px;
+  }
+
+  th,
+  td {
+    border: 1px solid var(--paper-rule);
+    padding: 5px 8px;
+    text-align: left;
+  }
+
+  th {
+    background: rgba(23, 32, 51, 0.05);
+    font-weight: 600;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px dashed var(--paper-rule);
+    margin: 0.85em 0;
+  }
+
+  a {
+    color: #1d4ed8;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,28 @@
+<main class="transparent-stage" (click)="onStageClick($event)">
+  <div class="morph-column">
+    @if (state.mode() === 'setup') {
+      <app-setup-morph />
+    } @else {
+      <app-spotlight-input />
+
+      @if (state.errorBanner()) {
+        <div class="inline-error" role="alert">
+          <span class="err-kaomoji">ಠ_ಠ</span>
+          <span>{{ state.errorBanner() }}</span>
+        </div>
+      }
+
+      @if (state.mode() === 'paper') {
+        <app-print-paper />
+      } @else if (state.mode() === 'history' || state.mode() === 'memory') {
+        <app-history-drawer />
+      }
+    }
+
+    @if (state.toastMessage()) {
+      <div class="toast-pill" role="status" aria-live="polite">
+        {{ state.toastMessage() }}
+      </div>
+    }
+  </div>
+</main>

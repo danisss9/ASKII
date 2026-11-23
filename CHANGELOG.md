@@ -1,8 +1,37 @@
 # Change Log
 
-All notable changes to ASKII — the VS Code extension and the `askii-cli` npm package — are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/), and both packages share one version number.
+All notable changes to ASKII are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/). Starting with **2.0.0**, ASKII is an OS-level Windows desktop assistant built with Tauri v2 (Rust) and Angular 22 (v1.x releases cover the legacy VS Code extension and `askii-cli` npm package).
 
 ## [Unreleased]
+
+## [2.0.0] - 2026-11-23
+
+Complete ground-up remake of ASKII as an OS-level Windows AI assistant and instant launcher built with **Tauri v2 (Rust)** and **Angular 22**.
+
+### Added
+
+- **Always-available Windows system tray & dynamic spotlight overlay**: global toggle (`Alt+Space`), selection capture hotkey (`Alt+Shift+Space`), active-monitor placement, dynamic window height resizing, `/pin` mode, Start with Windows (`tauri-plugin-autostart`), and 1-click **`Insert` (`Ctrl+Enter`)** paste-back into the previous window
+- **OS context awareness & vision**: live selection capture, clipboard text/image attachments (`@clip`, `Ctrl+V`), private in-memory 15-item clipboard history ring (`@clip:1..15`), active window metadata (`@window`), full-screen & active-window screenshots (`@screen`, `@winscreen`, `/snip`), and drag-and-drop file/image attachments
+- **"ASKII Do" native Windows OS agent + Auto Do mode + MCP**:
+  - 13 built-in Windows tools across 3 permission tiers (`get_system_info`, `list_open_windows`, `search_files`, `read_file`, `list_directory`, `fetch_url`, `open_app_or_url`, `control_window`, `media_control`, `set_timer_reminder`, `run_powershell`, `write_file`, `move_or_rename_file`)
+  - Tactile receipt approval cards (**Allow once**, **Allow for session**, **Deny**), configurable **Auto Do** autonomous mode (`/autodo`, `/agent`), automatic local rollback backups with 1-click **Undo**, and external `stdio`/`http` **MCP server** support
+- **Instant launcher & local evaluators**: sub-50ms math expression evaluator, unit conversions (temperature, length, mass, binary data), dev utilities (`uuid`, `now`/`epoch`, `b64`, `#hex` → `rgb`), open-window switcher, and Windows Start Menu app launcher (prefixless or `>`, refreshable via `/reindex`)
+- **Persistent SQLite slips, floating sticky windows & personal memory**: local SQLite archive (`/history`) with search/reopen/delete, detachable always-on-top **Sticky** windows, and transparent personal memory (`/remember`, `/memory`) injected into prompts
+- **Voice-to-Ask dictation**: in-overlay audio recording transcribed via a custom local Whisper server URL, OpenAI, or ASKII Cloud
+- **8 native LLM connectors & instant `/model` switcher**: ASKII Cloud, OpenAI / Compatible (custom base URL), Anthropic, Google Gemini, OpenRouter, opencode Go, Ollama, and LM Studio, with automatic model discovery and a Local (green) vs Cloud (blue) privacy indicator
+- **Built-in prompt recipes & autocomplete**: `/fix`, `/translate`, `/summarize`, `/explain`, and `/shell` with ghost-text completion, slash command palette, `@` context mention dropdown, and prompt history
+
+### Changed
+
+- Rebuilt ASKII from a VS Code extension + Node.js CLI (v1.0) into a standalone native Windows desktop application (`dev.askii.desktop`) using **Tauri v2 (Rust)** and **Angular 22** with NSIS installer packaging
+- Updated `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, and GitHub Actions workflows for the v2.0 desktop architecture
+
+### Security
+
+- API keys are stored natively in **Windows Credential Manager** (`keyring` crate) under `dev.askii.desktop`, never written to `config.json`
+- Destructive-command guardrails pause risky PowerShell commands (`rm -rf`, `Remove-Item`, `Format-Volume`, `Clear-Disk`, `del /s`, `rmdir /s`, `reg delete`, `Stop-Computer`, `Restart-Computer`, `shutdown /s`, `bcdedit`) and `C:\Windows` writes/moves even when **Auto Do** is enabled
+- `read_file` blocks sensitive credential paths (`.ssh\id_*`, `.aws\credentials`, `Windows\System32\config\SAM`)
+- The clipboard history watcher automatically excludes major password managers (1Password, KeePass, KeePassXC, Bitwarden, LastPass, Dashlane, Enpass, RoboForm) and keeps history strictly in memory
 
 ## [1.0.0] - 2026-10-21
 

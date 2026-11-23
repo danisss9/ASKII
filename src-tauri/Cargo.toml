@@ -1,0 +1,48 @@
+[package]
+name = "askii"
+version = "2.0.0"
+description = "ASKII — OS-level AI personal assistant with style (⌐■_■)"
+authors = ["danisss9"]
+license = "MIT"
+repository = "https://github.com/danisss9/ASKII"
+edition = "2021"
+
+[lib]
+name = "askii_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
+tokio-util = "0.7"
+futures-util = "0.3"
+keyring = { version = "3", features = ["windows-native"] }
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"
+dirs = "6"
+arboard = "3"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+sysinfo = "0.32"
+walkdir = "2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Threading",
+    "Win32_System_DataExchange",
+    "Win32_Graphics_Gdi",
+] }

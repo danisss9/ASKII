@@ -1,7 +1,0 @@
-{
-  "name": "sharp",
-  "version": "0.35.4",
-  "description": "ASKII stub for sharp (see description field)",
-  "main": "index.js",
-  "license": "MIT"
-}

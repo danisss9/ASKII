@@ -1,0 +1,211 @@
+<div class="extrusion-mask" [class.tearing]="state.isTearing()">
+  <article
+    class="paper-sheet"
+    [class.is-printing]="state.isThinking() || state.isPrinting()"
+    [class.tearing]="state.isTearing()"
+  >
+    <!-- Top shadow cast by the pill's printer slot -->
+    <div class="slot-cast-shadow" aria-hidden="true"></div>
+
+    <header class="paper-header">
+      <div class="receipt-meta">
+        <span class="receipt-title">ASKII SLIP #{{ slipCode() }}</span>
+        <span class="meta-sep">·</span>
+        <span class="receipt-provider">
+          {{ latestTurn()?.providerLabel }} / {{ latestTurn()?.model }}
+        </span>
+        @if (latestTurn()?.timestamp) {
+          <span class="meta-sep">·</span>
+          <span>{{ latestTurn()?.timestamp }}</span>
+        }
+      </div>
+
+      <div class="paper-actions">
+        @if (state.isThinking() || state.isPrinting()) {
+          <button type="button" class="paper-btn danger" (click)="state.stopGeneration()">
+            ■ Stop
+          </button>
+        } @else {
+          @if (state.previousWindow()) {
+            <button
+              type="button"
+              class="paper-btn primary"
+              [title]="'Paste directly into ' + state.previousWindow()?.processName + ' (Ctrl+Enter)'"
+              (click)="state.insertLatestReply()"
+            >
+              ↵ Insert
+            </button>
+          }
+          <button type="button" class="paper-btn" (click)="copyLatest()">
+            {{ copied() ? '✓ Copied' : 'Copy' }}
+          </button>
+          <button
+            type="button"
+            class="paper-btn"
+            [class.active]="state.isPinned()"
+            (click)="state.togglePin()"
+          >
+            {{ state.isPinned() ? 'Pinned' : 'Pin' }}
+          </button>
+          <button
+            type="button"
+            class="paper-btn"
+            title="Pop out as a standalone floating sticky slip"
+            (click)="state.detachCurrentSlip()"
+          >
+            Sticky
+          </button>
+        }
+        <button
+          type="button"
+          class="paper-btn"
+          title="Tear off slip & clear (Esc)"
+          (click)="state.tearOffPaper()"
+        >
+          Tear off
+        </button>
+      </div>
+    </header>
+
+    <div #paperScroll class="paper-body" (click)="onMarkdownClick($event)">
+      @for (turn of renderedTurns(); track turn.id; let first = $first) {
+        @if (!first) {
+          <div class="perforation" aria-hidden="true">
+            <span>FOLLOW-UP</span>
+          </div>
+        }
+
+        <div class="turn-block">
+          <div class="turn-question">
+            <span class="q-prefix">&gt;</span>
+            <span>{{ turn.question }}</span>
+          </div>
+
+          @if (turn.contextLabels?.length) {
+            <div class="turn-context-badges">
+              @for (lbl of turn.contextLabels; track lbl) {
+                <span class="turn-ctx-badge">{{ lbl }}</span>
+              }
+            </div>
+          }
+
+          @if (turn.toolActions?.length) {
+            <div class="tool-stamps">
+              @for (act of turn.toolActions; track act.callId) {
+                <div class="tool-stamp" [class]="'status-' + act.status">
+                  <div class="tool-stamp-head">
+                    <span class="tool-badge">
+                      @if (act.status === 'pendingApproval') {
+                        APPROVE
+                      } @else if (act.status === 'running') {
+                        RUNNING
+                      } @else if (act.status === 'success') {
+                        DONE
+                      } @else if (act.status === 'denied') {
+                        DENIED
+                      } @else {
+                        ERROR
+                      }
+                    </span>
+                    <span class="tool-summary">{{ act.summary }}</span>
+                    @if (act.backupId && !act.undone) {
+                      <button
+                        type="button"
+                        class="tool-mini-btn undo"
+                        title="Restore pre-edit local backup"
+                        (click)="state.undoBackup(turn.id, act.callId, act.backupId!)"
+                      >
+                        ↶ Undo
+                      </button>
+                    } @else if (act.undone) {
+                      <span class="tool-undone-tag">Restored</span>
+                    }
+                  </div>
+
+                  @if (act.dangerWarning) {
+                    <div class="tool-danger-warn">⚠ {{ act.dangerWarning }}</div>
+                  }
+
+                  @if (act.status === 'pendingApproval') {
+                    <div class="tool-approval-bar">
+                      <button
+                        type="button"
+                        class="tool-approve-btn allow"
+                        (click)="state.resolveToolApproval(turn.id, act.callId, 'allowOnce')"
+                      >
+                        Allow Once
+                      </button>
+                      <button
+                        type="button"
+                        class="tool-approve-btn session"
+                        (click)="state.resolveToolApproval(turn.id, act.callId, 'allowSession')"
+                      >
+                        Always Session
+                      </button>
+                      <button
+                        type="button"
+                        class="tool-approve-btn deny"
+                        (click)="state.resolveToolApproval(turn.id, act.callId, 'deny')"
+                      >
+                        Deny
+                      </button>
+                    </div>
+                  }
+
+                  @if (act.output) {
+                    <details class="tool-output-details" [open]="act.status === 'error'">
+                      <summary>Output ({{ act.output.length }} chars)</summary>
+                      <pre class="tool-output-pre">{{ act.output }}</pre>
+                    </details>
+                  }
+                </div>
+              }
+            </div>
+          }
+
+          @if (turn.error) {
+            <div class="turn-error">
+              <span class="err-face">(╯°□°）╯︵ ┻━┻</span>
+              <span>{{ turn.error }}</span>
+            </div>
+          } @else if (turn.streaming && !turn.answer) {
+            <div class="warming-up">
+              <span class="warm-face">{{ state.kaomoji() }}</span>
+              <span>Warming up the print head…</span>
+            </div>
+          } @else {
+            <div class="paper-markdown" [innerHTML]="turn.html"></div>
+            @if (turn.streaming) {
+              <span class="ink-cursor" aria-hidden="true">▌</span>
+            }
+            @if (turn.stopped) {
+              <div class="turn-note">*(print paused early)*</div>
+            } @else if (turn.truncated) {
+              <div class="turn-note">*(reached output token limit — ask a follow-up to continue)*</div>
+            }
+          }
+        </div>
+      }
+    </div>
+
+    <footer class="paper-footer">
+      <span>
+        Enter follow-up · {{ state.previousWindow() ? 'Ctrl+⏎ insert · ' : '' }}Esc tear off
+      </span>
+      <span class="footer-ascii">(⌐■_■)</span>
+    </footer>
+
+    <!-- Crisp serrated zig-zag thermal receipt bottom edge -->
+    <svg
+      class="serrated-edge"
+      viewBox="0 0 600 14"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M0,0 L600,0 L600,3 L590,13 L580,3 L570,13 L560,3 L550,13 L540,3 L530,13 L520,3 L510,13 L500,3 L490,13 L480,3 L470,13 L460,3 L450,13 L440,3 L430,13 L420,3 L410,13 L400,3 L390,13 L380,3 L370,13 L360,3 L350,13 L340,3 L330,13 L320,3 L310,13 L300,3 L290,13 L280,3 L270,13 L260,3 L250,13 L240,3 L230,13 L220,3 L210,13 L200,3 L190,13 L180,3 L170,13 L160,3 L150,13 L140,3 L130,13 L120,3 L110,13 L100,3 L90,13 L80,3 L70,13 L60,3 L50,13 L40,3 L30,13 L20,3 L10,13 L0,3 Z"
+        fill="#faf6ee"
+      />
+    </svg>
+  </article>
+</div>

@@ -1,0 +1,172 @@
+<div
+  class="pill-shell"
+  [class.has-paper]="state.mode() === 'paper'"
+  [class.is-active]="state.isThinking() || state.isPrinting()"
+  [class.has-dropdown]="state.showAutocompleteDropdown()"
+  [class.drag-over]="state.isDragOver()"
+>
+  @if (state.attachments().length > 0) {
+    <div class="context-tray" aria-label="Attached context">
+      @for (att of state.attachments(); track att.id) {
+        <span class="ctx-chip" [class]="'ctx-' + att.kind" [title]="att.detail || att.label">
+          @if (att.image) {
+            <img
+              class="ctx-thumb"
+              [src]="'data:' + att.image.mimeType + ';base64,' + att.image.dataBase64"
+              alt=""
+            />
+          } @else {
+            <span class="ctx-kind-dot"></span>
+          }
+          <span class="ctx-label">{{ att.label }}</span>
+          <button
+            type="button"
+            class="ctx-remove"
+            title="Remove attachment"
+            (click)="state.removeAttachment(att.id)"
+          >
+            ×
+          </button>
+        </span>
+      }
+    </div>
+  }
+
+  <div class="pill-bar" data-tauri-drag-region>
+    <button
+      type="button"
+      class="askii-face"
+      [class.thinking]="state.isThinking()"
+      [class.printing]="state.isPrinting()"
+      [title]="'ASKII (' + state.config().shortcut + ' · ' + state.config().actionShortcut + ' selection) — click to say hi'"
+      (click)="state.pokeAskii()"
+    >
+      {{ state.kaomoji() }}
+    </button>
+
+    <div class="input-stack">
+      <div class="ghost-mirror" aria-hidden="true">
+        <span class="ghost-typed">{{ state.inputText() }}</span><span class="ghost-rest">{{ state.autocomplete().ghostSuffix }}</span>
+      </div>
+      <input
+        #promptInput
+        type="text"
+        class="prompt-input"
+        [value]="state.inputText()"
+        [placeholder]="placeholderText"
+        autocomplete="off"
+        autocorrect="off"
+        spellcheck="false"
+        aria-label="Ask ASKII"
+        (input)="onInput($event)"
+        (paste)="onPaste($event)"
+        (keydown)="onKeyDown($event)"
+      />
+    </div>
+
+    <div class="pill-actions">
+      @if (state.isThinking() || state.isPrinting()) {
+        <button
+          type="button"
+          class="stop-btn"
+          title="Stop generating (Esc)"
+          (click)="state.stopGeneration()"
+        >
+          <span class="stop-square"></span>
+          Stop
+        </button>
+      } @else {
+        <button
+          type="button"
+          class="icon-btn"
+          [class.recording]="state.isRecordingVoice()"
+          title="Voice-to-Ask (click to start/stop dictation)"
+          (click)="state.toggleVoiceRecording()"
+        >
+          {{ state.isRecordingVoice() ? '●' : '🎙' }}
+        </button>
+        <button
+          type="button"
+          class="icon-btn"
+          title="Attach clipboard (@clip)"
+          (click)="state.attachClipboard()"
+        >
+          📋
+        </button>
+        <button
+          type="button"
+          class="icon-btn"
+          title="Capture screen (@screen)"
+          (click)="state.attachScreen('full')"
+        >
+          📷
+        </button>
+        @if (state.isAutoDo()) {
+          <button
+            type="button"
+            class="autodo-indicator"
+            title="AUTO DO mode active — ASKII runs OS actions autonomously. Click to switch to Confirm mode"
+            (click)="state.toggleAutoDo()"
+          >
+            AUTO DO
+          </button>
+        }
+        @if (state.isPinned()) {
+          <button
+            type="button"
+            class="pin-indicator"
+            title="Pinned — click to unpin"
+            (click)="state.togglePin()"
+          >
+            PIN
+          </button>
+        }
+        <button
+          type="button"
+          class="model-chip"
+          [title]="
+            (state.isLocalProvider() ? 'Local Private · ' : 'Cloud API · ') +
+            (state.activeProviderDef()?.label ?? state.config().provider) +
+            ' · Click to configure (or type /model)'
+          "
+          (click)="state.openSetup('provider')"
+        >
+          <span class="chip-dot" [class.cloud]="!state.isLocalProvider()"></span>
+          <span class="chip-text">{{ state.config().model || 'Setup' }}</span>
+        </button>
+      }
+    </div>
+  </div>
+
+  <!-- Subtle bottom printer feed slot illuminated while extruding paper -->
+  <div
+    class="printer-slot"
+    [class.visible]="state.mode() === 'paper'"
+    [class.printing]="state.isThinking() || state.isPrinting()"
+    aria-hidden="true"
+  ></div>
+
+  <!-- Autocomplete dropdown for @mentions, recipes, slash commands & prompt history -->
+  @if (state.showAutocompleteDropdown()) {
+    <div class="autocomplete-panel" role="listbox">
+      @for (item of state.visibleSuggestions(); track item.value; let i = $index) {
+        <button
+          type="button"
+          class="ac-item"
+          [class.selected]="i === state.selectedSuggestionIndex()"
+          (mouseenter)="state.selectedSuggestionIndex.set(i)"
+          (click)="selectSuggestion(item)"
+        >
+          <span class="ac-badge">{{ item.badge }}</span>
+          <span class="ac-main">
+            <span class="ac-label">{{ item.label }}</span>
+            <span class="ac-desc">{{ item.description }}</span>
+          </span>
+          <span class="ac-hint">
+            {{ item.kind === 'history' ? 'Tab' : '⏎' }}
+          </span>
+        </button>
+      }
+    </div>
+  }
+</div>
