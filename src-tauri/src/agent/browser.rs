@@ -29,7 +29,10 @@ impl BrowserController {
         let mut guard = self.session.lock().await;
         if let Some(mut sess) = guard.take() {
             let _ = sess.stdin.shutdown().await;
-            let _ = sess.child.kill().await;
+            let exited = tokio::time::timeout(Duration::from_secs(2), sess.child.wait()).await;
+            if !matches!(exited, Ok(Ok(_))) {
+                let _ = sess.child.kill().await;
+            }
         }
     }
 
@@ -120,7 +123,10 @@ impl BrowserController {
         if action == "close" {
             if let Some(mut sess) = guard.take() {
                 let _ = sess.stdin.shutdown().await;
-                let _ = sess.child.kill().await;
+                let exited = tokio::time::timeout(Duration::from_secs(2), sess.child.wait()).await;
+                if !matches!(exited, Ok(Ok(_))) {
+                    let _ = sess.child.kill().await;
+                }
             }
         }
 

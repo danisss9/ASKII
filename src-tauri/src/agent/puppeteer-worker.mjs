@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { createRequire } from 'node:module';
@@ -8,6 +9,72 @@ let puppeteerModule = null;
 let browser = null;
 let page = null;
 let launchedExecutable = null;
+let activeProfileDir = null;
+
+function createTempProfileDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'askii-browser-profile-'));
+}
+
+async function cleanupProfileDir(dir) {
+  if (!dir) return;
+  try {
+    await fs.promises.rm(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 6,
+      retryDelay: 250,
+    });
+  } catch {
+    // Best-effort cleanup; Windows may still hold brief locks right after exit.
+  }
+}
+
+function readDevToolsActivePort(profileDir) {
+  if (!profileDir) return null;
+  const portFile = path.join(profileDir, 'DevToolsActivePort');
+  try {
+    if (!fs.existsSync(portFile)) return null;
+    const raw = fs.readFileSync(portFile, 'utf8').trim();
+    const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length < 2) return null;
+    const port = Number(lines[0]);
+    const wsPath = lines[1];
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || !wsPath.startsWith('/')) {
+      return null;
+    }
+    return `ws://127.0.0.1:${port}${wsPath}`;
+  } catch {
+    return null;
+  }
+}
+
+async function waitForDevToolsEndpoint(profileDir, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const endpoint = readDevToolsActivePort(profileDir);
+    if (endpoint) {
+      return endpoint;
+    }
+    await delay(100);
+  }
+  return readDevToolsActivePort(profileDir);
+}
+
+async function connectWithRetry(puppeteer, browserWSEndpoint, defaultViewport, attempts = 6) {
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await puppeteer.connect({
+        browserWSEndpoint,
+        defaultViewport,
+      });
+    } catch (err) {
+      lastErr = err;
+      await delay(200);
+    }
+  }
+  throw lastErr;
+}
 
 function findChromeExecutable(explicitPath) {
   const candidates = [];
@@ -32,9 +99,11 @@ function findChromeExecutable(explicitPath) {
     path.join(pf, 'Google', 'Chrome Beta', 'Application', 'chrome.exe'),
     path.join(localAppData, 'Chromium', 'Application', 'chrome.exe'),
     path.join(pf, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
+    path.join(pf86, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
     path.join(localAppData, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
     path.join(pf, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
     path.join(pf86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    path.join(localAppData, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
   );
 
   for (const candidate of candidates) {
@@ -89,12 +158,22 @@ async function ensureBrowser(params = {}) {
   const puppeteer = await loadPuppeteer();
 
   if (browser && browser.connected) {
-    if (!page || page.isClosed()) {
-      const pages = await browser.pages();
-      page = pages[0] || (await browser.newPage());
+    try {
+      if (!page || page.isClosed()) {
+        const pages = await browser.pages();
+        page = pages[0] || (await browser.newPage());
+      }
+      return { browser, page, reused: true };
+    } catch {
+      browser = null;
+      page = null;
     }
-    return { browser, page, reused: true };
   }
+
+  const width = Number.isFinite(params.viewportWidth) ? Number(params.viewportWidth) : 1280;
+  const height = Number.isFinite(params.viewportHeight) ? Number(params.viewportHeight) : 820;
+  const defaultViewport = { width, height };
+  let connectedViaActivePort = false;
 
   if (params.debuggerUrl && typeof params.debuggerUrl === 'string' && params.debuggerUrl.trim()) {
     browser = await puppeteer.connect({
@@ -102,20 +181,24 @@ async function ensureBrowser(params = {}) {
       defaultViewport: null,
     });
     launchedExecutable = `remote:${params.debuggerUrl.trim()}`;
+    activeProfileDir = null;
   } else {
     const executablePath = findChromeExecutable(params.executablePath);
     const headless = params.headless === true;
-    const width = Number.isFinite(params.viewportWidth) ? Number(params.viewportWidth) : 1280;
-    const height = Number.isFinite(params.viewportHeight) ? Number(params.viewportHeight) : 820;
+    const baseArgs = [
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-background-mode',
+      `--window-size=${width},${height + 88}`,
+    ];
 
+    const profileDir = createTempProfileDir();
     const launchOpts = {
       headless,
-      defaultViewport: { width, height },
-      args: [
-        '--no-first-run',
-        '--no-default-browser-check',
-        `--window-size=${width},${height + 88}`,
-      ],
+      defaultViewport,
+      userDataDir: profileDir,
+      timeout: 15000,
+      args: baseArgs,
     };
 
     if (executablePath) {
@@ -127,23 +210,86 @@ async function ensureBrowser(params = {}) {
 
     try {
       browser = await puppeteer.launch(launchOpts);
-    } catch (err) {
-      if (!executablePath) {
-        throw new Error(
-          `No Chrome/Chromium/Edge browser was found on this PC, and puppeteer could not launch a bundled binary (${err?.message || err}). Install Google Chrome or set ASKII_CHROME_PATH.`,
-        );
+      activeProfileDir = profileDir;
+    } catch (firstErr) {
+      // On Windows, Edge/Chrome may hand off startup to a de-elevated or relaunched process:
+      // the spawned child immediately exits with Code: 0 and empty stderr, while the real
+      // browser continues running and writes `DevToolsActivePort` inside `profileDir`.
+      const wsEndpoint = await waitForDevToolsEndpoint(profileDir, 4500);
+      if (wsEndpoint) {
+        try {
+          browser = await connectWithRetry(puppeteer, wsEndpoint, defaultViewport);
+          activeProfileDir = profileDir;
+          connectedViaActivePort = true;
+        } catch {
+          browser = null;
+        }
       }
-      throw err;
+
+      if (!browser) {
+        void cleanupProfileDir(profileDir);
+
+        // Fallback: retry with `--do-not-de-elevate` (prevents Edge/Chrome from
+        // relaunching via Explorer when ASKII runs elevated) and check DevToolsActivePort
+        // again in case a launcher shim still detached the real browser process.
+        const retryProfileDir = createTempProfileDir();
+        const retryOpts = {
+          ...launchOpts,
+          userDataDir: retryProfileDir,
+          timeout: 12000,
+          args: [...baseArgs, '--do-not-de-elevate'],
+        };
+
+        try {
+          browser = await puppeteer.launch(retryOpts);
+          activeProfileDir = retryProfileDir;
+        } catch (retryErr) {
+          const retryWs = await waitForDevToolsEndpoint(retryProfileDir, 2500);
+          if (retryWs) {
+            try {
+              browser = await connectWithRetry(puppeteer, retryWs, defaultViewport);
+              activeProfileDir = retryProfileDir;
+              connectedViaActivePort = true;
+            } catch {
+              browser = null;
+            }
+          }
+
+          if (!browser) {
+            void cleanupProfileDir(retryProfileDir);
+            if (!executablePath) {
+              throw new Error(
+                `No Chrome/Chromium/Edge browser was found on this PC, and puppeteer could not launch a bundled binary (${firstErr?.message || firstErr}). Install Google Chrome or set ASKII_CHROME_PATH.`,
+              );
+            }
+            throw new Error(
+              `Failed to launch browser (${executablePath}): ${firstErr?.message || firstErr}\nRetry with --do-not-de-elevate also failed: ${retryErr?.message || retryErr}`,
+            );
+          }
+        }
+      }
     }
   }
 
+  const profileToClean = activeProfileDir;
   browser.on('disconnected', () => {
     browser = null;
     page = null;
+    if (profileToClean && activeProfileDir === profileToClean) {
+      activeProfileDir = null;
+    }
+    void cleanupProfileDir(profileToClean);
   });
+
+  if (connectedViaActivePort) {
+    await browser.waitForTarget((t) => t.type() === 'page', { timeout: 2500 }).catch(() => null);
+  }
 
   const pages = await browser.pages();
   page = pages[0] || (await browser.newPage());
+  if (connectedViaActivePort) {
+    await page.setViewport(defaultViewport).catch(() => {});
+  }
   return { browser, page, reused: false };
 }
 
@@ -540,9 +686,12 @@ async function handleAction(action, params = {}) {
 
     case 'close': {
       if (browser) {
+        const dirToClean = activeProfileDir;
+        activeProfileDir = null;
         await browser.close().catch(() => {});
         browser = null;
         page = null;
+        await cleanupProfileDir(dirToClean);
         return { output: 'Closed Puppeteer Chrome browser session.' };
       }
       return { output: 'No active browser session to close.' };
@@ -635,9 +784,12 @@ rl.on('line', (line) => {
 
 rl.on('close', () => {
   requestQueue.finally(async () => {
+    const dirToClean = activeProfileDir;
+    activeProfileDir = null;
     if (browser) {
       await browser.close().catch(() => {});
     }
+    await cleanupProfileDir(dirToClean);
     process.exit(0);
   });
 });
